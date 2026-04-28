@@ -1,3 +1,5 @@
+// auth.module.ts
+
 import { Module } from '@nestjs/common';
 import { JwtModule } from '@nestjs/jwt';
 import { PassportModule } from '@nestjs/passport';
@@ -13,18 +15,32 @@ import { RealtimeModule } from '../realtime/realtime.module';
 @Module({
   imports: [
     ConfigModule,
-    PassportModule,
+    PassportModule.register({ defaultStrategy: 'jwt' }), // تحديد الاستراتيجية الافتراضية
     RealtimeModule,
     JwtModule.registerAsync({
       imports: [ConfigModule],
       inject: [ConfigService],
-      useFactory: (config: ConfigService) => ({
-        secret: config.getOrThrow<string>('JWT_SECRET'),
-        signOptions: { expiresIn: config.get<string>('JWT_EXPIRE', '24h') as StringValue },
-      }),
+      useFactory: (config: ConfigService) => {
+        // تأكد أن القيمة القادمة من الـ ENV مطابقة لما يتوقعه نظام JWT
+        const expiresIn = config.get<string>('JWT_EXPIRE', '1h'); 
+        
+        return {
+          secret: config.getOrThrow<string>('JWT_SECRET'),
+          signOptions: { 
+            expiresIn: expiresIn as StringValue,
+            algorithm: 'HS256', // تحديد الخوارزمية لزيادة الأمان
+          },
+        };
+      },
     }),
   ],
-  providers: [AuthService, JwtStrategy, AuditService, TokenRevocationService],
+  providers: [
+    AuthService, 
+    JwtStrategy, 
+    AuditService, 
+    TokenRevocationService
+  ],
   controllers: [AuthController],
+  exports: [AuthService, JwtModule], // تصدير الـ AuthService لاستخدامه في موديولات أخرى إذا لزم الأمر
 })
 export class AuthModule {}

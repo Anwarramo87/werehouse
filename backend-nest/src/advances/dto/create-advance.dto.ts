@@ -1,4 +1,22 @@
-import { IsDateString, IsIn, IsNumber, IsOptional, IsString, Matches, Min } from 'class-validator';
+
+
+import { 
+  IsString, 
+  IsNumber, 
+  IsOptional, 
+  IsEnum, 
+  IsDateString, 
+  Matches, 
+  Min, 
+  MaxLength 
+} from 'class-validator';
+
+// تعريف الـ Enum لنوع السلفة
+export enum AdvanceType {
+  SALARY = 'salary',
+  CLOTHING = 'clothing',
+  OTHER = 'other',
+}
 
 export class CreateAdvanceDto {
   @IsString()
@@ -6,11 +24,11 @@ export class CreateAdvanceDto {
   employeeId: string;
 
   @IsOptional()
-  @IsIn(['salary', 'clothing', 'other'])
-  advanceType?: string;
+  @IsEnum(AdvanceType)
+  advanceType?: AdvanceType;
 
   @IsNumber()
-  @Min(0.01)
+  @Min(1)
   totalAmount: number;
 
   @IsOptional()
@@ -20,6 +38,7 @@ export class CreateAdvanceDto {
 
   @IsOptional()
   @IsString()
+  @MaxLength(500)
   notes?: string;
 
   @IsOptional()
