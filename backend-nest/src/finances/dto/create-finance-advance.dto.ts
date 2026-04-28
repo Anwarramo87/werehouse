@@ -1,4 +1,5 @@
-import { IsDateString, IsIn, IsNumber, IsOptional, IsString, Matches, Min } from 'class-validator';
+import { IsDateString, IsNumber, IsOptional, IsString, Matches, Min } from 'class-validator';
+import { AdvanceType } from '../../advances/dto/create-advance.dto';
 
 export class CreateFinanceAdvanceDto {
   @IsString()
@@ -13,8 +14,7 @@ export class CreateFinanceAdvanceDto {
   date: string;
 
   @IsOptional()
-  @IsIn(['salary', 'clothing', 'other'])
-  advanceType?: string;
+  advanceType?: AdvanceType;
 
   @IsOptional()
   @IsNumber()

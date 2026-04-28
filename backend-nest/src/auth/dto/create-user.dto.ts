@@ -1,5 +1,4 @@
-import { IsEmail, IsNotEmpty, IsOptional, IsString } from 'class-validator';
-
+import { IsEmail, IsNotEmpty, IsOptional, IsString, MinLength } from 'class-validator';   
 export class CreateUserDto {
   @IsString()
   @IsNotEmpty()
@@ -10,6 +9,7 @@ export class CreateUserDto {
 
   @IsString()
   @IsNotEmpty()
+  @MinLength(8) // أضف هذا السطر لضمان الأمان
   password: string;
 
   @IsString()

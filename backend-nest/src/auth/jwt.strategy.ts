@@ -8,13 +8,6 @@ import { RequestWithCookies } from '../common/types/request-context.types';
 import { PrismaService } from '../prisma/prisma.service';
 import { TokenRevocationService } from './token-revocation.service';
 
-const fromCookie = (cookieName: string) => {
-  return (req: Request): string | null => {
-    const token = (req as RequestWithCookies)?.cookies?.[cookieName];
-    return typeof token === 'string' && token ? token : null;
-  };
-};
-
 @Injectable()
 export class JwtStrategy extends PassportStrategy(Strategy) {
   private readonly cookieName: string;
@@ -27,13 +20,15 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
   ) {
     const cookieName = config.get<string>('JWT_COOKIE_NAME', 'warehouse_access_token');
     const nodeEnv = config.get<string>('NODE_ENV', 'development');
+    // السماح بالـ Bearer فقط في التطوير أو إذا تم تفعيله صراحة
     const allowBearer = config.get<boolean>('JWT_ALLOW_BEARER', nodeEnv !== 'production');
-    const extractors = allowBearer
-      ? [fromCookie(cookieName), ExtractJwt.fromAuthHeaderAsBearerToken()]
-      : [fromCookie(cookieName)];
 
     super({
-      jwtFromRequest: ExtractJwt.fromExtractors(extractors),
+      // استخراج التوكن من الكوكيز أو الهيدر حسب الإعدادات
+      jwtFromRequest: ExtractJwt.fromExtractors([
+        (req: Request) => (req as RequestWithCookies)?.cookies?.[cookieName] || null,
+        ...(allowBearer ? [ExtractJwt.fromAuthHeaderAsBearerToken()] : []),
+      ]),
       ignoreExpiration: false,
       secretOrKey: config.getOrThrow<string>('JWT_SECRET'),
       passReqToCallback: true,
@@ -43,29 +38,32 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     this.allowBearer = allowBearer;
   }
 
+  /**
+   * دالة التحقق (القلب النابض للشرطي)
+   */
   async validate(req: Request, payload: AuthenticatedUser): Promise<AuthenticatedUser> {
+    // 1. التأكد من وجود معرف المستخدم في التوكن
     if (!payload?.userId) {
-      throw new UnauthorizedException('Invalid token');
+      throw new UnauthorizedException('توكن غير صالح');
     }
 
+    // 2. استخراج التوكن الخام للتأكد من أنه ليس في القائمة السوداء (Revocation)
     const rawToken = this.extractRawToken(req);
-    if (!rawToken) {
-      throw new UnauthorizedException('Missing token');
+    if (!rawToken || await this.tokenRevocation.isRevoked(rawToken)) {
+      throw new UnauthorizedException('انتهت صلاحية الجلسة، يرجى تسجيل الدخول مجدداً');
     }
 
-    if (await this.tokenRevocation.isRevoked(rawToken)) {
-      throw new UnauthorizedException('Session has been revoked');
-    }
-
+    // 3. التحقق من حالة المستخدم في قاعدة البيانات (الأمان اللحظي)
     const user = await this.prisma.user.findUnique({
       where: { id: payload.userId },
       include: { role: true },
     });
 
     if (!user || user.status !== 'active') {
-      throw new UnauthorizedException('Invalid user session');
+      throw new UnauthorizedException('هذا الحساب لم يعد نشطاً');
     }
 
+    // 4. بناء كائن المستخدم الذي سيتم استخدامه في كل الـ Controllers (عبر @CurrentUser)
     const roleName = user.role?.name || 'staff';
 
     return {
@@ -80,20 +78,18 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     };
   }
 
-  private extractRawToken(req: Request) {
+  /**
+   * استخراج التوكن يدوياً للفحص
+   */
+  private extractRawToken(req: Request): string | null {
     const cookieToken = (req as RequestWithCookies)?.cookies?.[this.cookieName];
-    if (typeof cookieToken === 'string' && cookieToken.trim()) {
-      return cookieToken;
-    }
+    if (cookieToken) return cookieToken;
 
-    if (!this.allowBearer) {
-      return null;
-    }
-
-    const headerValue = req.headers.authorization;
-    if (typeof headerValue === 'string' && headerValue.startsWith('Bearer ')) {
-      const bearerToken = headerValue.slice(7).trim();
-      return bearerToken || null;
+    if (this.allowBearer) {
+      const authHeader = req.headers.authorization;
+      if (authHeader?.startsWith('Bearer ')) {
+        return authHeader.substring(7).trim();
+      }
     }
 
     return null;

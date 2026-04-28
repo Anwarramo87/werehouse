@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, Param, Post, Put, Query, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Post, Put, Query, UseGuards, ParseUUIDPipe } from '@nestjs/common';
 import { AdvancesService } from './advances.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { PermissionsGuard } from '../common/guards/permissions.guard';
@@ -10,44 +10,44 @@ import { UpdateAdvanceDto } from './dto/update-advance.dto';
 import { AdvancesListQueryDto } from './dto/advances-list-query.dto';
 
 @Controller('advances')
-@UseGuards(JwtAuthGuard, PermissionsGuard)
+@UseGuards(JwtAuthGuard, PermissionsGuard) // الحماية مطبقة على كل الدوال تلقائياً
 export class AdvancesController {
   constructor(private readonly advancesService: AdvancesService) {}
 
   @Get()
   @Permissions('manage_advances')
-  list(@Query() query: AdvancesListQueryDto) {
+  async list(@Query() query: AdvancesListQueryDto) {
     return this.advancesService.list(query.employeeId);
   }
 
   @Get('summary/:employeeId')
   @Permissions('manage_advances')
-  summary(@Param('employeeId') employeeId: string) {
+  async summary(@Param('employeeId') employeeId: string) {
     return this.advancesService.summary(employeeId);
   }
 
   @Get('deleted/history')
   @Permissions('manage_advances')
-  listDeletedHistory() {
+  async listDeletedHistory() {
     return this.advancesService.listDeletedHistory();
   }
 
   @Get(':id')
   @Permissions('manage_advances')
-  getOne(@Param('id') id: string) {
+  async getOne(@Param('id', ParseUUIDPipe) id: string) { // إضافة التحقق من نوع الـ ID
     return this.advancesService.getById(id);
   }
 
   @Post()
   @Permissions('manage_advances')
-  create(@Body() dto: CreateAdvanceDto) {
+  async create(@Body() dto: CreateAdvanceDto) {
     return this.advancesService.create(dto);
   }
 
   @Post('restore/:historyId')
   @Permissions('manage_advances')
-  restore(
-    @Param('historyId') historyId: string,
+  async restore(
+    @Param('historyId', ParseUUIDPipe) historyId: string,
     @CurrentUser() user: AuthenticatedUser,
   ) {
     return this.advancesService.restore(historyId, user?.userId);
@@ -55,13 +55,13 @@ export class AdvancesController {
 
   @Put(':id')
   @Permissions('manage_advances')
-  update(@Param('id') id: string, @Body() dto: UpdateAdvanceDto) {
+  async update(@Param('id', ParseUUIDPipe) id: string, @Body() dto: UpdateAdvanceDto) {
     return this.advancesService.update(id, dto);
   }
 
   @Delete(':id')
   @Permissions('manage_advances')
-  remove(@Param('id') id: string, @CurrentUser() user: AuthenticatedUser) {
+  async remove(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() user: AuthenticatedUser) {
     return this.advancesService.remove(id, user?.userId);
   }
 }
