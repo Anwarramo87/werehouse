@@ -3,6 +3,8 @@ import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { UpsertSalaryDto } from './dto/upsert-salary.dto';
 import { CalculateAllowancesDto } from './dto/calculate-allowances.dto';
+import { promises as fs } from 'fs';
+import * as path from 'path';
 
 // نسب التوزيع — Prisma.Decimal لضمان دقة الفاصلة العشرية الكاملة
 const RESPONSIBILITY_RATIO = new Prisma.Decimal('0.50');
@@ -50,6 +52,33 @@ export class SalaryService {
     const isExact    = sum.equals(difference);
     const ratiosSum  = RESPONSIBILITY_RATIO.plus(EXTRA_EFFORT_RATIO).plus(PRODUCTION_RATIO);
 
+    // Write a debug entry to tmp/salary-calc-debug.log to help trace values
+    (async () => {
+      try {
+        const logDir = path.join(process.cwd(), 'tmp');
+        await fs.mkdir(logDir, { recursive: true });
+        const logFile = path.join(logDir, 'salary-calc-debug.log');
+        const entry = {
+          timestamp: new Date().toISOString(),
+          input: {
+            salary: salary.toFixed(),
+            lumpSumSalary: lumpSumSalary.toFixed(),
+            livingAllowance: livingAllowance.toFixed(),
+          },
+          computed: {
+            difference: difference.toFixed(4),
+            responsibilityAllowance: responsibilityAllowance.toFixed(4),
+            extraEffortAllowance: extraEffortAllowance.toFixed(4),
+            productionIncentives: productionIncentives.toFixed(4),
+          }
+        };
+        await fs.appendFile(logFile, JSON.stringify(entry) + '\n');
+      } catch (err) {
+        // don't let logging break the API
+        // console.warn('failed to write salary debug log', err);
+      }
+    })();
+
     return {
       // المدخلات
       salary:          salary.toFixed(4),
@@ -60,6 +89,11 @@ export class SalaryService {
       responsibilityAllowance: responsibilityAllowance.toFixed(4),
       extraEffortAllowance:    extraEffortAllowance.toFixed(4),
       productionIncentives:    productionIncentives.toFixed(4),
+      // أضفنا حقولاً مقربة لسهولة العرض والتحقق
+      differenceRounded: Number(difference.toFixed(0)),
+      responsibilityRounded: Number(responsibilityAllowance.toFixed(0)),
+      extraEffortRounded: Number(extraEffortAllowance.toFixed(0)),
+      productionRounded: Number(productionIncentives.toFixed(0)),
       // تحقق
       verification: {
         sum:          sum.toFixed(4),
