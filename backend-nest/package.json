@@ -22,6 +22,7 @@
     "prisma:push": "prisma db push --accept-data-loss",
     "seed:demo": "node scripts/seed-demo.js",
     "test:e2e": "jest --config ./test/jest-e2e.json",
+    "test:salary": "npx jest ./test/salary.calculate-allowances.e2e-spec.ts --config ./test/jest-e2e.json -i --runInBand",
     "test:security": "npm run test:e2e -- security.e2e-spec.ts",
     "test:imports": "npm run test:e2e -- imports.e2e-spec.ts",
     "test:files": "npm run test:e2e -- files.e2e-spec.ts"

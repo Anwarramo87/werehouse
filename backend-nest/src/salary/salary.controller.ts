@@ -1,14 +1,26 @@
-import { Body, Controller, Delete, Get, Param, Put, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Post, Put, UseGuards } from '@nestjs/common';
 import { SalaryService } from './salary.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { PermissionsGuard } from '../common/guards/permissions.guard';
 import { Permissions } from '../common/decorators/permissions.decorator';
 import { UpsertSalaryDto } from './dto/upsert-salary.dto';
+import { CalculateAllowancesDto } from './dto/calculate-allowances.dto';
 
 @Controller('salary')
 @UseGuards(JwtAuthGuard, PermissionsGuard)
 export class SalaryController {
   constructor(private readonly salaryService: SalaryService) {}
+
+  /**
+   * POST /api/salary/calculate-allowances
+   * يستقبل: salary, lumpSumSalary, livingAllowance
+   * يعيد: difference + البدلات الثلاثة + تحقق المجموع
+   */
+  @Post('calculate-allowances')
+  @Permissions('manage_salary')
+  calculateAllowances(@Body() dto: CalculateAllowancesDto) {
+    return this.salaryService.calculateAllowances(dto);
+  }
 
   @Get()
   @Permissions('manage_salary')
