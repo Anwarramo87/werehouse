@@ -118,12 +118,43 @@ export class SalaryService {
   }
 
   async upsert(employeeId: string, dto: UpsertSalaryDto) {
+    const baseSalary      = new Prisma.Decimal(dto.baseSalary.toString());
+    const lumpSumSalary   = new Prisma.Decimal((dto.lumpSumSalary ?? 0).toString());
+    const livingAllowance = new Prisma.Decimal((dto.livingAllowance ?? 0).toString());
+
+    // إذا لم تُرسل البدلات يدوياً، نحسبها تلقائياً من الفرق
+    let responsibilityAllowance: Prisma.Decimal;
+    let extraEffortAllowance: Prisma.Decimal;
+    let productionIncentive: Prisma.Decimal;
+
+    const hasManualAllowances =
+      dto.responsibilityAllowance !== undefined ||
+      dto.extraEffortAllowance !== undefined ||
+      dto.productionIncentive !== undefined;
+
+    if (hasManualAllowances) {
+      responsibilityAllowance = new Prisma.Decimal((dto.responsibilityAllowance ?? 0).toString());
+      extraEffortAllowance    = new Prisma.Decimal((dto.extraEffortAllowance ?? 0).toString());
+      productionIncentive     = new Prisma.Decimal((dto.productionIncentive ?? 0).toString());
+    } else {
+      // حساب تلقائي: Difference = baseSalary - lumpSumSalary - livingAllowance
+      const difference = baseSalary.minus(lumpSumSalary).minus(livingAllowance);
+      const positveDiff = difference.greaterThan(0) ? difference : new Prisma.Decimal(0);
+      responsibilityAllowance = positveDiff.times(RESPONSIBILITY_RATIO);
+      extraEffortAllowance    = positveDiff.times(EXTRA_EFFORT_RATIO);
+      productionIncentive     = positveDiff.minus(responsibilityAllowance).minus(extraEffortAllowance);
+    }
+
     const data = {
-      profession: dto.profession ?? null,
-      baseSalary: new Prisma.Decimal(dto.baseSalary),
-      responsibilityAllowance: new Prisma.Decimal(dto.responsibilityAllowance ?? 0),
-      productionIncentive: new Prisma.Decimal(dto.productionIncentive ?? 0),
-      transportAllowance: new Prisma.Decimal(dto.transportAllowance ?? 0),
+      profession:             dto.profession ?? null,
+      baseSalary,
+      lumpSumSalary,
+      livingAllowance,
+      responsibilityAllowance,
+      extraEffortAllowance,
+      productionIncentive,
+      insuranceAmount:        new Prisma.Decimal((dto.insuranceAmount ?? 0).toString()),
+      transportAllowance:     new Prisma.Decimal((dto.transportAllowance ?? 0).toString()),
     };
 
     return this.prisma.employeeSalary.upsert({

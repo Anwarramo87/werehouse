@@ -44,7 +44,14 @@ model Employee {
   email          String   @unique
   mobile         String?
   nationalId     String?  @unique
+  dateOfBirth    DateTime? @db.Date
+  gender         String?   // male | female
+  jobTitle       String?
   hourlyRate     Decimal  @db.Decimal(10, 2)
+  // حقول الراتب المباشرة على الموظف
+  baseSalary     Decimal? @db.Decimal(14, 2)
+  lumpSumSalary  Decimal? @db.Decimal(14, 2)  // الراتب المقطوع
+  livingAllowance Decimal? @db.Decimal(14, 2) // بدل غلاء معيشة
   currency       String   @default("SYP")
   scheduledStart String?
   scheduledEnd   String?
@@ -225,15 +232,21 @@ model PayrollItem {
 // Salary & Occupation — base salary, allowances, incentives per employee
 // ---------------------------------------------------------------------------
 model EmployeeSalary {
-  id                    String   @id @default(uuid()) @db.Uuid
-  employeeId            String   @unique
-  profession            String?
-  baseSalary            Decimal  @db.Decimal(14, 2)
-  responsibilityAllowance Decimal @default(0) @db.Decimal(14, 2)
-  productionIncentive   Decimal  @default(0) @db.Decimal(14, 2)
-  transportAllowance    Decimal  @default(0) @db.Decimal(14, 2)
-  createdAt             DateTime @default(now())
-  updatedAt             DateTime @updatedAt
+  id                      String   @id @default(uuid()) @db.Uuid
+  employeeId              String   @unique
+  profession              String?
+  baseSalary              Decimal  @db.Decimal(14, 2)
+  lumpSumSalary           Decimal  @default(0) @db.Decimal(14, 2) // الراتب المقطوع
+  livingAllowance         Decimal  @default(0) @db.Decimal(14, 2) // بدل غلاء معيشة
+  // البدلات المحسوبة تلقائياً من الفرق
+  responsibilityAllowance Decimal  @default(0) @db.Decimal(14, 2) // 50% من الفرق
+  extraEffortAllowance    Decimal  @default(0) @db.Decimal(14, 2) // 30% من الفرق
+  productionIncentive     Decimal  @default(0) @db.Decimal(14, 2) // 20% من الفرق
+  // التأمينات (تُدخل يدوياً)
+  insuranceAmount         Decimal  @default(0) @db.Decimal(14, 2)
+  transportAllowance      Decimal  @default(0) @db.Decimal(14, 2)
+  createdAt               DateTime @default(now())
+  updatedAt               DateTime @updatedAt
 
   @@map("employee_salaries")
 }
@@ -308,4 +321,46 @@ model EmployeeBonus {
   @@index([employeeId, period])
   @@index([period, createdAt])
   @@map("employee_bonuses")
+}
+
+// ---------------------------------------------------------------------------
+// Transportation — إدارة الباصات والنقل
+// ---------------------------------------------------------------------------
+model Bus {
+  id                  String   @id @default(uuid()) @db.Uuid
+  busId               String   @unique  // كود الباص
+  route               String            // الخط / مسار الرحلة
+  plateNumber         String   @unique  // رقم اللوحة
+  driverName          String            // اسم السائق
+  driverPhone         String            // رقم السائق (10 أرقام سورية)
+  totalCost           Decimal  @db.Decimal(14, 2)  // التكلفة الإجمالية (ل.س)
+  companyDeductionPct Decimal  @db.Decimal(5, 2)   // حسم الشركة بالنسبة المئوية
+  capacity            Int                           // سعة الركاب
+  // مبلغ أجرة النقل التي تُحسم من راتب الموظف
+  employeeDeductionAmount Decimal @default(0) @db.Decimal(14, 2)
+  status              String   @default("active")  // active | inactive
+  passengers          BusPassenger[]
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  @@index([status])
+  @@index([route, status])
+  @@map("buses")
+}
+
+model BusPassenger {
+  id         String   @id @default(uuid()) @db.Uuid
+  busId      String   @db.Uuid
+  bus        Bus      @relation(fields: [busId], references: [id], onDelete: Cascade)
+  employeeId String
+  joinDate   DateTime @default(now()) @db.Date
+  leaveDate  DateTime? @db.Date
+  status     String   @default("active")  // active | inactive
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@unique([busId, employeeId])
+  @@index([employeeId])
+  @@index([busId, status])
+  @@map("bus_passengers")
 }
