@@ -43,6 +43,16 @@ export class PayrollService {
 
     return parsed;
   }
+  
+  private extractHoursWorked(shiftPair: Prisma.JsonValue | null): number {
+    if (!shiftPair || typeof shiftPair !== 'object') return 0;
+    
+    const raw = (shiftPair as Record<string, unknown>).hoursWorked;
+    if (raw === null || raw === undefined) return 0;
+    if (typeof raw === 'number') return Number.isFinite(raw) ? raw : 0;
+    const parsed = Number(raw);
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
 
   private resolvePeriod(periodStart?: string, periodEnd?: string) {
     if (periodStart && periodEnd) {
@@ -481,6 +491,9 @@ export class PayrollService {
         name: true,
         department: true,
         hourlyRate: true,
+        workDaysInPeriod: true,
+        hoursPerDay: true,
+        gracePeriodMinutes: true,
       },
     });
 
@@ -492,9 +505,11 @@ export class PayrollService {
     const periodStart = dto.periodStart.slice(0, 10);
     const periodEnd = dto.periodEnd.slice(0, 10);
     const periodTag = periodStart.slice(0, 7);
-    const gracePeriodMinutes = Math.max(0, Number(dto.gracePeriodMinutes ?? 15));
+    const defaultGracePeriodMinutes = Math.max(0, Number(dto.gracePeriodMinutes ?? 15));
+    const defaultWorkDaysInPeriod = Math.max(1, Number(dto.workDaysInPeriod ?? 26));
+    const defaultHoursPerDay = Math.max(1, Number(dto.hoursPerDay ?? 8));
 
-    const [salaryRecords, bonuses, advances, attendanceInRecords] = await Promise.all([
+    const [salaryRecords, bonuses, advances, penalties, attendanceInRecords, busPassengers] = await Promise.all([
       this.prisma.employeeSalary.findMany({
         where: { employeeId: { in: employeeIds } },
       }),
@@ -508,6 +523,15 @@ export class PayrollService {
         where: {
           employeeId: { in: employeeIds },
           remainingAmount: { gt: new Prisma.Decimal(0) },
+        },
+      }),
+      this.prisma.employeePenalty.findMany({
+        where: {
+          employeeId: { in: employeeIds },
+          issueDate: {
+            gte: new Date(`${periodStart}T00:00:00.000Z`),
+            lte: new Date(`${periodEnd}T23:59:59.999Z`),
+          },
         },
       }),
       this.prisma.attendanceRecord.findMany({
@@ -525,6 +549,16 @@ export class PayrollService {
           shiftPair: true,
         },
       }),
+      this.prisma.busPassenger.findMany({
+        where: {
+          employeeId: { in: employeeIds },
+          status: 'active',
+        },
+        select: {
+          employeeId: true,
+          bus: { select: { employeeDeductionAmount: true } },
+        },
+      }),
     ]);
 
     const salaryByEmployee = new Map(salaryRecords.map((record) => [record.employeeId, record]));
@@ -532,19 +566,23 @@ export class PayrollService {
 
     const attendanceDatesByEmployee = new Map<string, Set<string>>();
     const latePenaltyByEmployee = new Map<string, number>();
+    const overtimeByEmployee = new Map<string, number>();
 
     for (const record of attendanceInRecords) {
       const dates = attendanceDatesByEmployee.get(record.employeeId) || new Set<string>();
       dates.add(record.date);
       attendanceDatesByEmployee.set(record.employeeId, dates);
 
+      const employee = employeeById.get(record.employeeId);
+      const graceForEmployee = employee?.gracePeriodMinutes ?? defaultGracePeriodMinutes;
+      const hoursPerDayForEmployee = employee?.hoursPerDay ?? defaultHoursPerDay;
+      
       const minutesLate = this.extractMinutesLate(record.shiftPair);
-      const lateAfterGrace = Math.max(0, minutesLate - gracePeriodMinutes);
+      const lateAfterGrace = Math.max(0, minutesLate - graceForEmployee);
       if (lateAfterGrace <= 0) {
         continue;
       }
 
-      const employee = employeeById.get(record.employeeId);
       const hourlyRate = Number(employee?.hourlyRate || 0);
       if (!hourlyRate) {
         continue;
@@ -555,6 +593,15 @@ export class PayrollService {
         record.employeeId,
         (latePenaltyByEmployee.get(record.employeeId) || 0) + penalty,
       );
+
+      const hoursWorked = this.extractHoursWorked(record.shiftPair);
+      if (hoursWorked > hoursPerDayForEmployee) {
+        const overtimeHours = hoursWorked - hoursPerDayForEmployee;
+        overtimeByEmployee.set(
+          record.employeeId,
+          (overtimeByEmployee.get(record.employeeId) || 0) + overtimeHours,
+        );
+      }
     }
 
     const attendanceDaysByEmployee = new Map<string, number>();
@@ -586,6 +633,24 @@ export class PayrollService {
       );
     }
 
+    const penaltiesByEmployee = new Map<string, number>();
+    for (const penalty of penalties) {
+      penaltiesByEmployee.set(
+        penalty.employeeId,
+        (penaltiesByEmployee.get(penalty.employeeId) || 0) + Number(penalty.amount || 0),
+      );
+    }
+
+    const transportByEmployee = new Map<string, number>();
+    for (const passenger of busPassengers) {
+      const amount = Number(passenger.bus?.employeeDeductionAmount || 0);
+      if (!amount) continue;
+      transportByEmployee.set(
+        passenger.employeeId,
+        (transportByEmployee.get(passenger.employeeId) || 0) + amount,
+      );
+    }
+
     await this.prisma.payrollRun.update({
       where: { id: runId },
       data: {
@@ -609,21 +674,50 @@ export class PayrollService {
       for (const employee of employeesBatch) {
         const salaryRecord = salaryByEmployee.get(employee.employeeId);
         const hourlyRate = Number(employee.hourlyRate || 0);
-        const fallbackBaseSalary = hourlyRate * 8 * 26;
+        
+        const workDays = employee.workDaysInPeriod ?? defaultWorkDaysInPeriod;
+        const hoursPerDayEmp = employee.hoursPerDay ?? defaultHoursPerDay;
+        
+        const fallbackBaseSalary = hourlyRate * hoursPerDayEmp * workDays;
         const baseSalary = Number(salaryRecord?.baseSalary ?? fallbackBaseSalary);
+        const lumpSumSalary = Number(salaryRecord?.lumpSumSalary ?? 0);
+        const livingAllowance = Number(salaryRecord?.livingAllowance ?? 0);
+        const responsibilityAllowance = Number(salaryRecord?.responsibilityAllowance ?? 0);
+        const extraEffortAllowance = Number(salaryRecord?.extraEffortAllowance ?? 0);
+        const productionIncentive = Number(salaryRecord?.productionIncentive ?? 0);
+        const insuranceAmount = Number(salaryRecord?.insuranceAmount ?? 0);
+        const transportDeduction = Number(transportByEmployee.get(employee.employeeId) || 0);
 
         const attendanceDays = attendanceDaysByEmployee.get(employee.employeeId) || 0;
-        const hoursWorked = attendanceDays * 8;
+        const hoursWorked = attendanceDays * hoursPerDayEmp;
+        const absenceDays = Math.max(0, workDays - attendanceDays);
 
-        const proratedBase = this.toMoney((baseSalary / 26) * attendanceDays);
+        const baseTotal = this.toMoney(
+          baseSalary + lumpSumSalary + livingAllowance + responsibilityAllowance + extraEffortAllowance + productionIncentive,
+        );
+        const proratedBase = this.toMoney((baseTotal / workDays) * attendanceDays);
         const employeeBonuses = bonusesByEmployee.get(employee.employeeId);
         const bonusAmount = this.toMoney(employeeBonuses?.bonus || 0);
         const administrativeDeductions = this.toMoney(employeeBonuses?.deductions || 0);
         const advancesInstallments = this.toMoney(advancesByEmployee.get(employee.employeeId) || 0);
         const latePenalty = this.toMoney(latePenaltyByEmployee.get(employee.employeeId) || 0);
+        const overtimeHours = this.toMoney(overtimeByEmployee.get(employee.employeeId) || 0);
+        const overtimePay = this.toMoney(overtimeHours * (hourlyRate || baseTotal / workDays / hoursPerDayEmp));
+        const absencePenalty = this.toMoney((baseTotal / workDays) * absenceDays);
+        const penaltiesTotal = this.toMoney(penaltiesByEmployee.get(employee.employeeId) || 0);
+        const insuranceDeduction = this.toMoney(insuranceAmount);
+        const transportPenalty = this.toMoney(transportDeduction);
 
-        const grossPay = this.toMoney(proratedBase + bonusAmount);
-        const employeeDeductions = this.toMoney(administrativeDeductions + advancesInstallments + latePenalty);
+        const grossPay = this.toMoney(proratedBase + bonusAmount + overtimePay);
+        const employeeDeductions = this.toMoney(
+          administrativeDeductions +
+            advancesInstallments +
+            latePenalty +
+            absencePenalty +
+            penaltiesTotal +
+            insuranceDeduction +
+            transportPenalty,
+        );
         const netPay = this.toMoney(grossPay - employeeDeductions);
 
         const anomalies: string[] = [];
@@ -633,8 +727,20 @@ export class PayrollService {
         if (attendanceDays === 0) {
           anomalies.push('No attendance records in selected period');
         }
+        if (absenceDays > 0) {
+          anomalies.push(`Absence days deducted: ${absenceDays}`);
+        }
         if (latePenalty > 0) {
           anomalies.push(`Late penalty applied: ${latePenalty.toFixed(2)}`);
+        }
+        if (penaltiesTotal > 0) {
+          anomalies.push(`Penalties applied: ${penaltiesTotal.toFixed(2)}`);
+        }
+        if (insuranceDeduction > 0) {
+          anomalies.push(`Insurance deducted: ${insuranceDeduction.toFixed(2)}`);
+        }
+        if (transportPenalty > 0) {
+          anomalies.push(`Transport deducted: ${transportPenalty.toFixed(2)}`);
         }
         if (netPay < 0) {
           anomalies.push('Net pay is negative after deductions');

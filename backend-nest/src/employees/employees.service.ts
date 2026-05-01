@@ -226,6 +226,9 @@ export class EmployeesService {
         employmentStartDate,
         terminationDate: null,
         status: 'active',
+        workDaysInPeriod: dto.workDaysInPeriod ?? 26,
+        hoursPerDay: dto.hoursPerDay ?? 8,
+        gracePeriodMinutes: dto.gracePeriodMinutes ?? 15,
       },
     });
 
@@ -318,6 +321,9 @@ export class EmployeesService {
       ...(dto.scheduledEnd !== undefined && { scheduledEnd: dto.scheduledEnd }),
       ...(employmentStartDate !== undefined && { employmentStartDate }),
       ...(terminationDate !== undefined && { terminationDate }),
+      ...(dto.workDaysInPeriod !== undefined && { workDaysInPeriod: dto.workDaysInPeriod }),
+      ...(dto.hoursPerDay !== undefined && { hoursPerDay: dto.hoursPerDay }),
+      ...(dto.gracePeriodMinutes !== undefined && { gracePeriodMinutes: dto.gracePeriodMinutes }),
     };
 
     const updated = await this.prisma.employee.update({

@@ -39,6 +39,7 @@ export class AuthService {
     'manage_users', 'manage_roles', 'view_attendance', 'edit_attendance', 'view_payroll',
     'run_payroll', 'approve_payroll', 'view_inventory', 'edit_inventory', 'view_imports',
     'run_imports', 'manage_salary', 'manage_advances', 'manage_insurance', 'manage_bonuses',
+    'manage_penalties',
   ];
 
   constructor(

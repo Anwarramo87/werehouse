@@ -24,6 +24,8 @@ import { FinancesModule } from './finances/finances.module';
 import { ShortCacheModule } from './common/cache/short-cache.module';
 import { TransportationModule } from './transportation/transportation.module';
 import { DashboardModule } from './dashboard/dashboard.module';
+import { DiscountsModule } from './discounts/discounts.module';
+import { PenaltiesModule } from './penalties/penalties.module';
 
 function parseBooleanEnv(value: string | undefined): boolean | undefined {
   if (value === undefined) {
@@ -177,6 +179,8 @@ const queueInfraModules = queuesEnabled
     AdvancesModule,
     InsuranceModule,
     BonusesModule,
+    DiscountsModule,
+    PenaltiesModule,
     FilesModule,
     FinancesModule,
     TransportationModule,
