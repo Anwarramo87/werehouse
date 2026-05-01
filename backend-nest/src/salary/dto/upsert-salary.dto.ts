@@ -40,6 +40,13 @@ export class UpsertSalaryDto {
   @Type(() => Number)
   extraEffortAllowance?: number;
 
+  /** @deprecated استخدم extraEffortAllowance بدلاً من ذلك */
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  @Type(() => Number)
+  extraEffort?: number;
+
   /** تعويض حوافز إنتاجية (20% من الفرق — يُحسب تلقائياً إذا لم يُرسل) */
   @IsOptional()
   @IsNumber()
@@ -53,6 +60,13 @@ export class UpsertSalaryDto {
   @Min(0)
   @Type(() => Number)
   insuranceAmount?: number;
+
+  /** @deprecated استخدم insuranceAmount بدلاً من ذلك */
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  @Type(() => Number)
+  insurances?: number;
 
   /** بدل النقل */
   @IsOptional()

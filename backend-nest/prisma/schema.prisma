@@ -61,6 +61,11 @@ model Employee {
   roleId         String?  @db.Uuid
   role           Role?    @relation(fields: [roleId], references: [id], onDelete: SetNull)
   status         String   @default("active")
+  // إعدادات الراتب الدائمة للموظف
+  workDaysInPeriod Int @default(26)
+  hoursPerDay Int @default(8)
+  overtimeCalculation Json? // إعدادات إضافي الأسبوع/العيد
+  gracePeriodMinutes Int @default(15)
   attendanceRecords AttendanceRecord[]
   advances       EmployeeAdvance[]
   createdAt      DateTime @default(now())
@@ -321,6 +326,24 @@ model EmployeeBonus {
   @@index([employeeId, period])
   @@index([period, createdAt])
   @@map("employee_bonuses")
+}
+
+// ---------------------------------------------------------------------------
+// Penalties & Deductions — restaurant/clothing/administrative penalties
+// ---------------------------------------------------------------------------
+model EmployeePenalty {
+  id         String   @id @default(uuid()) @db.Uuid
+  employeeId String
+  category   String   // restaurant | clothing | penalty | other
+  amount     Decimal  @db.Decimal(14, 2)
+  reason     String?
+  issueDate  DateTime @default(now())
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([employeeId])
+  @@index([employeeId, issueDate])
+  @@map("employee_penalties")
 }
 
 // ---------------------------------------------------------------------------

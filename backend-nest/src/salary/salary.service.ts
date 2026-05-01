@@ -122,7 +122,6 @@ export class SalaryService {
     const lumpSumSalary   = new Prisma.Decimal((dto.lumpSumSalary ?? 0).toString());
     const livingAllowance = new Prisma.Decimal((dto.livingAllowance ?? 0).toString());
 
-    // إذا لم تُرسل البدلات يدوياً، نحسبها تلقائياً من الفرق
     let responsibilityAllowance: Prisma.Decimal;
     let extraEffortAllowance: Prisma.Decimal;
     let productionIncentive: Prisma.Decimal;
@@ -130,14 +129,14 @@ export class SalaryService {
     const hasManualAllowances =
       dto.responsibilityAllowance !== undefined ||
       dto.extraEffortAllowance !== undefined ||
+      dto.extraEffort !== undefined ||
       dto.productionIncentive !== undefined;
 
     if (hasManualAllowances) {
       responsibilityAllowance = new Prisma.Decimal((dto.responsibilityAllowance ?? 0).toString());
-      extraEffortAllowance    = new Prisma.Decimal((dto.extraEffortAllowance ?? 0).toString());
+      extraEffortAllowance    = new Prisma.Decimal((dto.extraEffortAllowance ?? dto.extraEffort ?? 0).toString());
       productionIncentive     = new Prisma.Decimal((dto.productionIncentive ?? 0).toString());
     } else {
-      // حساب تلقائي: Difference = baseSalary - lumpSumSalary - livingAllowance
       const difference = baseSalary.minus(lumpSumSalary).minus(livingAllowance);
       const positveDiff = difference.greaterThan(0) ? difference : new Prisma.Decimal(0);
       responsibilityAllowance = positveDiff.times(RESPONSIBILITY_RATIO);
@@ -153,7 +152,7 @@ export class SalaryService {
       responsibilityAllowance,
       extraEffortAllowance,
       productionIncentive,
-      insuranceAmount:        new Prisma.Decimal((dto.insuranceAmount ?? 0).toString()),
+      insuranceAmount:        new Prisma.Decimal((dto.insuranceAmount ?? dto.insurances ?? 0).toString()),
       transportAllowance:     new Prisma.Decimal((dto.transportAllowance ?? 0).toString()),
     };
 

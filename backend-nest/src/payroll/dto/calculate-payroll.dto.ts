@@ -10,4 +10,12 @@ export class CalculatePayrollDto {
   @IsOptional()
   @IsNumber()
   gracePeriodMinutes?: number;
+
+  @IsOptional()
+  @IsNumber()
+  workDaysInPeriod?: number;
+
+  @IsOptional()
+  @IsNumber()
+  hoursPerDay?: number;
 }

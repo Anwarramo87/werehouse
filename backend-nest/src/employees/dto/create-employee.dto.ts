@@ -104,4 +104,25 @@ export class CreateEmployeeDto {
   @IsOptional()
   @IsDateString()
   terminationDate?: string;
+
+  /** عدد أيام العمل في الفترة */
+  @IsOptional()
+  @IsNumber()
+  @Min(1)
+  @Type(() => Number)
+  workDaysInPeriod?: number;
+
+  /** عدد ساعات العمل في اليوم */
+  @IsOptional()
+  @IsNumber()
+  @Min(1)
+  @Type(() => Number)
+  hoursPerDay?: number;
+
+  /** فترة السماح بالدقائق قبل خصم التأخير */
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  @Type(() => Number)
+  gracePeriodMinutes?: number;
 }
