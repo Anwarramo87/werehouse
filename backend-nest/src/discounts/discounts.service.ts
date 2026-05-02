@@ -97,7 +97,7 @@ export class DiscountsService {
       bonusAmount: 0,
       bonusReason: dto.type || 'خصم متنوع',
       assistanceAmount: dto.amount,
-      period,
+      ...(period && { period }), // تمرير period فقط إذا كانت موجودة
     });
 
     return {
