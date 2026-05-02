@@ -252,4 +252,68 @@ export class TransportationService {
       totalCompanyDeduction: Number(totalCompanyDeduction.toFixed(2)),
     };
   }
+
+  async calculateDeductions(input: {
+    periodStart: string;
+    periodEnd: string;
+    employeeId?: string;
+  }) {
+    const { employeeId } = input;
+
+    // الحصول على الركاب (الموظفين في الحافلات)
+    const passengers = employeeId
+      ? await this.prisma.busPassenger.findMany({
+          where: { employeeId },
+          include: { bus: true },
+        })
+      : await this.prisma.busPassenger.findMany({
+          include: { bus: true },
+        });
+
+    if (!passengers.length) {
+      return {
+        data: [],
+        summary: {
+          totalEmployeesAffected: 0,
+          totalTransportationDeduction: 0,
+        },
+      };
+    }
+
+    const breakdowns: any[] = [];
+    let totalTransportationDeduction = 0;
+
+    // تجميع التكاليف حسب الموظف (قد يكون لموظف واحد حافلات متعددة)
+    const employeeCosts = new Map<string, number>();
+
+    for (const passenger of passengers) {
+      const cost = Number(passenger.bus.employeeDeductionAmount || 0);
+      const currentCost = employeeCosts.get(passenger.employeeId) || 0;
+      employeeCosts.set(passenger.employeeId, currentCost + cost);
+    }
+
+    // بناء النتائج
+    for (const [empId, cost] of employeeCosts) {
+      const passenger = passengers.find((p) => p.employeeId === empId);
+      if (passenger) {
+        breakdowns.push({
+          employeeId: empId,
+          busId: passenger.busId,
+          busName: passenger.bus.name,
+          transportCost: Math.round(cost * 100) / 100,
+          month: new Date().toISOString().slice(0, 7),
+          calculatedDate: new Date().toISOString(),
+        });
+        totalTransportationDeduction += cost;
+      }
+    }
+
+    return {
+      data: breakdowns,
+      summary: {
+        totalEmployeesAffected: breakdowns.length,
+        totalTransportationDeduction: Math.round(totalTransportationDeduction * 100) / 100,
+      },
+    };
+  }
 }

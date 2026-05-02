@@ -25,6 +25,7 @@ import { AttendanceListQueryDto } from './dto/attendance-list-query.dto';
 import { AttendanceRangeQueryDto } from './dto/attendance-range-query.dto';
 import { AttendancePeriodQueryDto } from './dto/attendance-period-query.dto';
 import { AttendanceAlertsQueryDto } from './dto/attendance-alerts-query.dto';
+import { CalculateDeductionsDto } from './dto/calculate-deductions.dto';
 import { AuthenticatedUser } from '../common/types/authenticated-user.types';
 
 @Controller('attendance')
@@ -69,6 +70,12 @@ export class AttendanceController {
   @Permissions('view_attendance')
   stats(@Query() query: AttendanceRangeQueryDto) {
     return this.attendanceService.stats(query.startDate, query.endDate);
+  }
+
+  @Post('calculate-deductions')
+  @Permissions('view_payroll')
+  calculateDeductions(@Body() dto: CalculateDeductionsDto) {
+    return this.attendanceService.calculateDeductions(dto);
   }
 
   @Get('anomalies')

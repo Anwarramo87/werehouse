@@ -1,6 +1,6 @@
-import { IsDateString, IsNumber, IsOptional, IsBoolean } from 'class-validator';
+import { IsDateString, IsOptional, IsNumber, IsUUID } from 'class-validator';
 
-export class CalculatePayrollDto {
+export class CalculateDeductionsDto {
   @IsDateString()
   periodStart: string;
 
@@ -20,10 +20,6 @@ export class CalculatePayrollDto {
   hoursPerDay?: number;
 
   @IsOptional()
-  @IsBoolean()
-  includeAttendanceDeductions?: boolean;
-
-  @IsOptional()
-  @IsBoolean()
-  includeTransportationDeductions?: boolean;
+  @IsUUID()
+  employeeId?: string;
 }
