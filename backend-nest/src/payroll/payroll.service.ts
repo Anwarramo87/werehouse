@@ -520,7 +520,14 @@ export class PayrollService {
       this.prisma.employeeBonus.findMany({
         where: {
           employeeId: { in: employeeIds },
-          period: periodTag,
+          OR: [
+            // جلب bonuses بفترة محددة
+            { period: periodTag },
+            // جلب bonuses بدون فترة (خصومات عامة)
+            { period: null },
+            // جلب bonuses المنشأة خلال الفترة (في حالة عدم تحديد period)
+            { createdAt: { gte: new Date(`${periodStart}T00:00:00.000Z`), lte: new Date(`${periodEnd}T23:59:59.999Z`) } },
+          ],
         },
       }),
       this.prisma.employeeAdvance.findMany({
