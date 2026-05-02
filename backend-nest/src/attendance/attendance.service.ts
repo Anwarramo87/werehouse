@@ -157,6 +157,20 @@ export class AttendanceService {
     return Math.max(0, this.minutesFromCheckIn(firstIn) - scheduledMinutes);
   }
 
+  private extractMinutesLate(shiftPair: Prisma.JsonValue | null): number {
+    if (!shiftPair || typeof shiftPair !== 'object' || Array.isArray(shiftPair)) {
+      return 0;
+    }
+
+    const raw = (shiftPair as Record<string, unknown>).minutesLate;
+    const parsed = Number(raw ?? 0);
+    if (!Number.isFinite(parsed) || parsed <= 0) {
+      return 0;
+    }
+
+    return parsed;
+  }
+
   private normalizeImportHeader(value: string) {
     return value.toLowerCase().replace(/[\s_-]+/g, '');
   }
@@ -921,13 +935,15 @@ export class AttendanceService {
 
       let totalDelayMinutes = 0;
       records.forEach((record) => {
-        if (record.minutesLate && record.minutesLate > gracePeriodMinutes) {
-          totalDelayMinutes += record.minutesLate - gracePeriodMinutes;
+        const minutesLate = this.extractMinutesLate(record.shiftPair);
+        if (minutesLate && minutesLate > gracePeriodMinutes) {
+          totalDelayMinutes += minutesLate - gracePeriodMinutes;
         }
       });
 
       // حساب الخصومات
-      const dailyRate = (employee.hourlyRate * hoursPerDay) || 0;
+      const hourlyRate = Number(employee.hourlyRate || 0);
+      const dailyRate = (hourlyRate * hoursPerDay) || 0;
       const minuteRate = dailyRate / (hoursPerDay * 60);
       const absenceDeduction = absentDays * dailyRate;
       const delayDeduction = totalDelayMinutes * minuteRate;

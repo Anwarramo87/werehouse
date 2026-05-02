@@ -299,7 +299,7 @@ export class TransportationService {
         breakdowns.push({
           employeeId: empId,
           busId: passenger.busId,
-          busName: passenger.bus.name,
+          busRoute: passenger.bus.route,
           transportCost: Math.round(cost * 100) / 100,
           month: new Date().toISOString().slice(0, 7),
           calculatedDate: new Date().toISOString(),
