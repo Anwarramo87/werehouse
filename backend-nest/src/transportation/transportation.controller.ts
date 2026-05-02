@@ -15,6 +15,7 @@ import { Permissions } from '../common/decorators/permissions.decorator';
 import { CreateBusDto } from './dto/create-bus.dto';
 import { UpdateBusDto } from './dto/update-bus.dto';
 import { AddPassengerDto } from './dto/add-passenger.dto';
+import { CalculateDeductionsDto } from '../attendance/dto/calculate-deductions.dto';
 
 @Controller('transportation')
 @UseGuards(JwtAuthGuard, PermissionsGuard)
@@ -85,5 +86,12 @@ export class TransportationController {
     @Param('employeeId') employeeId: string,
   ) {
     return this.transportationService.removePassenger(busId, employeeId);
+  }
+
+  /** POST /api/transportation/calculate-deductions */
+  @Post('calculate-deductions')
+  @Permissions('view_payroll')
+  calculateDeductions(@Body() dto: CalculateDeductionsDto) {
+    return this.transportationService.calculateDeductions(dto);
   }
 }

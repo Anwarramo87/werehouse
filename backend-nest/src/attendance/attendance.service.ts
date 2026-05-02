@@ -872,4 +872,104 @@ export class AttendanceService {
       },
     };
   }
+
+  async calculateDeductions(input: {
+    periodStart: string;
+    periodEnd: string;
+    gracePeriodMinutes?: number;
+    workDaysInPeriod?: number;
+    hoursPerDay?: number;
+    employeeId?: string;
+  }) {
+    const {
+      periodStart,
+      periodEnd,
+      gracePeriodMinutes = 15,
+      workDaysInPeriod = 26,
+      hoursPerDay = 8,
+      employeeId,
+    } = input;
+
+    // الحصول على جميع الموظفين أو موظف محدد
+    const employees = employeeId
+      ? [await this.prisma.employee.findUnique({ where: { employeeId } })]
+      : await this.prisma.employee.findMany({ where: { status: 'active' } });
+
+    if (!employees.length) {
+      throw new BadRequestException('No active employees found');
+    }
+
+    const breakdowns: any[] = [];
+    let totalAbsenceDeduction = 0;
+    let totalDelayDeduction = 0;
+
+    for (const employee of employees) {
+      if (!employee) continue;
+
+      const records = await this.prisma.attendanceRecord.findMany({
+        where: {
+          employeeId: employee.employeeId,
+          date: { gte: periodStart, lte: periodEnd },
+        },
+        orderBy: [{ date: 'asc' }, { timestamp: 'asc' }],
+      });
+
+      // حساب أيام الغياب ودقائق التأخير
+      const uniqueDates = new Set(records.map((r) => r.date));
+      const dateRange = this.getDateRange(periodStart, periodEnd);
+      const absentDays = dateRange.length - uniqueDates.size;
+
+      let totalDelayMinutes = 0;
+      records.forEach((record) => {
+        if (record.minutesLate && record.minutesLate > gracePeriodMinutes) {
+          totalDelayMinutes += record.minutesLate - gracePeriodMinutes;
+        }
+      });
+
+      // حساب الخصومات
+      const dailyRate = (employee.hourlyRate * hoursPerDay) || 0;
+      const minuteRate = dailyRate / (hoursPerDay * 60);
+      const absenceDeduction = absentDays * dailyRate;
+      const delayDeduction = totalDelayMinutes * minuteRate;
+
+      const breakdown = {
+        employeeId: employee.employeeId,
+        employeeName: employee.name,
+        absentDays,
+        absenceDeduction: Math.round(absenceDeduction * 100) / 100,
+        delayMinutes: totalDelayMinutes,
+        delayDeduction: Math.round(delayDeduction * 100) / 100,
+        totalAttendanceDeduction: Math.round((absenceDeduction + delayDeduction) * 100) / 100,
+        periodStart,
+        periodEnd,
+      };
+
+      breakdowns.push(breakdown);
+      totalAbsenceDeduction += absenceDeduction;
+      totalDelayDeduction += delayDeduction;
+    }
+
+    return {
+      data: breakdowns,
+      summary: {
+        totalEmployeesAffected: breakdowns.filter((b) => b.totalAttendanceDeduction > 0).length,
+        totalAbsenceDeduction: Math.round(totalAbsenceDeduction * 100) / 100,
+        totalDelayDeduction: Math.round(totalDelayDeduction * 100) / 100,
+        totalAttendanceDeduction: Math.round((totalAbsenceDeduction + totalDelayDeduction) * 100) / 100,
+      },
+    };
+  }
+
+  private getDateRange(start: string, end: string): string[] {
+    const dates: string[] = [];
+    const current = new Date(start);
+    const endDate = new Date(end);
+
+    while (current <= endDate) {
+      dates.push(current.toISOString().split('T')[0]);
+      current.setDate(current.getDate() + 1);
+    }
+
+    return dates;
+  }
 }

@@ -509,6 +509,10 @@ export class PayrollService {
     const defaultWorkDaysInPeriod = Math.max(1, Number(dto.workDaysInPeriod ?? 26));
     const defaultHoursPerDay = Math.max(1, Number(dto.hoursPerDay ?? 8));
 
+    // تحديد الـ flags للخصومات (افتراضياً مفعل)
+    const includeAttendanceDeductions = dto.includeAttendanceDeductions !== false;
+    const includeTransportationDeductions = dto.includeTransportationDeductions !== false;
+
     const [salaryRecords, bonuses, advances, penalties, attendanceInRecords, busPassengers] = await Promise.all([
       this.prisma.employeeSalary.findMany({
         where: { employeeId: { in: employeeIds } },
@@ -534,31 +538,35 @@ export class PayrollService {
           },
         },
       }),
-      this.prisma.attendanceRecord.findMany({
-        where: {
-          employeeId: { in: employeeIds },
-          type: 'IN',
-          date: {
-            gte: periodStart,
-            lte: periodEnd,
-          },
-        },
-        select: {
-          employeeId: true,
-          date: true,
-          shiftPair: true,
-        },
-      }),
-      this.prisma.busPassenger.findMany({
-        where: {
-          employeeId: { in: employeeIds },
-          status: 'active',
-        },
-        select: {
-          employeeId: true,
-          bus: { select: { employeeDeductionAmount: true } },
-        },
-      }),
+      includeAttendanceDeductions
+        ? this.prisma.attendanceRecord.findMany({
+            where: {
+              employeeId: { in: employeeIds },
+              type: 'IN',
+              date: {
+                gte: periodStart,
+                lte: periodEnd,
+              },
+            },
+            select: {
+              employeeId: true,
+              date: true,
+              shiftPair: true,
+            },
+          })
+        : Promise.resolve([]),
+      includeTransportationDeductions
+        ? this.prisma.busPassenger.findMany({
+            where: {
+              employeeId: { in: employeeIds },
+              status: 'active',
+            },
+            select: {
+              employeeId: true,
+              bus: { select: { employeeDeductionAmount: true } },
+            },
+          })
+        : Promise.resolve([]),
     ]);
 
     const salaryByEmployee = new Map(salaryRecords.map((record) => [record.employeeId, record]));
@@ -568,39 +576,42 @@ export class PayrollService {
     const latePenaltyByEmployee = new Map<string, number>();
     const overtimeByEmployee = new Map<string, number>();
 
-    for (const record of attendanceInRecords) {
-      const dates = attendanceDatesByEmployee.get(record.employeeId) || new Set<string>();
-      dates.add(record.date);
-      attendanceDatesByEmployee.set(record.employeeId, dates);
+    // معالجة خصومات الدوام فقط إذا كان enabled
+    if (includeAttendanceDeductions) {
+      for (const record of attendanceInRecords) {
+        const dates = attendanceDatesByEmployee.get(record.employeeId) || new Set<string>();
+        dates.add(record.date);
+        attendanceDatesByEmployee.set(record.employeeId, dates);
 
-      const employee = employeeById.get(record.employeeId);
-      const graceForEmployee = employee?.gracePeriodMinutes ?? defaultGracePeriodMinutes;
-      const hoursPerDayForEmployee = employee?.hoursPerDay ?? defaultHoursPerDay;
-      
-      const minutesLate = this.extractMinutesLate(record.shiftPair);
-      const lateAfterGrace = Math.max(0, minutesLate - graceForEmployee);
-      if (lateAfterGrace <= 0) {
-        continue;
-      }
+        const employee = employeeById.get(record.employeeId);
+        const graceForEmployee = employee?.gracePeriodMinutes ?? defaultGracePeriodMinutes;
+        const hoursPerDayForEmployee = employee?.hoursPerDay ?? defaultHoursPerDay;
 
-      const hourlyRate = Number(employee?.hourlyRate || 0);
-      if (!hourlyRate) {
-        continue;
-      }
+        const minutesLate = this.extractMinutesLate(record.shiftPair);
+        const lateAfterGrace = Math.max(0, minutesLate - graceForEmployee);
+        if (lateAfterGrace <= 0) {
+          continue;
+        }
 
-      const penalty = (lateAfterGrace / 60) * hourlyRate;
-      latePenaltyByEmployee.set(
-        record.employeeId,
-        (latePenaltyByEmployee.get(record.employeeId) || 0) + penalty,
-      );
+        const hourlyRate = Number(employee?.hourlyRate || 0);
+        if (!hourlyRate) {
+          continue;
+        }
 
-      const hoursWorked = this.extractHoursWorked(record.shiftPair);
-      if (hoursWorked > hoursPerDayForEmployee) {
-        const overtimeHours = hoursWorked - hoursPerDayForEmployee;
-        overtimeByEmployee.set(
+        const penalty = (lateAfterGrace / 60) * hourlyRate;
+        latePenaltyByEmployee.set(
           record.employeeId,
-          (overtimeByEmployee.get(record.employeeId) || 0) + overtimeHours,
+          (latePenaltyByEmployee.get(record.employeeId) || 0) + penalty,
         );
+
+        const hoursWorked = this.extractHoursWorked(record.shiftPair);
+        if (hoursWorked > hoursPerDayForEmployee) {
+          const overtimeHours = hoursWorked - hoursPerDayForEmployee;
+          overtimeByEmployee.set(
+            record.employeeId,
+            (overtimeByEmployee.get(record.employeeId) || 0) + overtimeHours,
+          );
+        }
       }
     }
 
@@ -642,13 +653,15 @@ export class PayrollService {
     }
 
     const transportByEmployee = new Map<string, number>();
-    for (const passenger of busPassengers) {
-      const amount = Number(passenger.bus?.employeeDeductionAmount || 0);
-      if (!amount) continue;
-      transportByEmployee.set(
-        passenger.employeeId,
-        (transportByEmployee.get(passenger.employeeId) || 0) + amount,
-      );
+    if (includeTransportationDeductions) {
+      for (const passenger of busPassengers) {
+        const amount = Number(passenger.bus?.employeeDeductionAmount || 0);
+        if (!amount) continue;
+        transportByEmployee.set(
+          passenger.employeeId,
+          (transportByEmployee.get(passenger.employeeId) || 0) + amount,
+        );
+      }
     }
 
     await this.prisma.payrollRun.update({
