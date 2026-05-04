@@ -222,6 +222,9 @@ model PayrollItem {
   grossPay        Decimal  @db.Decimal(14, 2)
   totalDeductions Decimal  @db.Decimal(14, 2)
   netPay          Decimal  @db.Decimal(14, 2)
+  netPayRounded   Decimal  @default(0) @db.Decimal(14, 2)
+  roundingDifference Decimal @default(0) @db.Decimal(14, 2)
+  netPayWithAdvance Decimal @default(0) @db.Decimal(14, 2)
   anomalies       String[] @default([])
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
@@ -231,6 +234,40 @@ model PayrollItem {
   @@unique([payrollRunId, employeeId])
   @@index([employeeId, createdAt])
   @@map("payroll_items")
+}
+
+// ---------------------------------------------------------------------------
+// Payroll Inputs — per-employee values used in payroll formula
+// ---------------------------------------------------------------------------
+model PayrollInput {
+  id                    String   @id @default(uuid()) @db.Uuid
+  employeeId            String
+  periodStart           DateTime @db.Date
+  periodEnd             DateTime @db.Date
+  lateMinutes           Int      @default(0)
+  earlyLeaveMinutes     Int      @default(0)
+  absenceDays           Int      @default(0)
+  sickLeaveDays         Int      @default(0)
+  adminLeaveDays        Int      @default(0)
+  unpaidLeaveDays       Int      @default(0)
+  deathLeaveDays        Int      @default(0)
+  unpaidHours           Decimal  @default(0) @db.Decimal(8, 2)
+  overtimeRegularMinutes Int     @default(0)
+  overtimeWeekendDays   Decimal  @default(0) @db.Decimal(6, 2)
+  penaltyAmount         Decimal  @default(0) @db.Decimal(14, 2)
+  clothingDeduction     Decimal  @default(0) @db.Decimal(14, 2)
+  bonusAdjustment       Decimal  @default(0) @db.Decimal(14, 2)
+  advanceAmount         Decimal  @default(0) @db.Decimal(14, 2)
+  insuranceAmount       Decimal? @db.Decimal(14, 2)
+  transportAllowanceOverride Decimal? @db.Decimal(14, 2)
+  notes                 String?
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  @@unique([employeeId, periodStart, periodEnd])
+  @@index([periodStart, periodEnd])
+  @@index([employeeId, periodStart])
+  @@map("payroll_inputs")
 }
 
 // ---------------------------------------------------------------------------

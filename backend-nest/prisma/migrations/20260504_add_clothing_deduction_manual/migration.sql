@@ -1,0 +1,2 @@
+ALTER TABLE "payroll_inputs"
+ADD COLUMN IF NOT EXISTS "clothingDeduction" DECIMAL(14,2) NOT NULL DEFAULT 0;

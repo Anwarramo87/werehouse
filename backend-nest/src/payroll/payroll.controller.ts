@@ -13,6 +13,7 @@ import { AuthenticatedUser } from '../common/types/authenticated-user.types';
 import { PayrollListQueryDto } from './dto/payroll-list-query.dto';
 import { PayrollSummaryQueryDto } from './dto/payroll-summary-query.dto';
 import { RejectPayrollDto } from './dto/reject-payroll.dto';
+import { PayrollInputsQueryDto, UpsertPayrollInputDto } from './dto/payroll-input.dto';
 
 @Controller('payroll')
 @UseGuards(JwtAuthGuard, PermissionsGuard)
@@ -32,6 +33,18 @@ export class PayrollController {
   @Permissions('view_payroll')
   summary(@Query() query: PayrollSummaryQueryDto) {
     return this.payrollService.summary(query.periodStart, query.periodEnd);
+  }
+
+  @Get('inputs')
+  @Permissions('view_payroll')
+  listInputs(@Query() query: PayrollInputsQueryDto) {
+    return this.payrollService.listInputs(query);
+  }
+
+  @Post('inputs')
+  @Permissions('run_payroll')
+  upsertInputs(@Body() dto: UpsertPayrollInputDto) {
+    return this.payrollService.upsertInput(dto);
   }
 
   @Post('calculate')
