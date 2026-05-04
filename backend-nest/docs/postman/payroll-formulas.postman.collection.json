@@ -1,0 +1,73 @@
+{
+  "info": {
+    "name": "Payroll Formulas Only",
+    "_postman_id": "2b5b0a6e-20ae-4d3e-8f1a-7d7b9e9b6c1c",
+    "description": "Minimal collection for payroll formula inputs and calculation. Login uses cookie-based auth; ensure Postman cookie jar is enabled.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "POST Login (Cookie)",
+      "request": {
+        "auth": { "type": "noauth" },
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"username\": \"admin\",\n  \"password\": \"password123\"\n}"
+        },
+        "url": "{{baseUrl}}/auth/login"
+      }
+    },
+    {
+      "name": "POST Payroll Inputs (Formula)",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"employeeId\": \"{{employeeId}}\",\n  \"periodStart\": \"{{periodStart}}\",\n  \"periodEnd\": \"{{periodEnd}}\",\n  \"lateMinutes\": 55,\n  \"earlyLeaveMinutes\": 25,\n  \"absenceDays\": 1,\n  \"sickLeaveDays\": 2,\n  \"adminLeaveDays\": 0,\n  \"unpaidLeaveDays\": 0,\n  \"deathLeaveDays\": 0,\n  \"unpaidHours\": 1.5,\n  \"overtimeRegularMinutes\": 150,\n  \"overtimeWeekendDays\": 1,\n  \"penaltyAmount\": 75000,\n  \"clothingDeduction\": 125000,\n  \"bonusAdjustment\": 200000,\n  \"advanceAmount\": 500000,\n  \"insuranceAmount\": 210000,\n  \"transportAllowanceOverride\": 850000\n}"
+        },
+        "url": "{{baseUrl}}/payroll/inputs"
+      }
+    },
+    {
+      "name": "POST Calculate Payroll",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const data = pm.response.json();",
+              "if (data?.payrollRun?.runId) pm.collectionVariables.set('payrollRunId', data.payrollRun.runId);",
+              "if (data?.payrollRun?.id) pm.collectionVariables.set('payrollRunDbId', data.payrollRun.id);"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"periodStart\": \"{{periodStart}}\",\n  \"periodEnd\": \"{{periodEnd}}\"\n}"
+        },
+        "url": "{{baseUrl}}/payroll/calculate"
+      }
+    },
+    {
+      "name": "GET Payroll Run",
+      "request": {
+        "method": "GET",
+        "url": "{{baseUrl}}/payroll/{{payrollRunId}}"
+      }
+    }
+  ]
+}

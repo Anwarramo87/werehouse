@@ -16,6 +16,7 @@ export class DashboardService {
       totalEmployees,
       todayAttendanceRecords,
       salaryRecords,
+      latestPayrollRun,
     ] = await Promise.all([
       // إجمالي الموظفين النشطين
       this.prisma.employee.count({ where: { status: 'active' } }),
@@ -39,6 +40,13 @@ export class DashboardService {
           productionIncentive: true,
           insuranceAmount: true,
           transportAllowance: true,
+        },
+      }),
+      this.prisma.payrollRun.findFirst({
+        where: { status: 'completed' },
+        orderBy: { runDate: 'desc' },
+        include: {
+          items: { select: { netPayRounded: true, netPay: true } },
         },
       }),
     ]);
@@ -122,17 +130,16 @@ export class DashboardService {
     }
 
     // ─── الرواتب المستحقة ─────────────────────────────────────────────────
-    // مجموع الرواتب النهائية = baseSalary + allowances - insurance
-    const totalDueSalaries = salaryRecords.reduce((sum, s) => {
-      const gross =
-        Number(s.baseSalary) +
-        Number(s.responsibilityAllowance) +
-        Number(s.extraEffortAllowance) +
-        Number(s.productionIncentive) +
-        Number(s.transportAllowance);
+    // نعتمد أحدث تشغيل رواتب إن وجد، وإلا نرجع لتقدير ثابت من السجل
+    const payrollRunTotal = latestPayrollRun?.items?.reduce((sum, item) => {
+      return sum + Number(item.netPayRounded ?? item.netPay ?? 0);
+    }, 0);
+    const fallbackTotalDueSalaries = salaryRecords.reduce((sum, s) => {
+      const gross = Number(s.baseSalary) + Number(s.transportAllowance);
       const deductions = Number(s.insuranceAmount);
       return sum + gross - deductions;
     }, 0);
+    const totalDueSalaries = payrollRunTotal ?? fallbackTotalDueSalaries;
 
     return {
       // ─── إجمالي الموظفين

@@ -1,40 +1,66 @@
 # مطابقة معادلات الرواتب مع ملف الاكسل
 
-هذا الملف يوضح كيف أصبحت معادلات الرواتب مطابقة لملف الاكسل (قبض نظامي).
+هذا الملف يوضح المعادلات المعتمدة حالياً في الباك لتطابق ملف الاكسل (قبض نظامي).
 
-## المعادلة الأساسية (الراتب المقبوض)
+## المعادلة الأساسية (الراتب الفعلي)
 
-الراتب المقبوض = (الراتب الأساسي + المكافآت + الإضافي) - (التأمينات + السلف + العقوبات + خصم الدوام + بدل النقل)
+الراتب = (G3) - AA3 - AB3 - AC3 - AD3 - AF3 - AG3 + (AI3 + AJ3) - AK3 + AL3 - AM3 - AN3 + I3
+
+## قيم الأجور المعيارية
+
+- W3 (الراتب اليومي) = G3 / 26
+- X3 (أجرة الساعة) = G3 / 26 / 9
+- Y3 (أجرة الدقيقة) = G3 / 26 / 9 / 60
+
+## تعريف المتغيرات الأساسية
+
+- G3: الراتب الأساسي.
+- I3: بدل نقل = بدل نقل / 26 * (26 - (L3 + N3 + O3 + P3 + S3)).
+- AJ3: إضافي عادي = 1.5 * Y3 * M3.
+- AI3: إضافي نهاية أسبوع = W3 * T3 * 2.
+
+## الخصومات الثابتة والمتغيرة
+
+- AA3: خصم تأخير صباحي = 1.5 * Y3 * J3.
+- AB3: خصم خروج مبكر = K3 * Y3.
+- AC3: خصم غياب = L3 * W3.
+- AD3: خصم إجازة مرضية = N3 * 50% * W3.
+- AF3: خصم إجازة بلا راتب = P3 * W3.
+- AG3: خصم ساعة بلا راتب = Q3 * X3.
+- AK3: عقوبة.
+- خصم شراء ملابس: ضمن الخصومات (قيمة مستقلة في المدخلات).
+- AL3: مكافأة وفرق (يدوي).
+- AM3: سلفة.
+- AN3: تأمينات.
+
+## الراتب المقبوض والفرق
+
+- الراتب المقبوض = تقريب الراتب الفعلي لأقرب ألف للأعلى.
+- الفرق = الراتب المقبوض - الراتب الفعلي.
+- الراتب مع السلفة = الراتب المقبوض + السلفة + العقوبة.
 
 ## مصادر البيانات
 
-- **راتب ووظيف**: `employee_salaries`
-  - baseSalary, lumpSumSalary, livingAllowance, responsibilityAllowance, extraEffortAllowance, productionIncentive
-- **مكافأة&مساعدة**: `employee_bonuses`
-  - bonusAmount (مكافآت) و assistanceAmount (خصومات إدارية)
-- **سلف**: `employee_advances`
-  - installmentAmount + remainingAmount
-- **مطعم+ملابس (عقوبات)**: `employee_penalties`
-- **دوام**: `attendance_records`
-  - دقائق التأخير وغياب الأيام
-- **بدل نقل**: `bus_passengers` + `buses.employeeDeductionAmount`
-- **تأمينات**: `employee_salaries.insuranceAmount`
+- **الراتب الأساسي والتأمينات وبدل النقل**: `employee_salaries`
+  - baseSalary, insuranceAmount, transportAllowance
+- **قيم المعادلة اليدوية لكل موظف وفترة**: `payroll_inputs`
+  - lateMinutes (J3), earlyLeaveMinutes (K3), absenceDays (L3), sickLeaveDays (N3)
+  - adminLeaveDays (O3), unpaidLeaveDays (P3), deathLeaveDays (S3)
+  - overtimeRegularMinutes (M3), overtimeWeekendDays (T3), unpaidHours (Q3)
+  - penaltyAmount (AK3), clothingDeduction (خصم ملابس), bonusAdjustment (AL3), advanceAmount (AM3), insuranceAmount (AN3)
 
 ## قواعد الحساب الحالية
 
-- **الغياب**: يوم كامل عند الغياب فقط.
-- **التأخير**: خصم بالدقيقة بعد فترة السماح (من `gracePeriodMinutes`).
-- **الإضافي**: إضافي عادي فقط (يُستخرج من ساعات العمل في `shiftPair.hoursWorked`).
-- **بدل النقل**: يخصم من راتب الموظف بناءً على قيمة `employeeDeductionAmount` من الباص المرتبط.
+- إذا لم توجد مدخلات في `payroll_inputs`، يتم استخدام قيم افتراضية من الدوام (التأخير/الغياب/الإضافي) عند تفعيل `includeAttendanceDeductions`.
+- يمكن تعطيل احتساب الدوام بالكامل من `POST /payroll/calculate` عبر `includeAttendanceDeductions=false`.
+- بدل النقل يعتمد على عدد الأيام الفعلية بعد خصم الإجازات المذكورة في المعادلة.
 
 ## ثوابت الحساب
 
-- `workDaysInPeriod` (افتراضي 26 يوم عمل)
-- `hoursPerDay` (افتراضي 8 ساعات)
-
-يمكن تمريرها في `POST /payroll/calculate` لتطابق ملف الاكسل بدقة.
+- 26 يوم عمل ثابت.
+- 9 ساعات يوم عمل ثابت.
 
 ## نقاط مهمة
 
-- أي تعديل في رقم الموظف أو نوع الخصم ينعكس مباشرة على الراتب المقبوض.
-- الحسابات التفصيلية موجودة في `payroll.service.ts` ويمكن توسيعها لاحقاً لإضافي نهاية أسبوع أو عيد.
+- الحسابات التفصيلية موجودة في `payroll.service.ts` وتعتمد على المعادلة أعلاه فقط.
+- أي تعديل في `payroll_inputs` ينعكس مباشرة على الراتب النهائي.

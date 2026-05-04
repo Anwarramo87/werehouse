@@ -422,6 +422,30 @@
           }
         },
         {
+          "name": "GET Payroll Inputs",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/payroll/inputs?employeeId={{employeeId}}&periodStart=2026-03-01&periodEnd=2026-03-31"
+          }
+        },
+        {
+          "name": "POST Payroll Inputs",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"employeeId\": \"EMP001\",\n  \"periodStart\": \"2026-03-01\",\n  \"periodEnd\": \"2026-03-31\",\n  \"lateMinutes\": 15,\n  \"earlyLeaveMinutes\": 10,\n  \"absenceDays\": 1,\n  \"sickLeaveDays\": 2,\n  \"adminLeaveDays\": 0,\n  \"unpaidLeaveDays\": 0,\n  \"deathLeaveDays\": 0,\n  \"unpaidHours\": 1.5,\n  \"overtimeRegularMinutes\": 120,\n  \"overtimeWeekendDays\": 1,\n  \"penaltyAmount\": 20000,\n  \"clothingDeduction\": 15000,\n  \"bonusAdjustment\": 50000,\n  \"advanceAmount\": 100000,\n  \"insuranceAmount\": 25000,\n  \"transportAllowanceOverride\": 30000,\n  \"notes\": \"March adjustments\"\n}"
+            },
+            "url": "{{baseUrl}}/payroll/inputs"
+          }
+        },
+        {
           "name": "GET Payroll Run by Id",
           "request": {
             "method": "GET",
