@@ -1,0 +1,324 @@
+{
+  "info": {
+    "name": "Daily Attendance Logs API",
+    "description": "Event-based daily attendance logging system for Enterprise HRMS",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Create Daily Log",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{access_token}}"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"employeeId\": \"EMP001\",\n  \"date\": \"2026-05-09\",\n  \"recordType\": \"ABSENCE\",\n  \"value\": 1,\n  \"notes\": \"غياب بدون عذر\"\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/attendance/daily-logs",
+          "host": ["{{base_url}}"],
+          "path": ["attendance", "daily-logs"]
+        },
+        "description": "إنشاء سجل يومي جديد (غياب، تأخير، إضافي، إجازة، إلخ)"
+      }
+    },
+    {
+      "name": "Create Delay Log",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{access_token}}"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"employeeId\": \"EMP001\",\n  \"date\": \"2026-05-08\",\n  \"recordType\": \"DELAY_MINUTES\",\n  \"value\": 45,\n  \"notes\": \"تأخر 45 دقيقة\",\n  \"source\": \"biometric\"\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/attendance/daily-logs",
+          "host": ["{{base_url}}"],
+          "path": ["attendance", "daily-logs"]
+        },
+        "description": "تسجيل تأخير بالدقائق"
+      }
+    },
+    {
+      "name": "Create Overtime Log",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{access_token}}"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"employeeId\": \"EMP001\",\n  \"date\": \"2026-05-07\",\n  \"recordType\": \"OVERTIME_MINUTES\",\n  \"value\": 120,\n  \"notes\": \"عمل إضافي ساعتين\"\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/attendance/daily-logs",
+          "host": ["{{base_url}}"],
+          "path": ["attendance", "daily-logs"]
+        },
+        "description": "تسجيل عمل إضافي بالدقائق"
+      }
+    },
+    {
+      "name": "Get All Daily Logs",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{access_token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{base_url}}/attendance/daily-logs?page=1&limit=50",
+          "host": ["{{base_url}}"],
+          "path": ["attendance", "daily-logs"],
+          "query": [
+            {
+              "key": "page",
+              "value": "1"
+            },
+            {
+              "key": "limit",
+              "value": "50"
+            }
+          ]
+        },
+        "description": "الحصول على قائمة جميع السجلات اليومية"
+      }
+    },
+    {
+      "name": "Get Daily Logs by Employee",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{access_token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{base_url}}/attendance/daily-logs?employeeId=EMP001&startDate=2026-05-01&endDate=2026-05-31",
+          "host": ["{{base_url}}"],
+          "path": ["attendance", "daily-logs"],
+          "query": [
+            {
+              "key": "employeeId",
+              "value": "EMP001"
+            },
+            {
+              "key": "startDate",
+              "value": "2026-05-01"
+            },
+            {
+              "key": "endDate",
+              "value": "2026-05-31"
+            }
+          ]
+        },
+        "description": "الحصول على السجلات اليومية لموظف محدد في فترة معينة"
+      }
+    },
+    {
+      "name": "Get Daily Logs by Type",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{access_token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{base_url}}/attendance/daily-logs?recordType=ABSENCE&startDate=2026-05-01&endDate=2026-05-31",
+          "host": ["{{base_url}}"],
+          "path": ["attendance", "daily-logs"],
+          "query": [
+            {
+              "key": "recordType",
+              "value": "ABSENCE"
+            },
+            {
+              "key": "startDate",
+              "value": "2026-05-01"
+            },
+            {
+              "key": "endDate",
+              "value": "2026-05-31"
+            }
+          ]
+        },
+        "description": "الحصول على السجلات اليومية حسب النوع (غياب، تأخير، إلخ)"
+      }
+    },
+    {
+      "name": "Get Monthly Summary (Single Employee)",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{access_token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{base_url}}/attendance/daily-logs/summary/EMP001?month=2026-05",
+          "host": ["{{base_url}}"],
+          "path": ["attendance", "daily-logs", "summary", "EMP001"],
+          "query": [
+            {
+              "key": "month",
+              "value": "2026-05"
+            }
+          ]
+        },
+        "description": "الحصول على المجاميع الشهرية لموظف محدد (Aggregation) - هذا هو الـ Endpoint الأهم!"
+      }
+    },
+    {
+      "name": "Get Monthly Summary (All Employees)",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{access_token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{base_url}}/attendance/daily-logs/summary/all?month=2026-05",
+          "host": ["{{base_url}}"],
+          "path": ["attendance", "daily-logs", "summary", "all"],
+          "query": [
+            {
+              "key": "month",
+              "value": "2026-05"
+            }
+          ]
+        },
+        "description": "الحصول على المجاميع الشهرية لجميع الموظفين النشطين"
+      }
+    },
+    {
+      "name": "Get Employee Month Logs with Summary",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{access_token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{base_url}}/attendance/daily-logs/employee/EMP001/month/2026-05",
+          "host": ["{{base_url}}"],
+          "path": ["attendance", "daily-logs", "employee", "EMP001", "month", "2026-05"]
+        },
+        "description": "الحصول على السجلات اليومية + المجاميع لموظف في شهر محدد"
+      }
+    },
+    {
+      "name": "Get Daily Log by ID",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{access_token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{base_url}}/attendance/daily-logs/{{log_id}}",
+          "host": ["{{base_url}}"],
+          "path": ["attendance", "daily-logs", "{{log_id}}"]
+        },
+        "description": "الحصول على سجل يومي محدد بالـ ID"
+      }
+    },
+    {
+      "name": "Update Daily Log",
+      "request": {
+        "method": "PUT",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{access_token}}"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"value\": 2,\n  \"notes\": \"تم تعديل القيمة إلى يومين غياب\"\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/attendance/daily-logs/{{log_id}}",
+          "host": ["{{base_url}}"],
+          "path": ["attendance", "daily-logs", "{{log_id}}"]
+        },
+        "description": "تحديث سجل يومي موجود"
+      }
+    },
+    {
+      "name": "Delete Daily Log",
+      "request": {
+        "method": "DELETE",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{access_token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{base_url}}/attendance/daily-logs/{{log_id}}",
+          "host": ["{{base_url}}"],
+          "path": ["attendance", "daily-logs", "{{log_id}}"]
+        },
+        "description": "حذف سجل يومي"
+      }
+    }
+  ],
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "http://localhost:3000",
+      "type": "string"
+    },
+    {
+      "key": "access_token",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "log_id",
+      "value": "",
+      "type": "string"
+    }
+  ]
+}
