@@ -29,6 +29,10 @@ export class EmployeesService {
     return trimmed ? trimmed : null;
   }
 
+  private normalizeDepartmentName(value?: string | null) {
+    return this.normalizeOptionalString(value) ?? 'Warehouse';
+  }
+
   private parseOptionalDate(value: string | null | undefined, fieldName: string) {
     if (value === null || value === undefined) return null;
 
@@ -38,6 +42,22 @@ export class EmployeesService {
     }
 
     return parsed;
+  }
+
+  private async resolveDepartment(departmentName: string) {
+    const normalizedName = this.normalizeDepartmentName(departmentName);
+
+    const existing = await this.prisma.department.findFirst({
+      where: { name: { equals: normalizedName, mode: 'insensitive' } },
+    });
+
+    if (existing) {
+      return existing;
+    }
+
+    return this.prisma.department.create({
+      data: { name: normalizedName },
+    });
   }
 
   private validateEmploymentDates(
@@ -160,11 +180,16 @@ export class EmployeesService {
     const email = dto.email.toLowerCase();
     const mobile = this.normalizeOptionalString(dto.mobile);
     const nationalId = this.normalizeOptionalString(dto.nationalId);
+    const birthDate = this.parseOptionalDate(dto.birthDate ?? dto.dateOfBirth, 'birthDate');
     const employmentStartDate = this.parseOptionalDate(
       dto.employmentStartDate,
       'employmentStartDate',
     );
     const terminationDate = this.parseOptionalDate(dto.terminationDate, 'terminationDate');
+    const departmentName = this.normalizeDepartmentName(dto.department);
+    const department = await this.resolveDepartment(departmentName);
+    const profession = this.normalizeOptionalString(dto.profession ?? dto.jobTitle);
+    const monthlySalary = dto.monthlySalary ?? dto.baseSalary ?? null;
 
     if (terminationDate) {
       throw new BadRequestException(
@@ -212,15 +237,21 @@ export class EmployeesService {
         email,
         mobile,
         nationalId,
-        dateOfBirth: this.parseOptionalDate(dto.dateOfBirth, 'dateOfBirth'),
+        birthDate,
+        dateOfBirth: birthDate,
         gender: dto.gender ?? null,
-        jobTitle: dto.jobTitle ?? null,
+        jobTitle: profession,
+        profession,
         hourlyRate: new Prisma.Decimal(dto.hourlyRate),
-        baseSalary: dto.baseSalary != null ? new Prisma.Decimal(dto.baseSalary) : null,
+        baseSalary:
+          monthlySalary != null ? new Prisma.Decimal(monthlySalary) : null,
+        monthlySalary:
+          monthlySalary != null ? new Prisma.Decimal(monthlySalary) : null,
         lumpSumSalary: dto.lumpSumSalary != null ? new Prisma.Decimal(dto.lumpSumSalary) : null,
         livingAllowance: dto.livingAllowance != null ? new Prisma.Decimal(dto.livingAllowance) : null,
         roleId: dto.roleId,
-        department: dto.department || 'Warehouse',
+        department: department.name,
+        departmentId: department.id,
         scheduledStart: dto.scheduledStart || null,
         scheduledEnd: dto.scheduledEnd || null,
         employmentStartDate,
@@ -260,6 +291,20 @@ export class EmployeesService {
     const terminationDate =
       dto.terminationDate !== undefined
         ? this.parseOptionalDate(dto.terminationDate, 'terminationDate')
+        : undefined;
+    const birthDate =
+      dto.birthDate !== undefined || dto.dateOfBirth !== undefined
+        ? this.parseOptionalDate(dto.birthDate ?? dto.dateOfBirth, 'birthDate')
+        : undefined;
+    const departmentName =
+      dto.department !== undefined ? this.normalizeDepartmentName(dto.department) : undefined;
+    const profession =
+      dto.profession !== undefined || dto.jobTitle !== undefined
+        ? this.normalizeOptionalString(dto.profession ?? dto.jobTitle)
+        : undefined;
+    const monthlySalary =
+      dto.monthlySalary !== undefined || dto.baseSalary !== undefined
+        ? dto.monthlySalary ?? dto.baseSalary ?? null
         : undefined;
 
     const nextEmploymentStartDate =
@@ -312,11 +357,17 @@ export class EmployeesService {
       ...(email !== undefined && { email }),
       ...(mobile !== undefined && { mobile }),
       ...(nationalId !== undefined && { nationalId }),
+      ...(birthDate !== undefined && { birthDate, dateOfBirth: birthDate }),
       ...(dto.hourlyRate !== undefined && {
         hourlyRate: new Prisma.Decimal(dto.hourlyRate),
       }),
+      ...(profession !== undefined && { jobTitle: profession, profession }),
+      ...(monthlySalary !== undefined && {
+        baseSalary: monthlySalary === null ? null : new Prisma.Decimal(monthlySalary),
+        monthlySalary: monthlySalary === null ? null : new Prisma.Decimal(monthlySalary),
+      }),
       ...(dto.roleId !== undefined && { roleId: dto.roleId }),
-      ...(dto.department !== undefined && { department: dto.department }),
+      ...(departmentName !== undefined && { department: departmentName }),
       ...(dto.scheduledStart !== undefined && { scheduledStart: dto.scheduledStart }),
       ...(dto.scheduledEnd !== undefined && { scheduledEnd: dto.scheduledEnd }),
       ...(employmentStartDate !== undefined && { employmentStartDate }),
@@ -325,6 +376,12 @@ export class EmployeesService {
       ...(dto.hoursPerDay !== undefined && { hoursPerDay: dto.hoursPerDay }),
       ...(dto.gracePeriodMinutes !== undefined && { gracePeriodMinutes: dto.gracePeriodMinutes }),
     };
+
+    if (departmentName !== undefined) {
+      const department = await this.resolveDepartment(departmentName);
+      payload.department = department.name;
+      payload.departmentId = department.id;
+    }
 
     const updated = await this.prisma.employee.update({
       where: { employeeId },

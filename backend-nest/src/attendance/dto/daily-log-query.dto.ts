@@ -35,3 +35,4 @@ export class DailyLogQueryDto {
   @Type(() => Number)
   limit?: number;
 }
+``

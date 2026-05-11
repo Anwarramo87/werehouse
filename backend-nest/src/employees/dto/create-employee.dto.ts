@@ -41,6 +41,11 @@ export class CreateEmployeeDto {
   @IsDateString()
   dateOfBirth?: string;
 
+  /** تاريخ الميلاد (الاسم المعتمد في الفرونت الجديد) */
+  @IsOptional()
+  @IsDateString()
+  birthDate?: string;
+
   /** الجنس: male | female */
   @IsOptional()
   @IsIn(['male', 'female'])
@@ -51,6 +56,12 @@ export class CreateEmployeeDto {
   @IsString()
   @MaxLength(100)
   jobTitle?: string;
+
+  /** المسمى الوظيفي الموحّد مع الفرونت */
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  profession?: string;
 
   /** القسم التابع له */
   @IsOptional()
@@ -68,6 +79,13 @@ export class CreateEmployeeDto {
   @Min(0)
   @Type(() => Number)
   baseSalary?: number;
+
+  /** الراتب الشهري الموحّد مع الفرونت */
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  @Type(() => Number)
+  monthlySalary?: number;
 
   /** الراتب المقطوع */
   @IsOptional()

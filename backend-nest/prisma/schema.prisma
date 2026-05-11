@@ -44,12 +44,15 @@ model Employee {
   email          String   @unique
   mobile         String?
   nationalId     String?  @unique
+  birthDate      DateTime? @db.Date
   dateOfBirth    DateTime? @db.Date
   gender         String?   // male | female
   jobTitle       String?
+  profession     String?
   hourlyRate     Decimal  @db.Decimal(10, 2)
   // حقول الراتب المباشرة على الموظف
   baseSalary     Decimal? @db.Decimal(14, 2)
+  monthlySalary  Decimal? @db.Decimal(14, 2)
   lumpSumSalary  Decimal? @db.Decimal(14, 2)  // الراتب المقطوع
   livingAllowance Decimal? @db.Decimal(14, 2) // بدل غلاء معيشة
   currency       String   @default("SYP")
@@ -58,6 +61,8 @@ model Employee {
   employmentStartDate DateTime? @db.Date
   terminationDate DateTime? @db.Date
   department     String   @default("Warehouse")
+  departmentId   String?  @db.Uuid
+  departmentEntity Department? @relation(fields: [departmentId], references: [id], onDelete: SetNull)
   roleId         String?  @db.Uuid
   role           Role?    @relation(fields: [roleId], references: [id], onDelete: SetNull)
   status         String   @default("active")
@@ -77,9 +82,21 @@ model Employee {
   @@index([createdAt])
   @@index([status, employeeId])
   @@index([department, status])
+  @@index([departmentId])
   @@index([status, createdAt])
   @@index([department, status, createdAt])
   @@map("employees")
+}
+
+model Department {
+  id         String    @id @default(uuid()) @db.Uuid
+  name       String    @unique
+  employees  Employee[]
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  @@map("departments")
+  @@index([createdAt])
 }
 
 model Device {
