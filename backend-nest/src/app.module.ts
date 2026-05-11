@@ -26,6 +26,7 @@ import { TransportationModule } from './transportation/transportation.module';
 import { DashboardModule } from './dashboard/dashboard.module';
 import { DiscountsModule } from './discounts/discounts.module';
 import { PenaltiesModule } from './penalties/penalties.module';
+import { DepartmentsModule } from './departments';
 
 function parseBooleanEnv(value: string | undefined): boolean | undefined {
   if (value === undefined) {
@@ -185,6 +186,7 @@ const queueInfraModules = queuesEnabled
     FinancesModule,
     TransportationModule,
     DashboardModule,
+    DepartmentsModule,
   ],
   providers: [
     {
