@@ -6,6 +6,7 @@ import {
   Param,
   Post,
   Put,
+  Patch,
   Query,
   UseGuards,
 } from '@nestjs/common';
@@ -17,6 +18,7 @@ import { CreateEmployeeDto } from './dto/create-employee.dto';
 import { UpdateEmployeeDto } from './dto/update-employee.dto';
 import { EmployeesListQueryDto } from './dto/employees-list-query.dto';
 import { EmployeeProfileQueryDto } from './dto/employee-profile-query.dto';
+import { TerminateEmployeeDto } from './dto/terminate-employee.dto';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { AuthenticatedUser } from '../common/types/authenticated-user.types';
 
@@ -69,6 +71,18 @@ export class EmployeesController {
   @Permissions('edit_employees')
   update(@Param('employeeId') employeeId: string, @Body() dto: UpdateEmployeeDto) {
     return this.employeesService.update(employeeId, dto);
+  }
+
+  @Patch(':employeeId/terminate')
+  @Permissions('edit_employees')
+  terminate(@Param('employeeId') employeeId: string, @Body() dto: TerminateEmployeeDto) {
+    return this.employeesService.terminate(employeeId, dto);
+  }
+
+  @Patch(':employeeId/settle')
+  @Permissions('edit_employees')
+  settle(@Param('employeeId') employeeId: string) {
+    return this.employeesService.settle(employeeId);
   }
 
   @Delete(':employeeId')

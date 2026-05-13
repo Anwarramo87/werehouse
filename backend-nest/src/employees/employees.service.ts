@@ -11,6 +11,7 @@ import { UpdateEmployeeDto } from './dto/update-employee.dto';
 import { EmployeesListQueryDto } from './dto/employees-list-query.dto';
 import { ShortCacheService } from '../common/cache/short-cache.service';
 import { EmployeeProfileQueryDto } from './dto/employee-profile-query.dto';
+import { TerminateEmployeeDto } from './dto/terminate-employee.dto';
 import { AuthenticatedUser } from '../common/types/authenticated-user.types';
 
 const DEFAULT_PROFILE_RANGE_DAYS = 30;
@@ -528,6 +529,43 @@ export class EmployeesService {
       advances,
       bonuses,
     };
+  }
+
+  async terminate(employeeId: string, dto: TerminateEmployeeDto) {
+    const employee = await this.prisma.employee.findUnique({ where: { employeeId } });
+
+    if (!employee) throw new NotFoundException('Employee not found');
+
+    const terminationDate = this.parseOptionalDate(dto.terminationDate, 'terminationDate') || new Date();
+
+    const updated = await this.prisma.employee.update({
+      where: { employeeId },
+      data: {
+        status: 'terminated',
+        terminationDate,
+        terminationReason: dto.terminationReason || null,
+        isSettled: false,
+      },
+    });
+
+    await this.shortCache.invalidatePrefix('employees:stats');
+
+    return { message: 'Employee terminated successfully', employee: updated };
+  }
+
+  async settle(employeeId: string) {
+    const employee = await this.prisma.employee.findUnique({ where: { employeeId } });
+
+    if (!employee) throw new NotFoundException('Employee not found');
+
+    const updated = await this.prisma.employee.update({
+      where: { employeeId },
+      data: {
+        isSettled: true,
+      },
+    });
+
+    return { message: 'Employee settled successfully', employee: updated };
   }
 
   async remove(employeeId: string) {

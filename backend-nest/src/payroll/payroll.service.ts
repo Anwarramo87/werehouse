@@ -590,8 +590,13 @@ export class PayrollService {
   }
 
   private async processPayrollRun(runId: string, dto: CalculatePayrollDto, userId?: string) {
-    const activeEmployees = await this.prisma.employee.findMany({
-      where: { status: 'active' },
+    const targetEmployees = await this.prisma.employee.findMany({
+      where: {
+        OR: [
+          { status: 'active' },
+          { status: 'terminated', isSettled: false },
+        ],
+      },
       orderBy: { employeeId: 'asc' },
       select: {
         employeeId: true,
@@ -605,11 +610,11 @@ export class PayrollService {
       },
     });
 
-    if (activeEmployees.length === 0) {
-      throw new BadRequestException('No active employees found');
+    if (targetEmployees.length === 0) {
+      throw new BadRequestException('No eligible employees found');
     }
 
-    const employeeIds = activeEmployees.map((employee) => employee.employeeId);
+    const employeeIds = targetEmployees.map((employee) => employee.employeeId);
     const periodStart = dto.periodStart.slice(0, 10);
     const periodEnd = dto.periodEnd.slice(0, 10);
     const periodTag = periodStart.slice(0, 7);
@@ -680,7 +685,7 @@ export class PayrollService {
     ]);
 
     const salaryByEmployee = new Map(salaryRecords.map((record) => [record.employeeId, record]));
-    const employeeById = new Map(activeEmployees.map((employee) => [employee.employeeId, employee]));
+    const employeeById = new Map(targetEmployees.map((employee) => [employee.employeeId, employee]));
     const payrollInputByEmployee = new Map(payrollInputs.map((input) => [input.employeeId, input]));
 
     const attendanceDatesByEmployee = new Map<string, Set<string>>();
@@ -761,7 +766,7 @@ export class PayrollService {
       where: { id: runId },
       data: {
         status: 'processing',
-        totalEmployees: activeEmployees.length,
+        totalEmployees: targetEmployees.length,
       },
     });
 
@@ -773,8 +778,8 @@ export class PayrollService {
     let totalNet = new Prisma.Decimal(0);
     let processedEmployees = 0;
 
-    for (let offset = 0; offset < activeEmployees.length; offset += PAYROLL_BATCH_SIZE) {
-      const employeesBatch = activeEmployees.slice(offset, offset + PAYROLL_BATCH_SIZE);
+    for (let offset = 0; offset < targetEmployees.length; offset += PAYROLL_BATCH_SIZE) {
+      const employeesBatch = targetEmployees.slice(offset, offset + PAYROLL_BATCH_SIZE);
       const items: Prisma.PayrollItemCreateManyInput[] = [];
 
       for (const employee of employeesBatch) {
