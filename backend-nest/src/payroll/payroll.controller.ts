@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Post, Put, Query, Res, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Post, Put, Query, Res, UseGuards } from '@nestjs/common';
 import { Req } from '@nestjs/common';
 import { Request } from 'express';
 import { Response } from 'express';
@@ -155,6 +155,27 @@ export class PayrollController {
     res.setHeader('Content-Type', payload.mimeType);
     res.setHeader('Content-Disposition', `attachment; filename="${payload.fileName}"`);
     res.status(200).send(payload.content);
+  }
+
+  @Delete(':runId')
+  @Permissions('delete_payroll')
+  async delete(
+    @Param('runId') runId: string,
+    @CurrentUser() user: AuthenticatedUser,
+    @Req() req: Request,
+  ) {
+    const result = await this.payrollService.deletePayrollRun(runId, user?.userId);
+    this.audit.log(
+      {
+        action: 'payroll.delete',
+        actorId: user?.userId,
+        actorUsername: user?.username,
+        targetType: 'payroll_run',
+        targetId: runId,
+      },
+      req,
+    );
+    return result;
   }
 
   @Get('employee/:employeeId')

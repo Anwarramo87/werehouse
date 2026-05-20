@@ -62,7 +62,6 @@ model Employee {
   user           User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
   mobile         String?
   nationalId     String?  @unique
-  birthDate      DateTime? @db.Date
   dateOfBirth    DateTime? @db.Date
   gender         String?   // male | female
   jobTitle       String?

@@ -691,18 +691,48 @@ export class AttendanceService {
           where: {
             date: { gte: range.startDate, lte: range.endDate },
           },
+          include: { employee: { select: { employeeId: true, name: true } } },
         });
 
-        const unverified = records.filter((r: (typeof records)[number]) => !r.verified).length;
-        const late = records.filter((r: (typeof records)[number]) => ((r.shiftPair as ShiftPair | null)?.minutesLate || 0) > 5).length;
+        const totalEmployees = await this.prisma.employee.count({
+          where: { status: 'active' },
+        });
+
+        const employeeMap = new Map<string, { employeeId: string; name: string; minutesLate: number; records: number }>();
+        let totalLateMinutes = 0;
+        let totalLateArrivals = 0;
+
+        for (const record of records) {
+          const empId = record.employeeId;
+          const shiftPair = record.shiftPair as ShiftPair | null;
+          const minutesLate = (shiftPair?.minutesLate || 0);
+
+          if (!employeeMap.has(empId)) {
+            employeeMap.set(empId, { employeeId: empId, name: record.employee?.name || empId, minutesLate: 0, records: 0 });
+          }
+          const empData = employeeMap.get(empId)!;
+          empData.minutesLate += minutesLate;
+          empData.records += 1;
+          totalLateMinutes += minutesLate;
+          if (minutesLate > 5) totalLateArrivals++;
+        }
+
+        const topLateEmployees = Array.from(employeeMap.values())
+          .filter(e => e.minutesLate > 0)
+          .sort((a, b) => b.minutesLate - a.minutesLate)
+          .slice(0, 10)
+          .map(e => ({ employeeId: e.employeeId, name: e.name, totalLateMinutes: e.minutesLate }));
 
         return {
-          period: range,
-          statistics: {
-            totalRecords: records.length,
-            unverifiedRecords: unverified,
-            totalLateArrivals: late,
+          summary: {
+            activeEmployees: employeeMap.size,
+            absentCount: totalEmployees - employeeMap.size,
+            totalLateMinutes,
           },
+          statistics: {
+            totalLateArrivals,
+          },
+          topLateEmployees,
         };
       },
     );

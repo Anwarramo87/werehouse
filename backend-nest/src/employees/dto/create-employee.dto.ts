@@ -27,7 +27,7 @@ export class CreateEmployeeDto {
   username: string;
 
   @IsString()
-  @IsNotEmpty()
+  @IsOptional()
   password: string;
 
   /** رقم الموبايل */
