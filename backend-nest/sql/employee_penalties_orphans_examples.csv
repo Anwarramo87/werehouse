@@ -1,0 +1,3 @@
+source_table,employeeId,amount,issueDate,category
+employee_penalties,EMP002233,50000.00,Mon May 04 2026 00:00:00 GMT+0300 (GMT+03:00),عقوبة
+employee_penalties,EMP002233,20000.00,Sun May 10 2026 00:00:00 GMT+0300 (GMT+03:00),عقوبة

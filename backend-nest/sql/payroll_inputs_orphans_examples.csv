@@ -1,0 +1,2 @@
+source_table,employeeId,periodStart,periodEnd,penaltyAmount
+payroll_inputs,EMP-2026-001,Mon Jun 01 2026 00:00:00 GMT+0300 (GMT+03:00),Tue Jun 30 2026 00:00:00 GMT+0300 (GMT+03:00),0.00

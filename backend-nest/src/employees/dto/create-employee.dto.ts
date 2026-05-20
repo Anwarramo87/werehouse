@@ -22,8 +22,13 @@ export class CreateEmployeeDto {
   @IsNotEmpty()
   name: string;
 
-  @IsEmail()
-  email: string;
+  @IsString()
+  @IsNotEmpty()
+  username: string;
+
+  @IsString()
+  @IsNotEmpty()
+  password: string;
 
   /** رقم الموبايل */
   @IsOptional()
@@ -40,11 +45,6 @@ export class CreateEmployeeDto {
   @IsOptional()
   @IsDateString()
   dateOfBirth?: string;
-
-  /** تاريخ الميلاد (الاسم المعتمد في الفرونت الجديد) */
-  @IsOptional()
-  @IsDateString()
-  birthDate?: string;
 
   /** الجنس: male | female */
   @IsOptional()
@@ -80,19 +80,14 @@ export class CreateEmployeeDto {
   @Type(() => Number)
   baseSalary?: number;
 
-  /** الراتب الشهري الموحّد مع الفرونت */
-  @IsOptional()
-  @IsNumber()
-  @Min(0)
-  @Type(() => Number)
-  monthlySalary?: number;
-
   /** الراتب المقطوع */
   @IsOptional()
   @IsNumber()
   @Min(0)
   @Type(() => Number)
   lumpSumSalary?: number;
+
+
 
   /** بدل غلاء معيشة */
   @IsOptional()

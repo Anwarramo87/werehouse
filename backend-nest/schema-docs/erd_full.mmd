@@ -1,0 +1,327 @@
+erDiagram
+  ROLE {
+    UUID id PK
+    STRING name UQ
+    STRING description
+    STRING[] permissions
+    DATETIME createdAt
+    DATETIME updatedAt
+  }
+
+  USER {
+    UUID id PK
+    STRING username UQ
+    STRING email UQ
+    STRING passwordHash
+    UUID roleId FK
+    STRING status
+    INT failedLoginAttempts
+    DATETIME lockoutUntil
+    DATETIME lastLogin
+    DATETIME createdAt
+    DATETIME updatedAt
+  }
+
+  EMPLOYEE {
+    UUID id PK
+    STRING employeeId UQ
+    STRING name
+    STRING email UQ
+    STRING mobile
+    STRING nationalId UQ
+    DATE birthDate
+    DATE dateOfBirth
+    STRING gender
+    STRING jobTitle
+    STRING profession
+    DECIMAL hourlyRate
+    DECIMAL baseSalary
+    DECIMAL livingAllowance
+    STRING currency
+    STRING scheduledStart
+    STRING scheduledEnd
+    DATE employmentStartDate
+    DATE terminationDate
+    STRING terminationReason
+    BOOLEAN isSettled
+    STRING department
+    UUID departmentId FK
+    UUID roleId FK
+    STRING status
+    INT workDaysInPeriod
+    INT hoursPerDay
+    JSON overtimeCalculation
+    INT gracePeriodMinutes
+    DATETIME createdAt
+    DATETIME updatedAt
+  }
+
+  DEPARTMENT {
+    UUID id PK
+    STRING name UQ
+    DATETIME createdAt
+    DATETIME updatedAt
+  }
+
+  DEVICE {
+    UUID id PK
+    STRING deviceId UQ
+    STRING name
+    STRING location
+    STRING model
+    STRING ip
+    INT port
+    STRING status
+    DATETIME lastSync
+    DATETIME createdAt
+    DATETIME updatedAt
+  }
+
+  ATTENDANCE_RECORD {
+    UUID id PK
+    STRING employeeId FK
+    DATETIME timestamp
+    STRING type
+    STRING deviceId
+    STRING location
+    STRING source
+    BOOLEAN verified
+    STRING notes
+    STRING date
+    JSON shiftPair
+    DATETIME createdAt
+    DATETIME updatedAt
+  }
+
+  DAILY_ATTENDANCE_LOG {
+    UUID id PK
+    STRING employeeId FK
+    DATE date
+    STRING recordType
+    DECIMAL value
+    TEXT notes
+    STRING source
+    STRING createdBy
+    DATETIME createdAt
+    DATETIME updatedAt
+  }
+
+  PRODUCT {
+    UUID id PK
+    STRING sku UQ
+    STRING name
+    STRING category
+    DECIMAL unitPrice
+    DECIMAL costPrice
+    INT reorderLevel
+    STRING status
+    DATETIME createdAt
+    DATETIME updatedAt
+  }
+
+  STOCK_LEVEL {
+    UUID id PK
+    STRING sku FK
+    STRING location
+    INT quantity
+    INT reserved
+    INT available
+    DATETIME createdAt
+    DATETIME updatedAt
+  }
+
+  IMPORT_JOB {
+    UUID id PK
+    STRING jobId UQ
+    STRING entity
+    STRING fileName
+    STRING uploadedBy
+    DATETIME uploadedAt
+    STRING status
+    INT totalRows
+    INT successRows
+    INT errorRows
+    JSON errors
+    DATETIME createdAt
+    DATETIME updatedAt
+  }
+
+  PAYROLL_RUN {
+    UUID id PK
+    STRING runId UQ
+    DATE periodStart
+    DATE periodEnd
+    STRING periodType
+    DATETIME runDate
+    STRING runBy
+    STRING status
+    STRING approvalStatus
+    STRING approvedBy
+    DATE approvalDate
+    INT totalEmployees
+    DECIMAL totalGrossPay
+    DECIMAL totalDeductions
+    DECIMAL totalNetPay
+    STRING currency
+    STRING notes
+    DATETIME createdAt
+    DATETIME updatedAt
+  }
+
+  PAYROLL_ITEM {
+    UUID id PK
+    UUID payrollRunId FK
+    STRING employeeId
+    STRING employeeName
+    STRING department
+    DECIMAL hoursWorked
+    DECIMAL hourlyRate
+    DECIMAL grossPay
+    DECIMAL totalDeductions
+    DECIMAL netPay
+    DECIMAL netPayRounded
+    DECIMAL roundingDifference
+    DECIMAL netPayWithAdvance
+    STRING[] anomalies
+    DATETIME createdAt
+    DATETIME updatedAt
+  }
+
+  PAYROLL_INPUT {
+    UUID id PK
+    STRING employeeId
+    DATE periodStart
+    DATE periodEnd
+    INT lateMinutes
+    INT earlyLeaveMinutes
+    INT absenceDays
+    INT sickLeaveDays
+    INT adminLeaveDays
+    INT unpaidLeaveDays
+    INT deathLeaveDays
+    DECIMAL unpaidHours
+    INT overtimeRegularMinutes
+    DECIMAL overtimeWeekendDays
+    DECIMAL penaltyAmount
+    DECIMAL clothingDeduction
+    DECIMAL bonusAdjustment
+    DECIMAL advanceAmount
+    DECIMAL insuranceAmount
+    DECIMAL transportAllowanceOverride
+    STRING notes
+    DATETIME createdAt
+    DATETIME updatedAt
+  }
+
+  EMPLOYEE_SALARY {
+    UUID id PK
+    STRING employeeId UQ
+    STRING profession
+    DECIMAL baseSalary
+    DECIMAL lumpSumSalary
+    DECIMAL livingAllowance
+    DECIMAL responsibilityAllowance
+    DECIMAL extraEffortAllowance
+    DECIMAL productionIncentive
+    DECIMAL insuranceAmount
+    DECIMAL transportAllowance
+    DATETIME createdAt
+    DATETIME updatedAt
+  }
+
+  EMPLOYEE_ADVANCE {
+    UUID id PK
+    STRING employeeId FK
+    STRING advanceType
+    DECIMAL totalAmount
+    DECIMAL installmentAmount
+    DECIMAL remainingAmount
+    STRING notes
+    DATE issueDate
+    DATETIME createdAt
+    DATETIME updatedAt
+  }
+
+  DELETED_RECORD_HISTORY {
+    UUID id PK
+    STRING entityType
+    STRING recordId
+    JSON payload
+    STRING deletedBy
+    DATE deletedAt
+    STRING restoredBy
+    DATE restoredAt
+  }
+
+  EMPLOYEE_INSURANCE {
+    UUID id PK
+    STRING employeeId UQ
+    DECIMAL insuranceSalary
+    STRING socialSecurityNumber
+    DATE registrationDate
+    DATETIME createdAt
+    DATETIME updatedAt
+  }
+
+  EMPLOYEE_BONUS {
+    UUID id PK
+    STRING employeeId
+    DECIMAL bonusAmount
+    STRING bonusReason
+    DECIMAL assistanceAmount
+    STRING period
+    DATETIME createdAt
+    DATETIME updatedAt
+  }
+
+  EMPLOYEE_PENALTY {
+    UUID id PK
+    STRING employeeId
+    STRING category
+    DECIMAL amount
+    STRING reason
+    DATETIME issueDate
+    DATETIME createdAt
+    DATETIME updatedAt
+  }
+
+  BUS {
+    UUID id PK
+    STRING busId UQ
+    STRING route
+    STRING plateNumber UQ
+    STRING driverName
+    STRING driverPhone
+    DECIMAL totalCost
+    DECIMAL companyDeductionPct
+    INT capacity
+    DECIMAL employeeDeductionAmount
+    STRING status
+    DATETIME createdAt
+    DATETIME updatedAt
+  }
+
+  BUS_PASSENGER {
+    UUID id PK
+    UUID busId FK
+    STRING employeeId
+    DATE joinDate
+    DATE leaveDate
+    STRING status
+    DATETIME createdAt
+    DATETIME updatedAt
+  }
+
+  ROLE ||--o{ USER : "roleId"
+  ROLE ||--o{ EMPLOYEE : "roleId"
+  DEPARTMENT ||--o{ EMPLOYEE : "departmentId"
+  EMPLOYEE ||--o{ ATTENDANCE_RECORD : "employeeId"
+  EMPLOYEE ||--o{ DAILY_ATTENDANCE_LOG : "employeeId"
+  EMPLOYEE ||--o{ EMPLOYEE_SALARY : "employeeId"
+  EMPLOYEE ||--o{ EMPLOYEE_ADVANCE : "employeeId"
+  EMPLOYEE ||--o{ PAYROLL_ITEM : "employeeId"
+  DEVICE ||--o{ ATTENDANCE_RECORD : "deviceId"
+  PRODUCT ||--o{ STOCK_LEVEL : "sku"
+  PAYROLL_RUN ||--o{ PAYROLL_ITEM : "payrollRunId"
+  BUS ||--o{ BUS_PASSENGER : "busId"
+  EMPLOYEE ||--o{ BUS_PASSENGER : "employeeId"

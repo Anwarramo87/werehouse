@@ -22,7 +22,7 @@ model Role {
 model User {
   id           String   @id @default(uuid()) @db.Uuid
   username     String   @unique
-  email        String   @unique
+  email        String?  @unique
   passwordHash String
   roleId       String   @db.Uuid
   role         Role     @relation(fields: [roleId], references: [id], onDelete: Restrict)
@@ -32,16 +32,34 @@ model User {
   lastLogin    DateTime?
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
+  employee     Employee?
+  biometricCredentials BiometricCredential[]
 
   @@index([lockoutUntil])
   @@map("users")
+}
+
+
+model BiometricCredential {
+  id                 String   @id @default(uuid()) @db.Uuid
+  keyId              String
+  userId             String
+  user               User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  publicKeyDer       Bytes
+  deviceName         String?
+  createdAt          DateTime @default(now())
+  revokedAt          DateTime?
+
+  @@unique([userId, keyId])
+  @@map("biometric_credentials")
 }
 
 model Employee {
   id             String   @id @default(uuid()) @db.Uuid
   employeeId     String   @unique
   name           String
-  email          String   @unique
+  userId         String?  @unique @db.Uuid
+  user           User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
   mobile         String?
   nationalId     String?  @unique
   birthDate      DateTime? @db.Date
@@ -52,8 +70,6 @@ model Employee {
   hourlyRate     Decimal  @db.Decimal(10, 2)
   // حقول الراتب المباشرة على الموظف
   baseSalary     Decimal? @db.Decimal(14, 2)
-  monthlySalary  Decimal? @db.Decimal(14, 2)
-  lumpSumSalary  Decimal? @db.Decimal(14, 2)  // الراتب المقطوع
   livingAllowance Decimal? @db.Decimal(14, 2) // بدل غلاء معيشة
   currency       String   @default("SYP")
   scheduledStart String?
@@ -90,6 +106,7 @@ model Employee {
   @@index([department, status, createdAt])
   @@map("employees")
 }
+
 
 model Department {
   id         String    @id @default(uuid()) @db.Uuid
