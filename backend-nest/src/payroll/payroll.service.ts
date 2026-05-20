@@ -305,6 +305,34 @@ export class PayrollService {
     return { message: 'Payroll rejected successfully', payrollRun: updated };
   }
 
+  async deletePayrollRun(runId: string, userId?: string) {
+    const run = await this.resolvePayrollRun(runId);
+
+    if (run.approvalStatus === 'approved') {
+      throw new BadRequestException('Cannot delete an approved payroll run');
+    }
+
+    const items = await this.prisma.payrollItem.findMany({ where: { payrollRunId: run.id } });
+
+    await this.prisma.deletedRecordHistory.create({
+      data: {
+        entityType: 'PayrollRun',
+        recordId: run.id,
+        payload: {
+          run,
+          items,
+          deletedBy: userId,
+          deletedAt: new Date().toISOString(),
+        },
+      },
+    });
+
+    await this.prisma.payrollItem.deleteMany({ where: { payrollRunId: run.id } });
+    await this.prisma.payrollRun.delete({ where: { id: run.id } });
+
+    return { message: 'Payroll run deleted successfully', runId: run.runId };
+  }
+
   async summary(periodStart?: string, periodEnd?: string) {
     const period = this.resolvePeriod(periodStart, periodEnd);
 
@@ -902,7 +930,7 @@ export class PayrollService {
         const netPay = grossPay.minus(employeeDeductions);
         const netPayRounded = this.roundUpToNearestThousand(netPay);
         const roundingDifference = netPayRounded.minus(netPay);
-        const netPayWithAdvance = netPayRounded.plus(advanceAmount).plus(penaltyTotal);
+        const netPayWithAdvance = netPayRounded;
 
         const anomalies: string[] = [];
         if (!salaryRecord) {

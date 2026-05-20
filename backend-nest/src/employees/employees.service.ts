@@ -133,7 +133,6 @@ export class EmployeesService {
       where.OR = [
         { name: { contains: query.search, mode: 'insensitive' } },
         { employeeId: { contains: query.search, mode: 'insensitive' } },
-        { email: { contains: query.search, mode: 'insensitive' } },
         { mobile: { contains: query.search, mode: 'insensitive' } },
         { nationalId: { contains: query.search, mode: 'insensitive' } },
       ];
@@ -142,7 +141,6 @@ export class EmployeesService {
     const [employees, total] = await Promise.all([
       this.prisma.employee.findMany({
         where,
-        include: this.employeeSelect(),
         orderBy: { createdAt: 'desc' },
         skip,
         take: limit,
@@ -228,7 +226,6 @@ export class EmployeesService {
         where: {
           OR: [
             { employeeId: dto.employeeId },
-            { email: loginName },
             ...(nationalId ? [{ nationalId }] : []),
           ],
         },
@@ -241,10 +238,6 @@ export class EmployeesService {
         throw new BadRequestException('Employee ID already exists');
       }
 
-      if (existingEmployee.email.toLowerCase() === loginName) {
-        throw new BadRequestException('Employee email already exists');
-      }
-
       if (nationalId && existingEmployee.nationalId === nationalId) {
         throw new BadRequestException('Employee national ID already exists');
       }
@@ -254,7 +247,8 @@ export class EmployeesService {
       throw new BadRequestException('Username already exists');
     }
 
-    const passwordHash = await bcrypt.hash(dto.password, 10);
+    const passwordToHash = dto.password || dto.employeeId;
+    const passwordHash = await bcrypt.hash(passwordToHash, 10);
 
     const created = await this.prisma.$transaction(async (transaction) => {
       const user = await transaction.user.create({
@@ -271,7 +265,6 @@ export class EmployeesService {
         data: {
           employeeId: dto.employeeId,
           name: dto.name,
-          email: loginName,
           mobile,
           nationalId,
           dateOfBirth: birthDate,
@@ -280,8 +273,6 @@ export class EmployeesService {
           profession,
           hourlyRate: new Prisma.Decimal(dto.hourlyRate),
           baseSalary: baseSalary != null ? new Prisma.Decimal(baseSalary) : null,
-          lumpSumSalary:
-            dto.lumpSumSalary != null ? new Prisma.Decimal(dto.lumpSumSalary) : null,
           livingAllowance:
             dto.livingAllowance != null ? new Prisma.Decimal(dto.livingAllowance) : null,
           roleId: dto.roleId,
@@ -373,20 +364,9 @@ export class EmployeesService {
     const passwordHash = dto.password !== undefined ? await bcrypt.hash(dto.password, 10) : undefined;
 
     if (loginName !== undefined) {
-      const [employeeConflict, userConflict] = await Promise.all([
-        this.prisma.employee.findFirst({
-          where: {
-            AND: [{ employeeId: { not: employeeId } }, { email: loginName }],
-          },
-        }),
-        this.findAuthUserByLogin(loginName),
-      ]);
+      const userConflict = await this.findAuthUserByLogin(loginName);
 
-      if (employeeConflict) {
-        throw new BadRequestException('Employee email already exists');
-      }
-
-      if (userConflict && userConflict.email.toLowerCase() !== employee.email.toLowerCase()) {
+      if (userConflict && userConflict.username.toLowerCase() !== loginName.toLowerCase()) {
         throw new BadRequestException('Username already exists');
       }
     }
@@ -395,10 +375,7 @@ export class EmployeesService {
       if (loginName !== undefined || passwordHash !== undefined || dto.roleId !== undefined) {
         const existingUser = await transaction.user.findFirst({
           where: {
-            OR: [
-              { username: employee.email },
-              { email: employee.email },
-            ],
+            id: employee.userId || undefined,
           },
         });
 
@@ -416,7 +393,6 @@ export class EmployeesService {
 
       const payload: Prisma.EmployeeUncheckedUpdateInput = {
         ...(dto.name !== undefined && { name: dto.name }),
-        ...(loginName !== undefined && { email: loginName }),
         ...(mobile !== undefined && { mobile }),
         ...(nationalId !== undefined && { nationalId }),
         ...(birthDate !== undefined && { dateOfBirth: birthDate }),
