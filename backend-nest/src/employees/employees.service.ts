@@ -4,6 +4,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
+import * as bcrypt from 'bcryptjs';
 import { PrismaService } from '../prisma/prisma.service';
 import { resolvePagination } from '../common/utils/pagination.util';
 import { CreateEmployeeDto } from './dto/create-employee.dto';
@@ -102,6 +103,25 @@ export class EmployeesService {
     return user.permissions?.includes(permission) ?? false;
   }
 
+  private normalizeLoginName(value: string) {
+    return value.trim().toLowerCase();
+  }
+
+  private employeeSelect() {
+    return {
+      departmentEntity: true,
+      role: true,
+    } as const;
+  }
+
+  private async findAuthUserByLogin(loginName: string) {
+    return this.prisma.user.findFirst({
+      where: {
+        OR: [{ username: loginName }, { email: loginName }],
+      },
+    });
+  }
+
   async list(query: EmployeesListQueryDto) {
     const { page, limit, skip } = resolvePagination(query);
     const where: Prisma.EmployeeWhereInput = {};
@@ -122,6 +142,7 @@ export class EmployeesService {
     const [employees, total] = await Promise.all([
       this.prisma.employee.findMany({
         where,
+        include: this.employeeSelect(),
         orderBy: { createdAt: 'desc' },
         skip,
         take: limit,
@@ -172,16 +193,18 @@ export class EmployeesService {
   async byDepartment(department: string) {
     const employees = await this.prisma.employee.findMany({
       where: { department, status: 'active' },
+      include: this.employeeSelect(),
       orderBy: { createdAt: 'desc' },
     });
+
     return { department, count: employees.length, employees };
   }
 
   async create(dto: CreateEmployeeDto) {
-    const email = dto.email.toLowerCase();
+    const loginName = this.normalizeLoginName(dto.username);
     const mobile = this.normalizeOptionalString(dto.mobile);
     const nationalId = this.normalizeOptionalString(dto.nationalId);
-    const birthDate = this.parseOptionalDate(dto.birthDate ?? dto.dateOfBirth, 'birthDate');
+    const birthDate = this.parseOptionalDate(dto.dateOfBirth, 'dateOfBirth');
     const employmentStartDate = this.parseOptionalDate(
       dto.employmentStartDate,
       'employmentStartDate',
@@ -190,7 +213,7 @@ export class EmployeesService {
     const departmentName = this.normalizeDepartmentName(dto.department);
     const department = await this.resolveDepartment(departmentName);
     const profession = this.normalizeOptionalString(dto.profession ?? dto.jobTitle);
-    const monthlySalary = dto.monthlySalary ?? dto.baseSalary ?? null;
+    const baseSalary = dto.baseSalary ?? null;
 
     if (terminationDate) {
       throw new BadRequestException(
@@ -200,87 +223,108 @@ export class EmployeesService {
 
     this.validateEmploymentDates(employmentStartDate, terminationDate);
 
-    const uniqueChecks: Prisma.EmployeeWhereInput[] = [
-      { employeeId: dto.employeeId },
-      { email: { equals: email, mode: 'insensitive' } },
-    ];
+    const [existingEmployee, existingUser] = await Promise.all([
+      this.prisma.employee.findFirst({
+        where: {
+          OR: [
+            { employeeId: dto.employeeId },
+            { email: loginName },
+            ...(nationalId ? [{ nationalId }] : []),
+          ],
+        },
+      }),
+      this.findAuthUserByLogin(loginName),
+    ]);
 
-    if (nationalId) {
-      uniqueChecks.push({ nationalId });
-    }
-
-    const exists = await this.prisma.employee.findFirst({
-      where: {
-        OR: uniqueChecks,
-      },
-    });
-
-    if (exists) {
-      if (exists.employeeId === dto.employeeId) {
+    if (existingEmployee) {
+      if (existingEmployee.employeeId === dto.employeeId) {
         throw new BadRequestException('Employee ID already exists');
       }
 
-      if (exists.email.toLowerCase() === email) {
+      if (existingEmployee.email.toLowerCase() === loginName) {
         throw new BadRequestException('Employee email already exists');
       }
 
-      if (nationalId && exists.nationalId === nationalId) {
+      if (nationalId && existingEmployee.nationalId === nationalId) {
         throw new BadRequestException('Employee national ID already exists');
       }
-
-      throw new BadRequestException('Employee unique fields conflict with an existing record');
     }
 
-    const employee = await this.prisma.employee.create({
-      data: {
-        employeeId: dto.employeeId,
-        name: dto.name,
-        email,
-        mobile,
-        nationalId,
-        birthDate,
-        dateOfBirth: birthDate,
-        gender: dto.gender ?? null,
-        jobTitle: profession,
-        profession,
-        hourlyRate: new Prisma.Decimal(dto.hourlyRate),
-        baseSalary:
-          monthlySalary != null ? new Prisma.Decimal(monthlySalary) : null,
-        monthlySalary:
-          monthlySalary != null ? new Prisma.Decimal(monthlySalary) : null,
-        lumpSumSalary: dto.lumpSumSalary != null ? new Prisma.Decimal(dto.lumpSumSalary) : null,
-        livingAllowance: dto.livingAllowance != null ? new Prisma.Decimal(dto.livingAllowance) : null,
-        roleId: dto.roleId,
-        department: department.name,
-        departmentId: department.id,
-        scheduledStart: dto.scheduledStart || null,
-        scheduledEnd: dto.scheduledEnd || null,
-        employmentStartDate,
-        terminationDate: null,
-        status: 'active',
-        workDaysInPeriod: dto.workDaysInPeriod ?? 26,
-        hoursPerDay: dto.hoursPerDay ?? 8,
-        gracePeriodMinutes: dto.gracePeriodMinutes ?? 15,
-      },
+    if (existingUser) {
+      throw new BadRequestException('Username already exists');
+    }
+
+    const passwordHash = await bcrypt.hash(dto.password, 10);
+
+    const created = await this.prisma.$transaction(async (transaction) => {
+      const user = await transaction.user.create({
+        data: {
+          username: loginName,
+          email: loginName,
+          passwordHash,
+          roleId: dto.roleId,
+          status: 'active',
+        },
+      });
+
+      const employee = await transaction.employee.create({
+        data: {
+          employeeId: dto.employeeId,
+          name: dto.name,
+          email: loginName,
+          mobile,
+          nationalId,
+          dateOfBirth: birthDate,
+          gender: dto.gender ?? null,
+          jobTitle: profession,
+          profession,
+          hourlyRate: new Prisma.Decimal(dto.hourlyRate),
+          baseSalary: baseSalary != null ? new Prisma.Decimal(baseSalary) : null,
+          lumpSumSalary:
+            dto.lumpSumSalary != null ? new Prisma.Decimal(dto.lumpSumSalary) : null,
+          livingAllowance:
+            dto.livingAllowance != null ? new Prisma.Decimal(dto.livingAllowance) : null,
+          roleId: dto.roleId,
+          department: department.name,
+          departmentId: department.id,
+          scheduledStart: dto.scheduledStart || null,
+          scheduledEnd: dto.scheduledEnd || null,
+          employmentStartDate,
+          terminationDate: null,
+          status: 'active',
+          workDaysInPeriod: dto.workDaysInPeriod ?? 26,
+          hoursPerDay: dto.hoursPerDay ?? 8,
+          gracePeriodMinutes: dto.gracePeriodMinutes ?? 15,
+        },
+        include: this.employeeSelect(),
+      });
+
+      return { user, employee };
     });
 
     await this.shortCache.invalidatePrefix('employees:stats');
 
-    return { message: 'Employee created successfully', employee };
+    return { message: 'Employee created successfully', employee: created.employee };
   }
 
   async getByEmployeeId(employeeId: string) {
-    const employee = await this.prisma.employee.findUnique({ where: { employeeId } });
+    const employee = await this.prisma.employee.findUnique({
+      where: { employeeId },
+      include: this.employeeSelect(),
+    });
+
     if (!employee) throw new NotFoundException('Employee not found');
+
     return employee;
   }
 
   async update(employeeId: string, dto: UpdateEmployeeDto) {
-    const employee = await this.prisma.employee.findUnique({ where: { employeeId } });
+    const employee = await this.prisma.employee.findUnique({
+      where: { employeeId },
+    });
 
     if (!employee) throw new NotFoundException('Employee not found');
 
-    const email = dto.email?.toLowerCase();
     const nationalId =
       dto.nationalId !== undefined
         ? this.normalizeOptionalString(dto.nationalId)
@@ -294,8 +338,8 @@ export class EmployeesService {
         ? this.parseOptionalDate(dto.terminationDate, 'terminationDate')
         : undefined;
     const birthDate =
-      dto.birthDate !== undefined || dto.dateOfBirth !== undefined
-        ? this.parseOptionalDate(dto.birthDate ?? dto.dateOfBirth, 'birthDate')
+      dto.dateOfBirth !== undefined
+        ? this.parseOptionalDate(dto.dateOfBirth, 'dateOfBirth')
         : undefined;
     const departmentName =
       dto.department !== undefined ? this.normalizeDepartmentName(dto.department) : undefined;
@@ -303,10 +347,8 @@ export class EmployeesService {
       dto.profession !== undefined || dto.jobTitle !== undefined
         ? this.normalizeOptionalString(dto.profession ?? dto.jobTitle)
         : undefined;
-    const monthlySalary =
-      dto.monthlySalary !== undefined || dto.baseSalary !== undefined
-        ? dto.monthlySalary ?? dto.baseSalary ?? null
-        : undefined;
+    const mobile =
+      dto.mobile !== undefined ? this.normalizeOptionalString(dto.mobile) : undefined;
 
     const nextEmploymentStartDate =
       employmentStartDate === undefined ? employee.employmentStartDate : employmentStartDate;
@@ -315,78 +357,100 @@ export class EmployeesService {
 
     this.validateEmploymentDates(nextEmploymentStartDate, nextTerminationDate);
 
-    if (email || nationalId !== undefined) {
-      const uniqueChecks: Prisma.EmployeeWhereInput[] = [];
-      if (email) {
-        uniqueChecks.push({ email: { equals: email, mode: 'insensitive' } });
+    if (nationalId !== undefined) {
+      const conflict = await this.prisma.employee.findFirst({
+        where: {
+          AND: [{ employeeId: { not: employeeId } }, { nationalId }],
+        },
+      });
+
+      if (conflict) {
+        throw new BadRequestException('Employee national ID already exists');
       }
-      if (nationalId) {
-        uniqueChecks.push({ nationalId });
+    }
+
+    const loginName = dto.username !== undefined ? this.normalizeLoginName(dto.username) : undefined;
+    const passwordHash = dto.password !== undefined ? await bcrypt.hash(dto.password, 10) : undefined;
+
+    if (loginName !== undefined) {
+      const [employeeConflict, userConflict] = await Promise.all([
+        this.prisma.employee.findFirst({
+          where: {
+            AND: [{ employeeId: { not: employeeId } }, { email: loginName }],
+          },
+        }),
+        this.findAuthUserByLogin(loginName),
+      ]);
+
+      if (employeeConflict) {
+        throw new BadRequestException('Employee email already exists');
       }
 
-      if (uniqueChecks.length > 0) {
-        const conflict = await this.prisma.employee.findFirst({
+      if (userConflict && userConflict.email.toLowerCase() !== employee.email.toLowerCase()) {
+        throw new BadRequestException('Username already exists');
+      }
+    }
+
+    const updated = await this.prisma.$transaction(async (transaction) => {
+      if (loginName !== undefined || passwordHash !== undefined || dto.roleId !== undefined) {
+        const existingUser = await transaction.user.findFirst({
           where: {
-            AND: [
-              { employeeId: { not: employeeId } },
-              { OR: uniqueChecks },
+            OR: [
+              { username: employee.email },
+              { email: employee.email },
             ],
           },
         });
 
-        if (conflict) {
-          if (email && conflict.email.toLowerCase() === email) {
-            throw new BadRequestException('Employee email already exists');
-          }
-
-          if (nationalId && conflict.nationalId === nationalId) {
-            throw new BadRequestException('Employee national ID already exists');
-          }
-
-          throw new BadRequestException('Employee unique fields conflict with an existing record');
+        if (existingUser) {
+          await transaction.user.update({
+            where: { id: existingUser.id },
+            data: {
+              ...(loginName !== undefined && { username: loginName, email: loginName }),
+              ...(passwordHash !== undefined && { passwordHash }),
+              ...(dto.roleId !== undefined && { roleId: dto.roleId }),
+            },
+          });
         }
       }
-    }
 
-    const mobile =
-      dto.mobile !== undefined
-        ? this.normalizeOptionalString(dto.mobile)
-        : undefined;
+      const payload: Prisma.EmployeeUncheckedUpdateInput = {
+        ...(dto.name !== undefined && { name: dto.name }),
+        ...(loginName !== undefined && { email: loginName }),
+        ...(mobile !== undefined && { mobile }),
+        ...(nationalId !== undefined && { nationalId }),
+        ...(birthDate !== undefined && { dateOfBirth: birthDate }),
+        ...(dto.hourlyRate !== undefined && {
+          hourlyRate: new Prisma.Decimal(dto.hourlyRate),
+        }),
+        ...(dto.baseSalary !== undefined && {
+          baseSalary: dto.baseSalary === null ? null : new Prisma.Decimal(dto.baseSalary),
+        }),
+        ...(profession !== undefined && { jobTitle: profession, profession }),
+        ...(dto.roleId !== undefined && { roleId: dto.roleId }),
+        ...(departmentName !== undefined && { department: departmentName }),
+        ...(dto.scheduledStart !== undefined && { scheduledStart: dto.scheduledStart }),
+        ...(dto.scheduledEnd !== undefined && { scheduledEnd: dto.scheduledEnd }),
+        ...(employmentStartDate !== undefined && { employmentStartDate }),
+        ...(terminationDate !== undefined && { terminationDate }),
+        ...(dto.workDaysInPeriod !== undefined && { workDaysInPeriod: dto.workDaysInPeriod }),
+        ...(dto.hoursPerDay !== undefined && { hoursPerDay: dto.hoursPerDay }),
+        ...(dto.gracePeriodMinutes !== undefined && {
+          gracePeriodMinutes: dto.gracePeriodMinutes,
+        }),
+      };
 
-    const payload: Prisma.EmployeeUncheckedUpdateInput = {
-      ...(dto.name !== undefined && { name: dto.name }),
-      ...(email !== undefined && { email }),
-      ...(mobile !== undefined && { mobile }),
-      ...(nationalId !== undefined && { nationalId }),
-      ...(birthDate !== undefined && { birthDate, dateOfBirth: birthDate }),
-      ...(dto.hourlyRate !== undefined && {
-        hourlyRate: new Prisma.Decimal(dto.hourlyRate),
-      }),
-      ...(profession !== undefined && { jobTitle: profession, profession }),
-      ...(monthlySalary !== undefined && {
-        baseSalary: monthlySalary === null ? null : new Prisma.Decimal(monthlySalary),
-        monthlySalary: monthlySalary === null ? null : new Prisma.Decimal(monthlySalary),
-      }),
-      ...(dto.roleId !== undefined && { roleId: dto.roleId }),
-      ...(departmentName !== undefined && { department: departmentName }),
-      ...(dto.scheduledStart !== undefined && { scheduledStart: dto.scheduledStart }),
-      ...(dto.scheduledEnd !== undefined && { scheduledEnd: dto.scheduledEnd }),
-      ...(employmentStartDate !== undefined && { employmentStartDate }),
-      ...(terminationDate !== undefined && { terminationDate }),
-      ...(dto.workDaysInPeriod !== undefined && { workDaysInPeriod: dto.workDaysInPeriod }),
-      ...(dto.hoursPerDay !== undefined && { hoursPerDay: dto.hoursPerDay }),
-      ...(dto.gracePeriodMinutes !== undefined && { gracePeriodMinutes: dto.gracePeriodMinutes }),
-    };
+      if (departmentName !== undefined) {
+        const department = await this.resolveDepartment(departmentName);
+        payload.department = department.name;
+        payload.departmentId = department.id;
+      }
 
-    if (departmentName !== undefined) {
-      const department = await this.resolveDepartment(departmentName);
-      payload.department = department.name;
-      payload.departmentId = department.id;
-    }
-
-    const updated = await this.prisma.employee.update({
-      where: { employeeId },
-      data: payload,
+      return transaction.employee.update({
+        where: { employeeId },
+        data: payload,
+        include: this.employeeSelect(),
+      });
     });
 
     await this.shortCache.invalidatePrefix('employees:stats');
@@ -546,6 +610,7 @@ export class EmployeesService {
         terminationReason: dto.terminationReason || null,
         isSettled: false,
       },
+      include: this.employeeSelect(),
     });
 
     await this.shortCache.invalidatePrefix('employees:stats');
@@ -563,6 +628,7 @@ export class EmployeesService {
       data: {
         isSettled: true,
       },
+      include: this.employeeSelect(),
     });
 
     return { message: 'Employee settled successfully', employee: updated };

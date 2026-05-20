@@ -114,9 +114,9 @@ export class DashboardService {
       if (overtimeMinutes > 0) {
         // حساب أجر الإضافي بناءً على الراتب الساعي
         const salaryRec = salaryRecords.find((s) => s.employeeId === rec.employeeId);
-        const monthlySalary = Number(salaryRec?.baseSalary ?? 0);
-        // الراتب الساعي = الراتب الشهري / (26 يوم * 8 ساعات)
-        const hourlyRate = monthlySalary / (26 * 8);
+        const baseSalary = Number(salaryRec?.baseSalary ?? 0);
+        // الراتب الساعي = الراتب الأساسي / (26 يوم * 8 ساعات)
+        const hourlyRate = baseSalary / (26 * 8);
         const overtimePay = Number((hourlyRate * overtimeHours * 1.5).toFixed(2));
 
         overtimeEmployees.push({
