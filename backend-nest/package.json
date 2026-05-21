@@ -12,7 +12,7 @@
     "build": "nest build",
     "docker:build": "docker build -t warehouse-backend:prod .",
     "start": "node dist/main.js",
-    "prestart:dev": "npm run prisma:generate && kill-port 5001",
+    "prestart:dev": "npm run prisma:generate && (kill-port 5001 || exit 0)",
     "start:dev": "nest start --watch",
     "db:push": "prisma db push --accept-data-loss",
     "start:worker:payroll": "ts-node src/payroll-worker.ts",

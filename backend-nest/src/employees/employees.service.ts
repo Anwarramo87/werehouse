@@ -204,7 +204,7 @@ export class EmployeesService {
     const loginName = this.normalizeLoginName(dto.username);
     const mobile = this.normalizeOptionalString(dto.mobile);
     const nationalId = this.normalizeOptionalString(dto.nationalId);
-    const birthDate = this.parseOptionalDate(dto.dateOfBirth, 'dateOfBirth');
+    const birthDate = this.parseOptionalDate(dto.birthDate ?? dto.dateOfBirth, 'birthDate');
     const employmentStartDate = this.parseOptionalDate(
       dto.employmentStartDate,
       'employmentStartDate',
@@ -214,6 +214,27 @@ export class EmployeesService {
     const department = await this.resolveDepartment(departmentName);
     const profession = this.normalizeOptionalString(dto.profession ?? dto.jobTitle);
     const baseSalary = dto.baseSalary ?? null;
+    const resolvedWorkDaysInPeriod = dto.workDaysInPeriod ?? 26;
+    const resolvedHoursPerDay = dto.hoursPerDay ?? 8;
+    const maxHourlyRate = 99999999.99;
+    const maxBaseSalary = 999999999999.99;
+    const resolvedHourlyRate =
+      dto.hourlyRate ??
+      (baseSalary != null
+        ? Number((baseSalary / (resolvedWorkDaysInPeriod * resolvedHoursPerDay)).toFixed(2))
+        : null);
+
+    if (resolvedHourlyRate === null || resolvedHourlyRate === undefined) {
+      throw new BadRequestException('baseSalary is required when hourlyRate is not provided');
+    }
+
+    if (baseSalary != null && baseSalary > maxBaseSalary) {
+      throw new BadRequestException('baseSalary is too large');
+    }
+
+    if (resolvedHourlyRate > maxHourlyRate) {
+      throw new BadRequestException('baseSalary is too large for hourlyRate');
+    }
 
     if (terminationDate) {
       throw new BadRequestException(
@@ -273,7 +294,7 @@ export class EmployeesService {
           gender: dto.gender ?? null,
           jobTitle: profession,
           profession,
-          hourlyRate: new Prisma.Decimal(dto.hourlyRate),
+          hourlyRate: new Prisma.Decimal(resolvedHourlyRate),
           baseSalary: baseSalary != null ? new Prisma.Decimal(baseSalary) : null,
           livingAllowance:
             dto.livingAllowance != null ? new Prisma.Decimal(dto.livingAllowance) : null,
@@ -330,9 +351,10 @@ export class EmployeesService {
       dto.terminationDate !== undefined
         ? this.parseOptionalDate(dto.terminationDate, 'terminationDate')
         : undefined;
+    const birthDateInput = dto.birthDate ?? dto.dateOfBirth;
     const birthDate =
-      dto.dateOfBirth !== undefined
-        ? this.parseOptionalDate(dto.dateOfBirth, 'dateOfBirth')
+      birthDateInput !== undefined
+        ? this.parseOptionalDate(birthDateInput, 'birthDate')
         : undefined;
     const departmentName =
       dto.department !== undefined ? this.normalizeDepartmentName(dto.department) : undefined;
