@@ -46,6 +46,11 @@ export class CreateEmployeeDto {
   @IsDateString()
   dateOfBirth?: string;
 
+  /** تاريخ الميلاد (اسم قديم من الفرونت) */
+  @IsOptional()
+  @IsDateString()
+  birthDate?: string;
+
   /** الجنس: male | female */
   @IsOptional()
   @IsIn(['male', 'female'])
@@ -68,10 +73,11 @@ export class CreateEmployeeDto {
   @IsString()
   department?: string;
 
+  @IsOptional()
   @IsNumber()
   @Min(0)
   @Type(() => Number)
-  hourlyRate: number;
+  hourlyRate?: number;
 
   /** الراتب الكلي */
   @IsOptional()
