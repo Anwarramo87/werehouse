@@ -161,11 +161,12 @@ export class EmployeesService {
 
   async stats() {
     return this.shortCache.getOrSetJson('employees:stats', 30, async () => {
-      const [total, active, inactive, terminated, groupedByDepartment] = await Promise.all([
+      const [total, active, inactive, terminated, resigned, groupedByDepartment] = await Promise.all([
         this.prisma.employee.count(),
         this.prisma.employee.count({ where: { status: 'active' } }),
         this.prisma.employee.count({ where: { status: 'inactive' } }),
         this.prisma.employee.count({ where: { status: 'terminated' } }),
+        this.prisma.employee.count({ where: { status: 'resigned' } }),
         this.prisma.employee.groupBy({
           by: ['department'],
           _count: { _all: true },
@@ -183,6 +184,7 @@ export class EmployeesService {
         active,
         inactive,
         terminated,
+        resigned,
         byDepartment,
       };
     });
@@ -592,6 +594,29 @@ export class EmployeesService {
     await this.shortCache.invalidatePrefix('employees:stats');
 
     return { message: 'Employee terminated successfully', employee: updated };
+  }
+
+  async resign(employeeId: string, dto: TerminateEmployeeDto) {
+    const employee = await this.prisma.employee.findUnique({ where: { employeeId } });
+
+    if (!employee) throw new NotFoundException('Employee not found');
+
+    const terminationDate = this.parseOptionalDate(dto.terminationDate, 'terminationDate') || new Date();
+
+    const updated = await this.prisma.employee.update({
+      where: { employeeId },
+      data: {
+        status: 'resigned',
+        terminationDate,
+        terminationReason: dto.terminationReason || null,
+        isSettled: false,
+      },
+      include: this.employeeSelect(),
+    });
+
+    await this.shortCache.invalidatePrefix('employees:stats');
+
+    return { message: 'Employee resigned successfully', employee: updated };
   }
 
   async settle(employeeId: string) {

@@ -79,6 +79,12 @@ export class EmployeesController {
     return this.employeesService.terminate(employeeId, dto);
   }
 
+  @Patch(':employeeId/resign')
+  @Permissions('edit_employees')
+  resign(@Param('employeeId') employeeId: string, @Body() dto: TerminateEmployeeDto) {
+    return this.employeesService.resign(employeeId, dto);
+  }
+
   @Patch(':employeeId/settle')
   @Permissions('edit_employees')
   settle(@Param('employeeId') employeeId: string) {

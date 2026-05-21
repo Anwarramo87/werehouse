@@ -9,7 +9,7 @@ export class EmployeesListQueryDto extends PaginationQueryDto {
 
   @IsOptional()
   @IsString()
-  @IsIn(['active', 'inactive', 'terminated'])
+  @IsIn(['active', 'inactive', 'terminated', 'resigned'])
   status?: string;
 
   @IsOptional()
