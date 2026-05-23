@@ -39,9 +39,9 @@ export class AuthController implements OnModuleInit {
   async onModuleInit() {
     try {
       await this.authService.ensureAdminBootstrap();
+      await this.authService.ensureSuperadminBootstrap();
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      // Log but don't crash the server — bootstrap will retry on next restart
       console.error(`[AuthController] Admin bootstrap failed: ${message}`);
     }
   }

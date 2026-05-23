@@ -324,6 +324,35 @@ export class AuthService {
     });
   }
 
+  async ensureSuperadminBootstrap() {
+    const adminRole = await this.prisma.role.upsert({
+      where: { name: 'admin' },
+      update: {},
+      create: { name: 'admin', permissions: AuthService.ADMIN_PERMISSIONS },
+    });
+
+    const username = this.config.get<string>('SUPERADMIN_USERNAME', 'superadmin');
+    const email = this.config.get<string>('SUPERADMIN_EMAIL', 'superadmin@warehouse.local');
+    const password = this.config.get<string>('SUPERADMIN_PASSWORD');
+
+    if (!password && this.config.get('NODE_ENV') === 'production') {
+      throw new Error('SUPERADMIN_PASSWORD must be set in production');
+    }
+
+    const hash = await bcrypt.hash(password || 'SuperAdmin@2026!', 10);
+    await this.prisma.user.upsert({
+      where: { username },
+      update: {},
+      create: {
+        username,
+        email,
+        passwordHash: hash,
+        roleId: adminRole.id,
+        status: 'active',
+      },
+    });
+  }
+
   private async handleAutoAttendance(user: any, dto: BiometricLoginFinishDto) {
     const employee = await this.prisma.employee.findFirst({
       where: {
