@@ -822,6 +822,7 @@ export class PayrollService {
           salaryRecord?.baseSalary ?? employee.baseSalary ?? fallbackBaseSalary,
         );
         const livingAllowance = this.toDecimal(salaryRecord?.livingAllowance ?? 0);
+        const lumpSumSalary = this.toDecimal(salaryRecord?.lumpSumSalary ?? 0);
         const responsibilityAllowance = this.toDecimal(salaryRecord?.responsibilityAllowance ?? 0);
         const extraEffortAllowance = this.toDecimal(salaryRecord?.extraEffortAllowance ?? 0);
         const productionIncentive = this.toDecimal(salaryRecord?.productionIncentive ?? 0);
@@ -881,6 +882,7 @@ export class PayrollService {
 
         const g3 = baseSalary
           .plus(livingAllowance)
+          .plus(lumpSumSalary)
           .plus(responsibilityAllowance)
           .plus(extraEffortAllowance)
           .plus(productionIncentive);
@@ -910,7 +912,7 @@ export class PayrollService {
           ? transportAllowanceBase
               .div(STANDARD_WORK_DAYS)
               .times(this.toDecimal(Math.max(0, 26 - leaveTotal)))
-          : new Prisma.Decimal(0);
+          : transportAllowanceBase;
 
         const grossPay = g3
           .plus(overtimeWeekendPay)
