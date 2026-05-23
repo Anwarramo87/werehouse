@@ -93,8 +93,6 @@ export class CreateEmployeeDto {
   @Type(() => Number)
   lumpSumSalary?: number;
 
-
-
   /** بدل غلاء معيشة */
   @IsOptional()
   @IsNumber()

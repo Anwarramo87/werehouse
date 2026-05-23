@@ -313,6 +313,16 @@ export class EmployeesService {
         include: this.employeeSelect(),
       });
 
+      await transaction.employeeSalary.create({
+        data: {
+          employeeId: dto.employeeId,
+          profession,
+          baseSalary: baseSalary != null ? new Prisma.Decimal(baseSalary) : new Prisma.Decimal(0),
+          lumpSumSalary: new Prisma.Decimal(dto.lumpSumSalary ?? 0),
+          livingAllowance: dto.livingAllowance != null ? new Prisma.Decimal(dto.livingAllowance) : new Prisma.Decimal(0),
+        },
+      });
+
       return { user, employee };
     });
 
@@ -333,9 +343,12 @@ export class EmployeesService {
   }
 
   async update(employeeId: string, dto: UpdateEmployeeDto) {
-    const employee = await this.prisma.employee.findUnique({
-      where: { employeeId },
-    });
+    const [employee, existingSalary] = await Promise.all([
+      this.prisma.employee.findUnique({
+        where: { employeeId },
+      }),
+      this.prisma.employeeSalary.findUnique({ where: { employeeId } }),
+    ]);
 
     if (!employee) throw new NotFoundException('Employee not found');
 
@@ -426,6 +439,9 @@ export class EmployeesService {
         ...(dto.baseSalary !== undefined && {
           baseSalary: dto.baseSalary === null ? null : new Prisma.Decimal(dto.baseSalary),
         }),
+        ...(dto.livingAllowance !== undefined && {
+          livingAllowance: dto.livingAllowance === null ? null : new Prisma.Decimal(dto.livingAllowance),
+        }),
         ...(profession !== undefined && { jobTitle: profession, profession }),
         ...(dto.roleId !== undefined && { roleId: dto.roleId }),
         ...(departmentName !== undefined && { department: departmentName }),
@@ -446,11 +462,33 @@ export class EmployeesService {
         payload.departmentId = department.id;
       }
 
-      return transaction.employee.update({
+      const updatedEmployee = await transaction.employee.update({
         where: { employeeId },
         data: payload,
         include: this.employeeSelect(),
       });
+
+      const salaryPayload: Prisma.EmployeeSalaryUpsertArgs['create'] = {
+        employeeId,
+        profession: profession ?? employee.profession,
+        baseSalary: dto.baseSalary !== undefined
+          ? (dto.baseSalary === null ? new Prisma.Decimal(0) : new Prisma.Decimal(dto.baseSalary))
+          : (existingSalary?.baseSalary ?? employee.baseSalary ?? new Prisma.Decimal(0)),
+        livingAllowance: dto.livingAllowance !== undefined
+          ? (dto.livingAllowance === null ? new Prisma.Decimal(0) : new Prisma.Decimal(dto.livingAllowance))
+          : (existingSalary?.livingAllowance ?? employee.livingAllowance ?? new Prisma.Decimal(0)),
+        lumpSumSalary: dto.lumpSumSalary !== undefined
+          ? new Prisma.Decimal(dto.lumpSumSalary ?? 0)
+          : (existingSalary?.lumpSumSalary ?? new Prisma.Decimal(0)),
+      };
+
+      await transaction.employeeSalary.upsert({
+        where: { employeeId },
+        update: salaryPayload,
+        create: salaryPayload,
+      });
+
+      return updatedEmployee;
     });
 
     await this.shortCache.invalidatePrefix('employees:stats');

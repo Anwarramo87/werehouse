@@ -936,8 +936,14 @@ export class AttendanceService {
 
     // الحصول على جميع الموظفين أو موظف محدد
     const employees = employeeId
-      ? [await this.prisma.employee.findUnique({ where: { employeeId } })]
-      : await this.prisma.employee.findMany({ where: { status: 'active' } });
+      ? [await this.prisma.employee.findUnique({
+          where: { employeeId },
+          select: { employeeId: true, name: true, hourlyRate: true, baseSalary: true },
+        })]
+      : await this.prisma.employee.findMany({
+          where: { status: 'active' },
+          select: { employeeId: true, name: true, hourlyRate: true, baseSalary: true },
+        });
 
     if (!employees.length) {
       throw new BadRequestException('No active employees found');
@@ -960,8 +966,9 @@ export class AttendanceService {
 
       // حساب أيام الغياب ودقائق التأخير
       const uniqueDates = new Set(records.map((r) => r.date));
-      const dateRange = this.getDateRange(periodStart, periodEnd);
-      const absentDays = dateRange.length - uniqueDates.size;
+      const targetWorkDays = workDaysInPeriod;
+      const presentDays = uniqueDates.size;
+      const absentDays = Math.max(0, targetWorkDays - presentDays);
 
       let totalDelayMinutes = 0;
       records.forEach((record) => {
@@ -972,8 +979,10 @@ export class AttendanceService {
       });
 
       // حساب الخصومات
-      const hourlyRate = Number(employee.hourlyRate || 0);
-      const dailyRate = (hourlyRate * hoursPerDay) || 0;
+      const hourlyRate = employee.hourlyRate ? Number(employee.hourlyRate) : 0;
+      const baseSalary = employee.baseSalary ? Number(employee.baseSalary) : 0;
+      const effectiveHourlyRate = hourlyRate || (baseSalary ? baseSalary / (workDaysInPeriod * hoursPerDay) : 0);
+      const dailyRate = effectiveHourlyRate * hoursPerDay || 0;
       const minuteRate = dailyRate / (hoursPerDay * 60);
       const absenceDeduction = absentDays * dailyRate;
       const delayDeduction = totalDelayMinutes * minuteRate;
@@ -1006,16 +1015,4 @@ export class AttendanceService {
     };
   }
 
-  private getDateRange(start: string, end: string): string[] {
-    const dates: string[] = [];
-    const current = new Date(start);
-    const endDate = new Date(end);
-
-    while (current <= endDate) {
-      dates.push(current.toISOString().split('T')[0]);
-      current.setDate(current.getDate() + 1);
-    }
-
-    return dates;
-  }
 }
