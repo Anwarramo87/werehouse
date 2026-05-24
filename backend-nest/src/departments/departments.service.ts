@@ -1,4 +1,4 @@
-import { BadRequestException, ConflictException, Injectable } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateDepartmentDto } from './dto/create-department.dto';
 
@@ -31,6 +31,30 @@ export class DepartmentsService {
     });
 
     return { message: 'Department created successfully', department };
+  }
+
+  async update(id: string, dto: CreateDepartmentDto) {
+    const name = this.normalizeName(dto.name);
+    const existing = await this.prisma.department.findUnique({ where: { id } });
+    if (!existing) throw new NotFoundException('Department not found');
+
+    const collision = await this.prisma.department.findFirst({
+      where: { name: { equals: name, mode: 'insensitive' }, NOT: { id } },
+    });
+    if (collision) throw new ConflictException('Department name already exists');
+
+    const dept = await this.prisma.department.update({ where: { id }, data: { name } });
+    return { message: 'Department updated', department: dept };
+  }
+
+  async remove(id: string) {
+    const dept = await this.prisma.department.findUnique({
+      where: { id }, include: { _count: { select: { employees: true } } },
+    });
+    if (!dept) throw new NotFoundException('Department not found');
+    if (dept._count.employees > 0) throw new BadRequestException('Cannot delete department with employees');
+    await this.prisma.department.delete({ where: { id } });
+    return { message: 'Department deleted' };
   }
 
   async list() {
