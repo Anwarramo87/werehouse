@@ -230,4 +230,18 @@ export class InventoryService {
       };
     });
   }
+
+  async deleteProduct(productId: string) {
+    const product = await this.prisma.product.findUnique({ where: { id: productId } });
+    if (!product) throw new NotFoundException('Product not found');
+
+    // delete related stock levels first
+    await this.prisma.stockLevel.deleteMany({ where: { sku: product.sku } });
+
+    await this.prisma.product.delete({ where: { id: productId } });
+
+    await this.invalidateInventoryCaches();
+
+    return { message: 'Product deleted successfully' };
+  }
 }

@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Post, Put, Query, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Post, Put, Query, UseGuards } from '@nestjs/common';
 import { InventoryService } from './inventory.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { PermissionsGuard } from '../common/guards/permissions.guard';
@@ -36,6 +36,12 @@ export class InventoryController {
   @Permissions('edit_inventory')
   updateProduct(@Param('productId') productId: string, @Body() dto: UpdateProductDto) {
     return this.inventoryService.updateProduct(productId, dto);
+  }
+
+  @Delete('products/:productId')
+  @Permissions('edit_inventory')
+  deleteProduct(@Param('productId') productId: string) {
+    return this.inventoryService.deleteProduct(productId);
   }
 
   @Get('stock/:sku')

@@ -65,13 +65,12 @@ export class DashboardService {
     const presentEmployees = Array.from(presentMap.values());
     const presentCount = presentEmployees.length;
 
-    // ─── الغياب ───────────────────────────────────────────────────────────
-    const allActive = await this.prisma.employee.findMany({
-      where: { status: 'active' },
-      select: { employeeId: true, name: true },
-    });
-    const absentEmployees = allActive.filter((e) => !presentMap.has(e.employeeId));
-    const absentCount = absentEmployees.length;
+    // ─── الغياب (محسوب بطريقة مُخففة لتجنّب جلب كل الموظفين)
+    // بدلاً من جلب جميع الموظفين النشطين، نحسب العدد الغائب بطرح الحاضرين من الإجمالي.
+    // نُعيد مصفوفة فارغة للأسماء لتجنّب تحميل جدول الموظفين بالكامل — إذا احتجنا أسماء،
+    // يمكن توفير endpoint منفصل يحمّل عينات أو صفحة من الأسماء.
+    const absentCount = Math.max(0, totalEmployees - presentCount);
+    const absentEmployees: { employeeId: string; name: string }[] = [];
 
     // ─── التأخير ──────────────────────────────────────────────────────────
     type LateEntry = { employeeId: string; name: string; minutesLate: number };
