@@ -45,7 +45,7 @@ export class DiscountsController {
     @Query('kind') kindParam: string,
     @CurrentUser() user: AuthenticatedUser,
   ) {
-    const kind = this.parseKind(kindParam);
+    const kind = kindParam ? this.parseKind(kindParam) : undefined;
     this.assertPermission(user, kind);
     return this.discountsService.remove(id, kind, user?.userId);
   }
@@ -67,7 +67,9 @@ export class DiscountsController {
     throw new BadRequestException('Invalid kind value');
   }
 
-  private assertPermission(user: AuthenticatedUser | undefined, kind: DiscountKind) {
+  private assertPermission(user: AuthenticatedUser | undefined, kind: DiscountKind | undefined) {
+    if (!kind) return;
+
     const permissions = user?.permissions || [];
     const roles = user?.roles || [];
 

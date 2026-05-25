@@ -134,11 +134,19 @@ export class DashboardService {
       return sum + Number(item.netPayRounded ?? item.netPay ?? 0);
     }, 0);
     const fallbackTotalDueSalaries = salaryRecords.reduce((sum, s) => {
-      const gross = Number(s.baseSalary) + Number(s.transportAllowance);
+      const fixedEarnings =
+        Number(s.baseSalary) +
+        Number(s.lumpSumSalary) +
+        Number(s.livingAllowance) +
+        Number(s.responsibilityAllowance) +
+        Number(s.extraEffortAllowance) +
+        Number(s.productionIncentive) +
+        Number(s.transportAllowance);
       const deductions = Number(s.insuranceAmount);
-      return sum + gross - deductions;
+      return sum + fixedEarnings - deductions;
     }, 0);
-    const totalDueSalaries = payrollRunTotal ?? fallbackTotalDueSalaries;
+    const totalReceivedSalaries = payrollRunTotal ?? 0;
+    const totalDueSalaries = fallbackTotalDueSalaries;
 
     return {
       // ─── إجمالي الموظفين
@@ -158,6 +166,9 @@ export class DashboardService {
 
       // ─── الرواتب المستحقة
       totalDueSalaries: Number(totalDueSalaries.toFixed(2)),
+
+      // ─── الرواتب المقبوضة
+      totalReceivedSalaries: Number(totalReceivedSalaries.toFixed(2)),
 
       // ─── التأخير
       lateness: {
