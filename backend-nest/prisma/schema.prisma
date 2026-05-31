@@ -61,6 +61,8 @@ model Employee {
   userId         String?  @unique @db.Uuid
   user           User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
   mobile         String?
+  /** مكان الإقامة (مدينة / منطقة) */
+  residence      String?  @db.VarChar(200)
   nationalId     String?  @unique
   dateOfBirth    DateTime? @db.Date
   gender         String?   // male | female
@@ -505,8 +507,8 @@ model Bus {
   totalCost           Decimal  @db.Decimal(14, 2)  // التكلفة الإجمالية (ل.س)
   companyDeductionPct Decimal  @db.Decimal(5, 2)   // حسم الشركة بالنسبة المئوية
   capacity            Int                           // سعة الركاب
-  // مبلغ أجرة النقل التي تُحسم من راتب الموظف
-  employeeDeductionAmount Decimal @default(0) @db.Decimal(14, 2)
+  // نسبة خصم أجرة النقل التي تُحسم من راتب الموظف (نسبة 0-100)
+  employeeDeductionPct Decimal @default(0) @db.Decimal(5, 2)
   status              String   @default("active")  // active | inactive
   passengers          BusPassenger[]
   createdAt           DateTime @default(now())
@@ -522,6 +524,9 @@ model BusPassenger {
   busId      String   @db.Uuid
   bus        Bus      @relation(fields: [busId], references: [id], onDelete: Cascade)
   employeeId String
+  name       String?  // optional passenger name for display
+  paidAmount Decimal? @db.Decimal(12, 2)  // optional amount paid
+  isManual   Boolean  @default(false)  // whether amount is manually set or calculated
   joinDate   DateTime @default(now()) @db.Date
   leaveDate  DateTime? @db.Date
   status     String   @default("active")  // active | inactive

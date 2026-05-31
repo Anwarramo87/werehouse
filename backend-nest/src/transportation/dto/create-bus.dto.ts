@@ -35,7 +35,7 @@ export class CreateBusDto {
 
   /** رقم السائق — رقم سوري 10 أرقام */
   @IsString()
-  @Matches(/^09[0-9]{8}$/, { message: 'driverPhone must be a valid Syrian mobile number (10 digits starting with 09)' })
+  @Matches(/^(09[0-9]{8}|[0-9]{9})$/, { message: 'driverPhone must be a valid Syrian mobile number' })
   driverPhone: string;
 
   /** التكلفة الإجمالية (ل.س) */
@@ -51,16 +51,17 @@ export class CreateBusDto {
   @Type(() => Number)
   companyDeductionPct: number;
 
+  /** حسم موظف الرحلة بالنسبة المئوية (0-100) */
+  @IsOptional()
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0)
+  @Max(100)
+  @Type(() => Number)
+  employeeDeductionPct?: number;
+
   /** سعة الركاب */
   @IsInt()
   @Min(1)
   @Type(() => Number)
   capacity: number;
-
-  /** مبلغ أجرة النقل التي تُحسم من راتب الموظف */
-  @IsOptional()
-  @IsNumber({ maxDecimalPlaces: 2 })
-  @Min(0)
-  @Type(() => Number)
-  employeeDeductionAmount?: number;
 }

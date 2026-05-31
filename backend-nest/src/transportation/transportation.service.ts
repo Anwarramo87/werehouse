@@ -86,10 +86,10 @@ export class TransportationService {
         driverPhone: dto.driverPhone,
         totalCost: new Prisma.Decimal(dto.totalCost.toString()),
         companyDeductionPct: new Prisma.Decimal(dto.companyDeductionPct.toString()),
+        employeeDeductionPct: dto.employeeDeductionPct !== undefined
+          ? new Prisma.Decimal(dto.employeeDeductionPct.toString())
+          : new Prisma.Decimal(0),
         capacity: dto.capacity,
-        employeeDeductionAmount: new Prisma.Decimal(
-          (dto.employeeDeductionAmount ?? 0).toString(),
-        ),
       },
     });
   }
@@ -118,8 +118,7 @@ export class TransportationService {
     if (dto.totalCost !== undefined)           data.totalCost = new Prisma.Decimal(dto.totalCost.toString());
     if (dto.companyDeductionPct !== undefined) data.companyDeductionPct = new Prisma.Decimal(dto.companyDeductionPct.toString());
     if (dto.capacity !== undefined)            data.capacity = dto.capacity;
-    if (dto.employeeDeductionAmount !== undefined)
-      data.employeeDeductionAmount = new Prisma.Decimal(dto.employeeDeductionAmount.toString());
+    if (dto.employeeDeductionPct !== undefined) data.employeeDeductionPct = new Prisma.Decimal(dto.employeeDeductionPct.toString());
     if (dto.status !== undefined)              data.status = dto.status;
 
     return this.prisma.bus.update({ where: { id: bus.id }, data });
@@ -172,6 +171,9 @@ export class TransportationService {
         where: { id: existing.id },
         data: {
           status: 'active',
+          name: dto.name,
+          paidAmount: dto.paidAmount !== undefined ? new Prisma.Decimal(dto.paidAmount.toString()) : null,
+          isManual: dto.isManual ?? false,
           joinDate: dto.joinDate ? new Date(dto.joinDate) : new Date(),
           leaveDate: null,
         },
@@ -182,6 +184,9 @@ export class TransportationService {
       data: {
         busId: bus.id,
         employeeId: dto.employeeId,
+        name: dto.name,
+        paidAmount: dto.paidAmount !== undefined ? new Prisma.Decimal(dto.paidAmount.toString()) : null,
+        isManual: dto.isManual ?? false,
         joinDate: dto.joinDate ? new Date(dto.joinDate) : new Date(),
       },
     });
@@ -229,7 +234,7 @@ export class TransportationService {
 
     const buses = await this.prisma.bus.findMany({
       where: { status: 'active' },
-      select: { totalCost: true, companyDeductionPct: true, employeeDeductionAmount: true },
+      select: { totalCost: true, companyDeductionPct: true },
     });
 
     const totalMonthlyCost = buses.reduce(
@@ -287,7 +292,8 @@ export class TransportationService {
     const employeeCosts = new Map<string, number>();
 
     for (const passenger of passengers) {
-      const cost = Number(passenger.bus.employeeDeductionAmount || 0);
+      const pct = Number(passenger.bus.companyDeductionPct || 0);
+      const cost = Number(passenger.bus.totalCost) * (pct / 100);
       const currentCost = employeeCosts.get(passenger.employeeId) || 0;
       employeeCosts.set(passenger.employeeId, currentCost + cost);
     }

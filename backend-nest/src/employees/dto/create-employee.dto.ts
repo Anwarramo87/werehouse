@@ -142,4 +142,10 @@ export class CreateEmployeeDto {
   @Min(0)
   @Type(() => Number)
   gracePeriodMinutes?: number;
+
+  /** مكان الإقامة (مدينة أو منطقة) */
+  @IsOptional()
+  @IsString()
+  @MaxLength(200)
+  residence?: string;
 }
