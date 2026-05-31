@@ -203,6 +203,7 @@ export class EmployeesService {
   async create(dto: CreateEmployeeDto) {
     const loginName = this.normalizeLoginName(dto.username);
     const mobile = this.normalizeOptionalString(dto.mobile);
+    const residence = this.normalizeOptionalString(dto.residence);
     const nationalId = this.normalizeOptionalString(dto.nationalId);
     const birthDate = this.parseOptionalDate(dto.birthDate ?? dto.dateOfBirth, 'birthDate');
     const employmentStartDate = this.parseOptionalDate(
@@ -289,6 +290,7 @@ export class EmployeesService {
           employeeId: dto.employeeId,
           name: dto.name,
           mobile,
+              residence,
           nationalId,
           dateOfBirth: birthDate,
           gender: dto.gender ?? null,
@@ -431,6 +433,7 @@ export class EmployeesService {
       const payload: Prisma.EmployeeUncheckedUpdateInput = {
         ...(dto.name !== undefined && { name: dto.name }),
         ...(mobile !== undefined && { mobile }),
+        ...(dto.residence !== undefined && { residence: this.normalizeOptionalString(dto.residence) }),
         ...(nationalId !== undefined && { nationalId }),
         ...(birthDate !== undefined && { dateOfBirth: birthDate }),
         ...(dto.hourlyRate !== undefined && {
