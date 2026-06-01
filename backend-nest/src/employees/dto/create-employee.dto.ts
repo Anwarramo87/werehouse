@@ -122,6 +122,42 @@ export class CreateEmployeeDto {
   @IsDateString()
   terminationDate?: string;
 
+  /** نوع الإنهاء: استقالة أو إقالة */
+  @IsOptional()
+  @IsIn(['resignation', 'termination'])
+  terminationType?: 'resignation' | 'termination';
+
+  /** سبب الإنهاء */
+  @IsOptional()
+  @IsString()
+  terminationReason?: string;
+
+  /** ملاحظات الإنهاء */
+  @IsOptional()
+  @IsString()
+  terminationNotes?: string;
+
+  /** حالة التصفية المالية */
+  @IsOptional()
+  @IsIn(['pending', 'completed'])
+  financialSettlementStatus?: 'pending' | 'completed';
+
+  /** تاريخ التصفية المالية */
+  @IsOptional()
+  @IsDateString()
+  financialSettlementDate?: string;
+
+  /** تاريخ إعادة التعيين */
+  @IsOptional()
+  @IsDateString()
+  rehireDate?: string;
+
+  /** هل تمت التصفية المالية */
+  @IsOptional()
+  @IsString()
+  @IsIn(['true', 'false'])
+  isFinanciallySettled?: string;
+
   /** عدد أيام العمل في الفترة */
   @IsOptional()
   @IsNumber()
