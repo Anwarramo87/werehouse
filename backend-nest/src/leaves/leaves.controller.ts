@@ -3,7 +3,7 @@ import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { PermissionsGuard } from '../common/guards/permissions.guard';
 import { Permissions } from '../common/decorators/permissions.decorator';
 import { LeavesService } from './leaves.service';
-import { CreateLeaveRequestDto } from './dto/create-leave-request.dto';
+import { BulkCreateLeaveRequestDto, CreateLeaveRequestDto } from './dto/create-leave-request.dto';
 import { LeavesListQueryDto } from './dto/leaves-list-query.dto';
 import { UpdateLeaveRequestDto } from './dto/update-leave-request.dto';
 
@@ -16,6 +16,13 @@ export class LeavesController {
   @Permissions('view_employees')
   list(@Query() query: LeavesListQueryDto) {
     return this.leavesService.list(query);
+  }
+
+  // ملاحظة: يجب أن يكون /bulk قبل /:id حتى لا يُفسَّر "bulk" كـ id
+  @Post('bulk')
+  @Permissions('edit_employees')
+  bulkCreate(@Body() dto: BulkCreateLeaveRequestDto) {
+    return this.leavesService.bulkCreate(dto);
   }
 
   @Get(':id')
