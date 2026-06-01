@@ -54,18 +54,20 @@ model BiometricCredential {
 }
 
 model Employee {
-  id                        String               @id @default(uuid()) @db.Uuid
-  employeeId                String               @unique
-  name                      String
-  userId                    String?              @unique @db.Uuid
-  user                      User?                @relation(fields: [userId], references: [id], onDelete: SetNull)
-  mobile                    String?
-  nationalId                String?              @unique
-  dateOfBirth               DateTime?            @db.Date
-  gender                    String? // male | female
-  jobTitle                  String?
-  profession                String?
-  hourlyRate                Decimal              @db.Decimal(10, 2)
+  id             String   @id @default(uuid()) @db.Uuid
+  employeeId     String   @unique
+  name           String
+  userId         String?  @unique @db.Uuid
+  user           User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  mobile         String?
+  /** مكان الإقامة (مدينة / منطقة) */
+  residence      String?  @db.VarChar(200)
+  nationalId     String?  @unique
+  dateOfBirth    DateTime? @db.Date
+  gender         String?   // male | female
+  jobTitle       String?
+  profession     String?
+  hourlyRate     Decimal  @db.Decimal(10, 2)
   // حقول الراتب المباشرة على الموظف
   baseSalary                Decimal?             @db.Decimal(14, 2)
   livingAllowance           Decimal?             @db.Decimal(14, 2) // بدل غلاء معيشة
@@ -505,21 +507,21 @@ model EmployeePenalty {
 // Transportation — إدارة الباصات والنقل
 // ---------------------------------------------------------------------------
 model Bus {
-  id                      String         @id @default(uuid()) @db.Uuid
-  busId                   String         @unique // كود الباص
-  route                   String // الخط / مسار الرحلة
-  plateNumber             String         @unique // رقم اللوحة
-  driverName              String // اسم السائق
-  driverPhone             String // رقم السائق (10 أرقام سورية)
-  totalCost               Decimal        @db.Decimal(14, 2) // التكلفة الإجمالية (ل.س)
-  companyDeductionPct     Decimal        @db.Decimal(5, 2) // حسم الشركة بالنسبة المئوية
-  capacity                Int // سعة الركاب
-  // مبلغ أجرة النقل التي تُحسم من راتب الموظف
-  employeeDeductionAmount Decimal        @default(0) @db.Decimal(14, 2)
-  status                  String         @default("active") // active | inactive
-  passengers              BusPassenger[]
-  createdAt               DateTime       @default(now())
-  updatedAt               DateTime       @updatedAt
+  id                  String   @id @default(uuid()) @db.Uuid
+  busId               String   @unique  // كود الباص
+  route               String            // الخط / مسار الرحلة
+  plateNumber         String   @unique  // رقم اللوحة
+  driverName          String            // اسم السائق
+  driverPhone         String            // رقم السائق (10 أرقام سورية)
+  totalCost           Decimal  @db.Decimal(14, 2)  // التكلفة الإجمالية (ل.س)
+  companyDeductionPct Decimal  @db.Decimal(5, 2)   // حسم الشركة بالنسبة المئوية
+  capacity            Int                           // سعة الركاب
+  // نسبة خصم أجرة النقل التي تُحسم من راتب الموظف (نسبة 0-100)
+  employeeDeductionPct Decimal @default(0) @db.Decimal(5, 2)
+  status              String   @default("active")  // active | inactive
+  passengers          BusPassenger[]
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
 
   @@index([status])
   @@index([route, status])
@@ -531,7 +533,10 @@ model BusPassenger {
   busId      String    @db.Uuid
   bus        Bus       @relation(fields: [busId], references: [id], onDelete: Cascade)
   employeeId String
-  joinDate   DateTime  @default(now()) @db.Date
+  name       String?  // optional passenger name for display
+  paidAmount Decimal? @db.Decimal(12, 2)  // optional amount paid
+  isManual   Boolean  @default(false)  // whether amount is manually set or calculated
+  joinDate   DateTime @default(now()) @db.Date
   leaveDate  DateTime? @db.Date
   status     String    @default("active") // active | inactive
   createdAt  DateTime  @default(now())
