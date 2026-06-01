@@ -4,6 +4,7 @@ import { ValidationPipe, Logger } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { ConfigService } from '@nestjs/config';
 import { NestExpressApplication } from '@nestjs/platform-express';
+import { ZodValidationPipe } from 'nestjs-zod';
 import helmet from 'helmet';
 import compression from 'compression';
 import cookieParser from 'cookie-parser';
@@ -109,6 +110,7 @@ async function bootstrap() {
   // --- Global Filters & Pipes ---
   app.useGlobalFilters(new GlobalExceptionFilter());
   app.useGlobalPipes(
+    new ZodValidationPipe(),           // Zod validation for DTOs using Zod schemas
     new ValidationPipe({
       whitelist: true,               // حذف أي حقول إضافية غير موجودة في الـ DTO
       forbidNonWhitelisted: true,    // رفض الطلب إذا احتوى على حقول غير مصرح بها
