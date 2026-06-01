@@ -19,6 +19,10 @@ import { UpdateEmployeeDto } from './dto/update-employee.dto';
 import { EmployeesListQueryDto } from './dto/employees-list-query.dto';
 import { EmployeeProfileQueryDto } from './dto/employee-profile-query.dto';
 import { TerminateEmployeeDto } from './dto/terminate-employee.dto';
+import { TerminateEmployeeZodDto } from './dto/terminate-employee-zod.dto';
+import { RehireEmployeeDto } from './dto/rehire-employee.dto';
+import { FinancialSettlementDto } from './dto/financial-settlement.dto';
+import { ResignedEmployeesQueryDto } from './dto/resigned-employees-query.dto';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { AuthenticatedUser } from '../common/types/authenticated-user.types';
 
@@ -37,6 +41,12 @@ export class EmployeesController {
   @Permissions('view_employees')
   stats() {
     return this.employeesService.stats();
+  }
+
+  @Get('resigned')
+  @Permissions('view_employees')
+  getResignedEmployees(@Query() query: ResignedEmployeesQueryDto) {
+    return this.employeesService.getResignedEmployees(query);
   }
 
   @Get('department/:department')
@@ -73,6 +83,15 @@ export class EmployeesController {
     return this.employeesService.update(employeeId, dto);
   }
 
+  @Post('terminate')
+  @Permissions('edit_employees')
+  terminateEmployee(
+    @Body() dto: TerminateEmployeeZodDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.employeesService.terminateEmployee(dto, user);
+  }
+
   @Patch(':employeeId/terminate')
   @Permissions('edit_employees')
   terminate(@Param('employeeId') employeeId: string, @Body() dto: TerminateEmployeeDto) {
@@ -89,6 +108,24 @@ export class EmployeesController {
   @Permissions('edit_employees')
   settle(@Param('employeeId') employeeId: string) {
     return this.employeesService.settle(employeeId);
+  }
+
+  @Post('rehire')
+  @Permissions('edit_employees')
+  rehireEmployee(
+    @Body() dto: RehireEmployeeDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.employeesService.rehireEmployee(dto, user);
+  }
+
+  @Post('financial-settlement')
+  @Permissions('edit_employees')
+  processFinancialSettlement(
+    @Body() dto: FinancialSettlementDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.employeesService.processFinancialSettlement(dto, user);
   }
 
   @Delete(':employeeId')
