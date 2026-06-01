@@ -145,6 +145,10 @@ model LeaveRequest {
   isPaid      Boolean             @default(false)
   startDate   DateTime            @db.Date
   endDate     DateTime            @db.Date
+  // حقول الإجازة الساعية
+  isHourly    Boolean             @default(false)
+  startTime   String?             // HH:mm — وقت بداية الإجازة الساعية
+  endTime     String?             // HH:mm — وقت نهاية الإجازة الساعية
   reason      String?
   notes       String?
   createdAt   DateTime            @default(now())

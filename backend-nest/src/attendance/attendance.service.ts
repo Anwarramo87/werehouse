@@ -9,6 +9,7 @@ import { CreateAttendanceDto } from './dto/create-attendance.dto';
 import { UpdateAttendanceDto } from './dto/update-attendance.dto';
 import { AttendanceListQueryDto } from './dto/attendance-list-query.dto';
 import { ShortCacheService } from '../common/cache/short-cache.service';
+import { RealtimeGateway } from '../realtime/realtime.gateway';
 
 type ShiftPair = {
   inRecordId?: string;
@@ -67,6 +68,7 @@ export class AttendanceService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly shortCache: ShortCacheService,
+    private readonly realtimeGateway: RealtimeGateway,
   ) {}
 
   private async invalidateAttendanceDashboardCaches() {
@@ -75,6 +77,49 @@ export class AttendanceService {
       this.shortCache.invalidatePrefix('attendance:anomalies:'),
       this.shortCache.invalidatePrefix('attendance:alerts:'),
     ]);
+  }
+
+  private toTimeHHmm(value: Date) {
+    return `${String(value.getHours()).padStart(2, '0')}:${String(value.getMinutes()).padStart(2, '0')}`;
+  }
+
+  private async safeGetEmployeeName(employeeId: string): Promise<string> {
+    try {
+      const employee = await this.prisma.employee.findUnique({
+        where: { employeeId },
+        select: { name: true },
+      });
+      return employee?.name || employeeId;
+    } catch {
+      return employeeId;
+    }
+  }
+
+  private async emitAttendanceRealtime(
+    record: { id: string; employeeId: string; type: string; timestamp: Date; date: string; source?: string | null },
+    action: 'created' | 'updated',
+  ) {
+    try {
+      const employeeName = await this.safeGetEmployeeName(record.employeeId);
+      const type = record.type.toUpperCase() === 'OUT' ? 'OUT' : 'IN';
+      const arabicAction = action === 'updated' ? 'تحديث' : 'تسجيل';
+      const arabicMovement = type === 'IN' ? 'دخول' : 'خروج';
+
+      this.realtimeGateway.emitAttendanceUpdate({
+        employeeId: record.employeeId,
+        employeeName,
+        type,
+        timestamp: record.timestamp.toISOString(),
+        date: record.date,
+        time: this.toTimeHHmm(record.timestamp),
+        source: 'biometric',
+        status: 'success',
+        action,
+        message: `تم ${arabicAction} ${arabicMovement} ${employeeName}`,
+      });
+    } catch {
+      // Realtime emission failures must never block attendance writes
+    }
   }
 
   private deriveDateKey(timestampInput: string, parsed: Date) {
@@ -408,6 +453,7 @@ export class AttendanceService {
     });
 
     await this.invalidateAttendanceDashboardCaches();
+    await this.emitAttendanceRealtime(record, 'created');
 
     return { message: 'Attendance record created successfully', record };
   }
@@ -455,7 +501,7 @@ export class AttendanceService {
       }
 
       try {
-        await this.prisma.attendanceRecord.create({
+        const created = await this.prisma.attendanceRecord.create({
           data: {
             employeeId: row.employeeId,
             timestamp: parsedTimestamp,
@@ -470,6 +516,7 @@ export class AttendanceService {
         });
 
         importedRows += 1;
+        await this.emitAttendanceRealtime(created, 'created');
       } catch (error) {
         errors.push({
           row: rowNumber,
@@ -563,6 +610,7 @@ export class AttendanceService {
     });
 
     await this.invalidateAttendanceDashboardCaches();
+    await this.emitAttendanceRealtime(updated, 'updated');
 
     return { message: 'Attendance record updated successfully', record: updated };
   }
