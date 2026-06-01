@@ -111,9 +111,17 @@ export class DiscountsService {
     };
   }
 
-  async remove(id: string, kind: DiscountKind, deletedBy?: string) {
+  async remove(id: string, kind?: DiscountKind, deletedBy?: string) {
     if (!kind) {
-      throw new BadRequestException('kind is required');
+      const advance = await this.advancesService.getById(id).catch(() => null);
+      if (advance) {
+        return this.advancesService.remove(id, deletedBy);
+      }
+      const bonus = await this.bonusesService.getById(id).catch(() => null);
+      if (bonus) {
+        return this.bonusesService.remove(id);
+      }
+      throw new BadRequestException('Record not found');
     }
 
     if (kind === DiscountKind.ADVANCE) {
