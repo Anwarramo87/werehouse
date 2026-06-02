@@ -1,12 +1,43 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 
+const GRACE_PERIOD_MINUTES = 15;
+const DEFAULT_SCHEDULED_START = '08:00';
+
 @Injectable()
 export class DashboardService {
   constructor(private readonly prisma: PrismaService) {}
 
   private todayKey(): string {
     return new Date().toISOString().slice(0, 10);
+  }
+
+  /** تحويل HH:mm إلى إجمالي دقائق منذ منتصف الليل */
+  private parseClockMinutes(time: string): number {
+    const match = /^(\d{1,2}):(\d{2})$/.exec((time ?? DEFAULT_SCHEDULED_START).slice(0, 5));
+    if (!match) return 8 * 60; // افتراضي 08:00
+    return Number(match[1]) * 60 + Number(match[2]);
+  }
+
+  /**
+   * حساب دقائق التأخير مقارنةً بوقت البداية المجدول.
+   * يعتمد على shiftPair.minutesLate إن كان محسوباً، وإلا يحسب من الوقت الفعلي.
+   * يطرح grace period قبل الإرجاع لأن المطلوب هو التأخير الفعلي بعد المهلة.
+   */
+  private calcMinutesLate(
+    checkInTimestamp: Date,
+    scheduledStart: string | null,
+    shiftPairMinutesLate?: number | null,
+  ): number {
+    // إذا كان shiftPair يحمل قيمة محسوبة مسبقاً نستخدمها مباشرة
+    if (typeof shiftPairMinutesLate === 'number' && Number.isFinite(shiftPairMinutesLate) && shiftPairMinutesLate > 0) {
+      return Math.max(0, Math.floor(shiftPairMinutesLate) - GRACE_PERIOD_MINUTES);
+    }
+
+    const scheduled = this.parseClockMinutes(scheduledStart ?? DEFAULT_SCHEDULED_START);
+    const actual = checkInTimestamp.getHours() * 60 + checkInTimestamp.getMinutes();
+    const diff = actual - scheduled;
+    return diff > GRACE_PERIOD_MINUTES ? diff - GRACE_PERIOD_MINUTES : 0;
   }
 
   async getHomeStats() {
@@ -73,20 +104,38 @@ export class DashboardService {
     const absentEmployees: { employeeId: string; name: string }[] = [];
 
     // ─── التأخير ──────────────────────────────────────────────────────────
+    // نجمع أول IN لكل موظف مع بيانات shiftPair لحساب التأخير بدقة
     type LateEntry = { employeeId: string; name: string; minutesLate: number };
-    const lateEmployees: LateEntry[] = [];
-    let totalLateMinutes = 0;
+    const firstInMap = new Map<string, {
+      timestamp: Date;
+      scheduledStart: string | null;
+      shiftPairMinutesLate: number | null;
+      name: string;
+    }>();
 
     for (const rec of todayAttendanceRecords) {
       if (rec.type !== 'IN') continue;
-      const shiftPair = rec.shiftPair as Record<string, unknown> | null;
-      const minutesLate = Number(shiftPair?.minutesLate ?? 0);
+      if (firstInMap.has(rec.employeeId)) continue; // نحتفظ بأول IN فقط
+      const sp = rec.shiftPair as Record<string, unknown> | null;
+      firstInMap.set(rec.employeeId, {
+        timestamp: rec.timestamp,
+        scheduledStart: rec.employee.scheduledStart ?? null,
+        shiftPairMinutesLate: sp?.minutesLate != null ? Number(sp.minutesLate) : null,
+        name: rec.employee.name,
+      });
+    }
+
+    const lateEmployees: LateEntry[] = [];
+    let totalLateMinutes = 0;
+
+    for (const [employeeId, info] of firstInMap) {
+      const minutesLate = this.calcMinutesLate(
+        info.timestamp,
+        info.scheduledStart,
+        info.shiftPairMinutesLate,
+      );
       if (minutesLate > 0) {
-        lateEmployees.push({
-          employeeId: rec.employeeId,
-          name: rec.employee.name,
-          minutesLate,
-        });
+        lateEmployees.push({ employeeId, name: info.name, minutesLate });
         totalLateMinutes += minutesLate;
       }
     }

@@ -976,73 +976,227 @@ export class AttendanceService {
     const {
       periodStart,
       periodEnd,
-      gracePeriodMinutes = 15,
-      workDaysInPeriod = 26,
-      hoursPerDay = 8,
+      // القيم الافتراضية من الـ input — تُستخدم فقط إذا لم يوجد إعداد على الموظف نفسه
+      gracePeriodMinutes: inputGracePeriod = 15,
+      workDaysInPeriod: inputWorkDays = 26,
+      hoursPerDay: inputHoursPerDay = 8,
       employeeId,
     } = input;
 
-    // الحصول على جميع الموظفين أو موظف محدد
+    if (!periodStart || !periodEnd) {
+      throw new BadRequestException('periodStart and periodEnd are required');
+    }
+
+    if (periodStart > periodEnd) {
+      throw new BadRequestException('periodStart must be before or equal to periodEnd');
+    }
+
+    // نحسب عدد أيام العمل الفعلية في الفترة المطلوبة
+    // (الأيام من periodStart حتى اليوم الحالي أو periodEnd أيهما أقل)
+    // هذا يحل مشكلة "الشهر لم ينته بعد" حيث لا يمكن محاسبة الموظف على أيام لم تحدث بعد
+    const today = new Date().toISOString().slice(0, 10);
+    const effectivePeriodEnd = periodEnd < today ? periodEnd : today;
+
+    // حساب عدد أيام العمل الفعلية في الفترة (استثناء الجمعة/السبت حسب الإعداد)
+    // مبدئياً نحسب الأيام التقويمية ونفترض 5 أيام عمل أسبوعياً
+    const calcWorkingDays = (start: string, end: string): number => {
+      const startDate = new Date(`${start}T00:00:00Z`);
+      const endDate = new Date(`${end}T00:00:00Z`);
+      let count = 0;
+      const cur = new Date(startDate);
+      while (cur <= endDate) {
+        const day = cur.getUTCDay(); // 0=Sunday, 5=Friday, 6=Saturday
+        if (day !== 5 && day !== 6) count++; // استثناء الجمعة والسبت
+        cur.setUTCDate(cur.getUTCDate() + 1);
+      }
+      return count;
+    };
+
+    // عدد أيام العمل المتاحة فعلاً حتى اليوم في الفترة المطلوبة
+    const elapsedWorkDays = calcWorkingDays(periodStart, effectivePeriodEnd);
+
+    // الحصول على جميع الموظفين النشطين أو موظف محدد
+    // نجلب إعدادات كل موظف من الـ DB مباشرة
+    const employeeSelect = {
+      employeeId: true,
+      name: true,
+      hourlyRate: true,
+      baseSalary: true,
+      scheduledStart: true,
+      workDaysInPeriod: true,
+      hoursPerDay: true,
+      gracePeriodMinutes: true,
+    } as const;
+
     const employees = employeeId
       ? [await this.prisma.employee.findUnique({
           where: { employeeId },
-          select: { employeeId: true, name: true, hourlyRate: true, baseSalary: true },
+          select: employeeSelect,
         })]
       : await this.prisma.employee.findMany({
           where: { status: 'active' },
-          select: { employeeId: true, name: true, hourlyRate: true, baseSalary: true },
+          select: employeeSelect,
         });
 
     if (!employees.length) {
       throw new BadRequestException('No active employees found');
     }
 
-    const breakdowns: any[] = [];
+    // جلب جميع سجلات الحضور للفترة دفعة واحدة لتحسين الأداء
+    const allRecords = await this.prisma.attendanceRecord.findMany({
+      where: {
+        ...(employeeId ? { employeeId } : {}),
+        date: { gte: periodStart, lte: effectivePeriodEnd },
+      },
+      orderBy: [{ date: 'asc' }, { timestamp: 'asc' }],
+      select: {
+        employeeId: true,
+        date: true,
+        type: true,
+        timestamp: true,
+        shiftPair: true,
+      },
+    });
+
+    // تجميع السجلات حسب الموظف
+    const recordsByEmployee = new Map<string, typeof allRecords>();
+    for (const record of allRecords) {
+      const existing = recordsByEmployee.get(record.employeeId) || [];
+      existing.push(record);
+      recordsByEmployee.set(record.employeeId, existing);
+    }
+
+    const breakdowns: Array<{
+      employeeId: string;
+      employeeName: string;
+      presentDays: number;
+      absentDays: number;
+      absenceDeduction: number;
+      delayMinutes: number;
+      delayDeduction: number;
+      totalAttendanceDeduction: number;
+      elapsedWorkDays: number;
+      periodStart: string;
+      periodEnd: string;
+    }> = [];
+
     let totalAbsenceDeduction = 0;
     let totalDelayDeduction = 0;
 
     for (const employee of employees) {
       if (!employee) continue;
 
-      const records = await this.prisma.attendanceRecord.findMany({
-        where: {
-          employeeId: employee.employeeId,
-          date: { gte: periodStart, lte: periodEnd },
-        },
-        orderBy: [{ date: 'asc' }, { timestamp: 'asc' }],
-      });
+      const records = recordsByEmployee.get(employee.employeeId) || [];
 
-      // حساب أيام الغياب ودقائق التأخير
-      const uniqueDates = new Set(records.map((r) => r.date));
-      const targetWorkDays = workDaysInPeriod;
-      const presentDays = uniqueDates.size;
-      const absentDays = Math.max(0, targetWorkDays - presentDays);
+      // إعدادات الموظف الخاصة — تُقدَّم على القيم الافتراضية
+      const empWorkDays: number = employee.workDaysInPeriod ?? inputWorkDays;
+      const empHoursPerDay: number = employee.hoursPerDay ?? inputHoursPerDay;
+      const empGracePeriod: number = employee.gracePeriodMinutes ?? inputGracePeriod;
+
+      // ── حساب أيام الحضور الفعلية ─────────────────────────────────────────
+      // نحسب الأيام الفريدة التي وُجد فيها سجل IN
+      const datesWithCheckIn = new Set(
+        records.filter((r) => r.type.toUpperCase() === 'IN').map((r) => r.date)
+      );
+      const presentDays = datesWithCheckIn.size;
+
+      // أيام الغياب = أيام العمل المنقضية - أيام الحضور الفعلية
+      // نستخدم elapsedWorkDays بدلاً من workDaysInPeriod لأن الشهر قد لا يكون منتهياً
+      const absentDays = Math.max(0, elapsedWorkDays - presentDays);
+
+      // ── حساب دقائق التأخير الشهرية ───────────────────────────────────────
+      // نأخذ أول IN لكل يوم ونقارنه بـ scheduledStart الخاص بالموظف
+      const scheduledStart = employee.scheduledStart || '08:00';
+      const [schH, schM] = scheduledStart.split(':').map(Number);
+      const scheduledMinutes = (schH || 8) * 60 + (schM || 0);
+
+      // أول IN لكل يوم
+      const firstInByDate = new Map<string, { timestamp: Date; shiftPairMinutesLate: number | null; date: string }>();
+      for (const record of records) {
+        if (record.type.toUpperCase() !== 'IN') continue;
+        if (firstInByDate.has(record.date)) continue;
+        const sp = record.shiftPair as Record<string, unknown> | null;
+        const spLate = sp?.minutesLate != null ? Number(sp.minutesLate) : null;
+        firstInByDate.set(record.date, {
+          timestamp: record.timestamp,
+          date: record.date,
+          shiftPairMinutesLate: Number.isFinite(spLate) ? (spLate as number) : null,
+        });
+      }
 
       let totalDelayMinutes = 0;
-      records.forEach((record) => {
-        const minutesLate = this.extractMinutesLate(record.shiftPair);
-        if (minutesLate && minutesLate > gracePeriodMinutes) {
-          totalDelayMinutes += minutesLate - gracePeriodMinutes;
+      for (const { timestamp, shiftPairMinutesLate, date } of firstInByDate.values()) {
+        let rawLate: number;
+        if (shiftPairMinutesLate !== null && shiftPairMinutesLate > 0) {
+          // إذا حسب جهاز البصمة التأخير وخزّنه في shiftPair نستخدمه مباشرة
+          rawLate = shiftPairMinutesLate;
+        } else {
+          // الفرونت يُرسل: "2026-06-02T08:30:00+03:00"
+          // Prisma يخزّن: timestamp = 2026-06-02T05:30:00.000Z (UTC)
+          //              date = "2026-06-02" (التاريخ المحلي)
+          //
+          // لاستخراج الوقت المحلي الفعلي:
+          // بداية اليوم المحلي = date + "T00:00:00Z" = 2026-06-02T00:00:00Z
+          // فرق الـ timestamp عن بداية اليوم بالدقائق = دقائق منذ منتصف الليل المحلي
+          // مثال: 2026-06-02T05:30:00Z - 2026-06-02T00:00:00Z = 330 دقيقة
+          // لكن الوقت الفعلي 08:30 = 510 دقيقة
+          //
+          // المشكلة: date هو التاريخ المحلي لكن الـ timestamp UTC يحتوي الوقت المنقوص منه الـ offset
+          // إذن: دقائق الوقت المحلي = (timestamp_ms - date_start_UTC_ms) / 60000
+          // هذا يعطي الوقت المحلي فقط إذا كان date = localDate وليس UTC date
+          //
+          // الفرونت يُرسل timezone offset → الـ date المخزّن هو التاريخ المحلي
+          // مثال: 08:30+03:00 → UTC=05:30 → date="2026-06-02" (صحيح محلياً)
+          // date_start_UTC = "2026-06-02T00:00:00Z" = منتصف ليل UTC = 03:00 صباح محلي
+          // timestamp_UTC = 05:30 UTC
+          // الفرق = 5*60+30 - 0 = 330 دقيقة ≠ 510 (الوقت المحلي الفعلي)
+          //
+          // الحل الصحيح: نستخدم ISO string الأصلي للـ timestamp الذي يُمثّل UTC
+          // ونُضيف الـ offset المتوقع من خلال مقارنة date مع UTC date
+          // إذا date > utcDate → offset موجب
+          // minutesSinceMidnight_LOCAL = minutesSinceMidnight_UTC + offsetMinutes
+          const timestampMs = timestamp.getTime();
+          const utcDate = timestamp.toISOString().slice(0, 10); // YYYY-MM-DD بتوقيت UTC
+          // حساب الـ offset من فرق التاريخ المحلي (date) عن UTC date
+          // إذا date == utcDate → offset بين -12h و +12h في نفس اليوم
+          // إذا date > utcDate → timezone موجب (مثل +3، المستخدم في يوم تالٍ عن UTC)
+          // إذا date < utcDate → timezone سالب
+          const localDateMs = new Date(`${date}T00:00:00Z`).getTime();
+          const utcDateMs = new Date(`${utcDate}T00:00:00Z`).getTime();
+          const dateDiffMinutes = (localDateMs - utcDateMs) / 60000; // فرق الأيام بالدقائق (0 أو ±1440)
+          const utcMinutes = timestamp.getUTCHours() * 60 + timestamp.getUTCMinutes();
+          const localMinutes = utcMinutes + dateDiffMinutes;
+          // نُضيف تعديل: إذا كان localMinutes خارج نطاق 0-1440 نُصحّح
+          const actualMinutes = ((localMinutes % 1440) + 1440) % 1440;
+          rawLate = Math.max(0, actualMinutes - scheduledMinutes);
         }
-      });
+        // طرح فترة السماح الخاصة بالموظف
+        const effectiveLate = rawLate > empGracePeriod ? rawLate - empGracePeriod : 0;
+        totalDelayMinutes += effectiveLate;
+      }
 
-      // حساب الخصومات
+      // ── حساب الخصومات المالية ─────────────────────────────────────────────
       const hourlyRate = employee.hourlyRate ? Number(employee.hourlyRate) : 0;
       const baseSalary = employee.baseSalary ? Number(employee.baseSalary) : 0;
-      const effectiveHourlyRate = hourlyRate || (baseSalary ? baseSalary / (workDaysInPeriod * hoursPerDay) : 0);
-      const dailyRate = effectiveHourlyRate * hoursPerDay || 0;
-      const minuteRate = dailyRate / (hoursPerDay * 60);
+      // معدل الساعة الفعلي — يُحسب من hourlyRate أو من baseSalary
+      const effectiveHourlyRate =
+        hourlyRate || (baseSalary > 0 ? baseSalary / (empWorkDays * empHoursPerDay) : 0);
+      const dailyRate = effectiveHourlyRate * empHoursPerDay;
+      const minuteRate = dailyRate / (empHoursPerDay * 60);
+
       const absenceDeduction = absentDays * dailyRate;
       const delayDeduction = totalDelayMinutes * minuteRate;
 
       const breakdown = {
         employeeId: employee.employeeId,
         employeeName: employee.name,
+        presentDays,
         absentDays,
         absenceDeduction: Math.round(absenceDeduction * 100) / 100,
         delayMinutes: totalDelayMinutes,
         delayDeduction: Math.round(delayDeduction * 100) / 100,
         totalAttendanceDeduction: Math.round((absenceDeduction + delayDeduction) * 100) / 100,
+        elapsedWorkDays, // عدد أيام العمل التي مضت فعلاً في الفترة
         periodStart,
         periodEnd,
       };
@@ -1059,6 +1213,8 @@ export class AttendanceService {
         totalAbsenceDeduction: Math.round(totalAbsenceDeduction * 100) / 100,
         totalDelayDeduction: Math.round(totalDelayDeduction * 100) / 100,
         totalAttendanceDeduction: Math.round((totalAbsenceDeduction + totalDelayDeduction) * 100) / 100,
+        elapsedWorkDays,
+        effectivePeriodEnd,
       },
     };
   }
