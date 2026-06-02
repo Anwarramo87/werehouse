@@ -557,14 +557,14 @@ model BusPassenger {
 // ---------------------------------------------------------------------------
 model TerminationRecord {
   id              String   @id @default(uuid()) @db.Uuid
-  employeeId      String   @map("employee_id")
-  terminationDate DateTime @map("termination_date") @db.Date
-  terminationType String   @map("termination_type") // resignation | termination
+  employeeId      String   
+  terminationDate DateTime @db.Date
+  terminationType String   
   reason          String
   notes           String?
-  processedBy     String   @map("processed_by")
-  createdAt       DateTime @default(now()) @map("created_at")
-  updatedAt       DateTime @updatedAt @map("updated_at")
+  processedBy     String   
+  createdAt       DateTime @default(now()) 
+  updatedAt       DateTime @updatedAt 
 
   // Relations
   rehireRecords RehireRecord[] @relation("TerminationToRehire")
@@ -579,17 +579,17 @@ model TerminationRecord {
 
 model FinancialSettlement {
   id                String   @id @default(uuid()) @db.Uuid
-  employeeId        String   @map("employee_id")
-  settlementDate    DateTime @map("settlement_date") @db.Date
-  processedBy       String   @map("processed_by")
-  finalSalaryAmount Decimal  @map("final_salary_amount") @db.Decimal(14, 2)
+  employeeId        String   
+  settlementDate    DateTime @db.Date
+  processedBy       String   
+  finalSalaryAmount Decimal  @db.Decimal(14, 2)
   deductions        Decimal  @default(0) @db.Decimal(14, 2)
   bonuses           Decimal  @default(0) @db.Decimal(14, 2)
-  totalSettlement   Decimal  @map("total_settlement") @db.Decimal(14, 2)
+  totalSettlement   Decimal  @db.Decimal(14, 2)
   status            String   @default("completed") // pending | completed
   notes             String?
-  createdAt         DateTime @default(now()) @map("created_at")
-  updatedAt         DateTime @updatedAt @map("updated_at")
+  createdAt         DateTime @default(now()) 
+  updatedAt         DateTime @updatedAt 
 
   @@index([employeeId])
   @@index([settlementDate])
@@ -601,13 +601,13 @@ model FinancialSettlement {
 
 model RehireRecord {
   id                    String   @id @default(uuid()) @db.Uuid
-  employeeId            String   @map("employee_id")
-  rehireDate            DateTime @map("rehire_date") @db.Date
-  processedBy           String   @map("processed_by")
-  previousTerminationId String?  @map("previous_termination_id") @db.Uuid
+  employeeId            String   
+  rehireDate            DateTime @db.Date
+  processedBy           String   
+  previousTerminationId String?  @db.Uuid
   notes                 String?
-  createdAt             DateTime @default(now()) @map("created_at")
-  updatedAt             DateTime @updatedAt @map("updated_at")
+  createdAt             DateTime @default(now()) 
+  updatedAt             DateTime @updatedAt 
 
   // Relations
   previousTermination TerminationRecord? @relation("TerminationToRehire", fields: [previousTerminationId], references: [id], onDelete: SetNull)
