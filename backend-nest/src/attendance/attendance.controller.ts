@@ -76,7 +76,7 @@ export class AttendanceController {
   }
 
   @Post('calculate-deductions')
-  @Permissions('view_payroll')
+  @Permissions('view_attendance', 'view_payroll')
   calculateDeductions(@Body() dto: CalculateDeductionsDto) {
     return this.attendanceService.calculateDeductions(dto);
   }

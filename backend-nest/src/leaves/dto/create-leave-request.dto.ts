@@ -1,12 +1,17 @@
 import {
+  IsArray,
   IsBoolean,
   IsDateString,
   IsEnum,
   IsOptional,
   IsString,
-  MaxLength,
   Matches,
+  MaxLength,
+  ArrayMinSize,
+  ArrayMaxSize,
+  ValidateNested,
 } from 'class-validator';
+import { Type } from 'class-transformer';
 
 export enum LeaveRequestTypeDto {
   PAID = 'PAID',
@@ -23,6 +28,8 @@ export enum LeaveRequestStatusDto {
   REJECTED = 'REJECTED',
   CANCELLED = 'CANCELLED',
 }
+
+const TIME_HH_MM_REGEX = /^([01]\d|2[0-3]):([0-5]\d)$/;
 
 export class CreateLeaveRequestDto {
   @IsString()
@@ -55,4 +62,33 @@ export class CreateLeaveRequestDto {
   @IsString()
   @MaxLength(2000)
   notes?: string;
+
+  // ── حقول الإجازة الساعية ──────────────────────────────────────────────────
+  @IsOptional()
+  @IsBoolean()
+  isHourly?: boolean;
+
+  @IsOptional()
+  @IsString()
+  @Matches(TIME_HH_MM_REGEX, { message: 'startTime must be HH:mm format' })
+  startTime?: string;
+
+  @IsOptional()
+  @IsString()
+  @Matches(TIME_HH_MM_REGEX, { message: 'endTime must be HH:mm format' })
+  endTime?: string;
+}
+
+// ── Bulk Create DTO ──────────────────────────────────────────────────────────
+export const BULK_LEAVE_REQUEST_MAX_ITEMS = 500;
+
+export class BulkCreateLeaveRequestDto {
+  @IsArray()
+  @ArrayMinSize(1)
+  @ArrayMaxSize(BULK_LEAVE_REQUEST_MAX_ITEMS, {
+    message: `لا يمكن إرسال أكثر من ${BULK_LEAVE_REQUEST_MAX_ITEMS} طلب إجازة دفعة واحدة`,
+  })
+  @ValidateNested({ each: true })
+  @Type(() => CreateLeaveRequestDto)
+  items: CreateLeaveRequestDto[];
 }

@@ -7,48 +7,47 @@ datasource db {
 }
 
 model Role {
-  id          String   @id @default(uuid()) @db.Uuid
-  name        String   @unique
+  id          String     @id @default(uuid()) @db.Uuid
+  name        String     @unique
   description String?
-  permissions String[] @default([])
+  permissions String[]   @default([])
   users       User[]
   employees   Employee[]
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
 
   @@map("roles")
 }
 
 model User {
-  id           String   @id @default(uuid()) @db.Uuid
-  username     String   @unique
-  email        String?  @unique
-  passwordHash String
-  roleId       String   @db.Uuid
-  role         Role     @relation(fields: [roleId], references: [id], onDelete: Restrict)
-  status       String   @default("active")
-  failedLoginAttempts Int @default(0)
-  lockoutUntil DateTime?
-  lastLogin    DateTime?
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
-  employee     Employee?
+  id                   String                @id @default(uuid()) @db.Uuid
+  username             String                @unique
+  email                String?               @unique
+  passwordHash         String
+  roleId               String                @db.Uuid
+  role                 Role                  @relation(fields: [roleId], references: [id], onDelete: Restrict)
+  status               String                @default("active")
+  failedLoginAttempts  Int                   @default(0)
+  lockoutUntil         DateTime?
+  lastLogin            DateTime?
+  createdAt            DateTime              @default(now())
+  updatedAt            DateTime              @updatedAt
+  employee             Employee?
   biometricCredentials BiometricCredential[]
 
   @@index([lockoutUntil])
   @@map("users")
 }
 
-
 model BiometricCredential {
-  id                 String   @id @default(uuid()) @db.Uuid
-  keyId              String
-  userId             String   @db.Uuid
-  user               User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  publicKeyDer       Bytes
-  deviceName         String?
-  createdAt          DateTime @default(now())
-  revokedAt          DateTime?
+  id           String    @id @default(uuid()) @db.Uuid
+  keyId        String
+  userId       String    @db.Uuid
+  user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  publicKeyDer Bytes
+  deviceName   String?
+  createdAt    DateTime  @default(now())
+  revokedAt    DateTime?
 
   @@unique([userId, keyId])
   @@map("biometric_credentials")
@@ -69,40 +68,46 @@ model Employee {
   profession     String?
   hourlyRate     Decimal  @db.Decimal(10, 2)
   dailyRate      Decimal? @db.Decimal(10, 2)
-  baseSalary     Decimal? @db.Decimal(14, 2)
-  livingAllowance Decimal? @db.Decimal(14, 2)
-  currency       String   @default("SYP")
-  scheduledStart String?
-  scheduledEnd   String?
-  employmentStartDate DateTime? @db.Date
-  terminationDate DateTime? @db.Date
-  terminationReason String?
+  baseSalary                Decimal?             @db.Decimal(14, 2)
+  livingAllowance           Decimal?             @db.Decimal(14, 2)
+  currency                  String               @default("SYP")
+  scheduledStart            String?
+  scheduledEnd              String?
+  employmentStartDate       DateTime?            @db.Date
+  terminationDate           DateTime?            @db.Date
+  terminationType           String? // resignation | termination
+  terminationReason         String?
   terminationType String?
   terminationNotes String?
-  isSettled      Boolean @default(false)
+  terminationNotes          String?
+  financialSettlementStatus String               @default("pending") // pending | completed
+  financialSettlementDate   DateTime?            @db.Date
+  rehireDate                DateTime?            @db.Date
+  isSettled                 Boolean              @default(false)
+  isFinanciallySettled      Boolean              @default(false)
   financialSettlementStatus String @default("pending")
   financialSettlementDate DateTime? @db.Date
   rehireDate     DateTime? @db.Date
   isFinanciallySettled Boolean @default(false)
-  department     String   @default("Warehouse")
-  departmentId   String?  @db.Uuid
-  departmentEntity Department? @relation(fields: [departmentId], references: [id], onDelete: SetNull)
-  roleId         String?  @db.Uuid
-  role           Role?    @relation(fields: [roleId], references: [id], onDelete: SetNull)
-  status         String   @default("active")
-  workDaysInPeriod Int @default(26)
-  hoursPerDay Int @default(8)
-  overtimeCalculation Json?
-  gracePeriodMinutes Int @default(15)
-  attendanceRecords AttendanceRecord[]
-  dailyAttendanceLogs DailyAttendanceLog[] @relation("DailyAttendanceLogs")
-  advances       EmployeeAdvance[]
-  leaveRequests  LeaveRequest[]
+  department                String               @default("Warehouse")
+  departmentId              String?              @db.Uuid
+  departmentEntity          Department?          @relation(fields: [departmentId], references: [id], onDelete: SetNull)
+  roleId                    String?              @db.Uuid
+  role                      Role?                @relation(fields: [roleId], references: [id], onDelete: SetNull)
+  status                    String               @default("active")
+  workDaysInPeriod          Int                  @default(26)
+  hoursPerDay               Int                  @default(8)
+  overtimeCalculation       Json?
+  gracePeriodMinutes        Int                  @default(15)
+  attendanceRecords         AttendanceRecord[]
+  dailyAttendanceLogs       DailyAttendanceLog[] @relation("DailyAttendanceLogs")
+  advances                  EmployeeAdvance[]
+  leaveRequests             LeaveRequest[]
   terminationRecords TerminationRecord[]
   financialSettlements FinancialSettlement[]
   rehireRecords RehireRecord[]
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  createdAt                 DateTime             @default(now())
+  updatedAt                 DateTime             @updatedAt
 
   @@index([status])
   @@index([name])
@@ -112,24 +117,18 @@ model Employee {
   @@index([departmentId])
   @@index([status, createdAt])
   @@index([department, status, createdAt])
-  @@index([terminationDate])
-  @@index([terminationType])
-  @@index([financialSettlementStatus])
-  @@index([status, terminationDate])
-  @@index([financialSettlementStatus, financialSettlementDate])
   @@map("employees")
 }
 
-
 model Department {
-  id         String    @id @default(uuid()) @db.Uuid
-  name       String    @unique
-  employees  Employee[]
-  createdAt  DateTime  @default(now())
-  updatedAt  DateTime  @updatedAt
+  id        String     @id @default(uuid()) @db.Uuid
+  name      String     @unique
+  employees Employee[]
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
 
-  @@map("departments")
   @@index([createdAt])
+  @@map("departments")
 }
 
 enum LeaveRequestType {
@@ -157,6 +156,10 @@ model LeaveRequest {
   isPaid      Boolean             @default(false)
   startDate   DateTime            @db.Date
   endDate     DateTime            @db.Date
+  // حقول الإجازة الساعية
+  isHourly    Boolean             @default(false)
+  startTime   String?             // HH:mm — وقت بداية الإجازة الساعية
+  endTime     String?             // HH:mm — وقت نهاية الإجازة الساعية
   reason      String?
   notes       String?
   createdAt   DateTime            @default(now())
@@ -170,21 +173,21 @@ model LeaveRequest {
 }
 
 model Device {
-  id        String   @id @default(uuid()) @db.Uuid
-  deviceId  String   @unique
+  id        String    @id @default(uuid()) @db.Uuid
+  deviceId  String    @unique
   name      String
   location  String
-  model     String   @default("ZK Teco")
+  model     String    @default("ZK Teco")
   ip        String?
   port      Int?
-  status    String   @default("active")
+  status    String    @default("active")
   lastSync  DateTime?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
 
-  @@map("devices")
   @@index([status, createdAt])
   @@index([location, status, createdAt])
+  @@map("devices")
 }
 
 model AttendanceRecord {
@@ -218,29 +221,29 @@ model AttendanceRecord {
 // Daily Attendance Logs — Event-based logging for audit trail & biometric integration
 // ---------------------------------------------------------------------------
 enum DailyRecordType {
-  ABSENCE              // غياب
-  DELAY_MINUTES        // تأخير بالدقائق
-  OVERTIME_MINUTES     // إضافي بالدقائق
-  PAID_LEAVE           // إجازة مدفوعة
-  UNPAID_LEAVE         // إجازة غير مدفوعة
-  SICK_LEAVE           // إجازة مرضية
-  ADMIN_LEAVE          // إجازة إدارية
-  DEATH_LEAVE          // إجازة وفاة
-  EARLY_LEAVE_MINUTES  // خروج مبكر بالدقائق
+  ABSENCE // غياب
+  DELAY_MINUTES // تأخير بالدقائق
+  OVERTIME_MINUTES // إضافي بالدقائق
+  PAID_LEAVE // إجازة مدفوعة
+  UNPAID_LEAVE // إجازة غير مدفوعة
+  SICK_LEAVE // إجازة مرضية
+  ADMIN_LEAVE // إجازة إدارية
+  DEATH_LEAVE // إجازة وفاة
+  EARLY_LEAVE_MINUTES // خروج مبكر بالدقائق
 }
 
 model DailyAttendanceLog {
-  id          String          @id @default(uuid()) @db.Uuid
-  employeeId  String
-  employee    Employee        @relation("DailyAttendanceLogs", fields: [employeeId], references: [employeeId], onDelete: Cascade)
-  date        DateTime        @db.Date
-  recordType  DailyRecordType
-  value       Decimal         @db.Decimal(10, 2) // e.g., 1 (for 1 day) or 120 (for 120 minutes)
-  notes       String?         @db.Text
-  source      String          @default("manual") // manual | biometric | calculated
-  createdBy   String?
-  createdAt   DateTime        @default(now())
-  updatedAt   DateTime        @updatedAt
+  id         String          @id @default(uuid()) @db.Uuid
+  employeeId String
+  employee   Employee        @relation("DailyAttendanceLogs", fields: [employeeId], references: [employeeId], onDelete: Cascade)
+  date       DateTime        @db.Date
+  recordType DailyRecordType
+  value      Decimal         @db.Decimal(10, 2) // e.g., 1 (for 1 day) or 120 (for 120 minutes)
+  notes      String?         @db.Text
+  source     String          @default("manual") // manual | biometric | calculated
+  createdBy  String?
+  createdAt  DateTime        @default(now())
+  updatedAt  DateTime        @updatedAt
 
   @@index([employeeId, date])
   @@index([date])
@@ -250,16 +253,16 @@ model DailyAttendanceLog {
 }
 
 model Product {
-  id           String       @id @default(uuid()) @db.Uuid
-  sku          String       @unique
+  id           String   @id @default(uuid()) @db.Uuid
+  sku          String   @unique
   name         String
   category     String
-  unitPrice    Decimal      @db.Decimal(12, 2)
-  costPrice    Decimal      @db.Decimal(12, 2)
-  reorderLevel Int          @default(10)
-  status       String       @default("active")
-  createdAt    DateTime     @default(now())
-  updatedAt    DateTime     @updatedAt
+  unitPrice    Decimal  @db.Decimal(12, 2)
+  costPrice    Decimal  @db.Decimal(12, 2)
+  reorderLevel Int      @default(10)
+  status       String   @default("active")
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
 
   stockLevels StockLevel[]
 
@@ -307,24 +310,24 @@ model ImportJob {
 }
 
 model PayrollRun {
-  id               String      @id @default(uuid()) @db.Uuid
-  runId            String      @unique
-  periodStart      DateTime    @db.Date
-  periodEnd        DateTime    @db.Date
-  periodType       String      @default("monthly")
-  runDate          DateTime    @default(now())
-  runBy            String?
-  status           String      @default("draft")
-  approvalStatus   String      @default("pending")
-  approvedBy       String?
-  approvalDate     DateTime?
-  totalEmployees   Int         @default(0)
-  totalGrossPay    Decimal     @default(0) @db.Decimal(14, 2)
-  totalDeductions  Decimal     @default(0) @db.Decimal(14, 2)
-  totalNetPay      Decimal     @default(0) @db.Decimal(14, 2)
-  currency         String      @default("SYP")
-  notes            String?
-  items            PayrollItem[]
+  id              String        @id @default(uuid()) @db.Uuid
+  runId           String        @unique
+  periodStart     DateTime      @db.Date
+  periodEnd       DateTime      @db.Date
+  periodType      String        @default("monthly")
+  runDate         DateTime      @default(now())
+  runBy           String?
+  status          String        @default("draft")
+  approvalStatus  String        @default("pending")
+  approvedBy      String?
+  approvalDate    DateTime?
+  totalEmployees  Int           @default(0)
+  totalGrossPay   Decimal       @default(0) @db.Decimal(14, 2)
+  totalDeductions Decimal       @default(0) @db.Decimal(14, 2)
+  totalNetPay     Decimal       @default(0) @db.Decimal(14, 2)
+  currency        String        @default("SYP")
+  notes           String?
+  items           PayrollItem[]
 
   @@index([runDate])
   @@index([status, runDate])
@@ -335,22 +338,22 @@ model PayrollRun {
 }
 
 model PayrollItem {
-  id              String   @id @default(uuid()) @db.Uuid
-  payrollRunId    String   @db.Uuid
-  employeeId      String
-  employeeName    String
-  department      String?
-  hoursWorked     Decimal  @db.Decimal(8, 2)
-  hourlyRate      Decimal  @db.Decimal(10, 2)
-  grossPay        Decimal  @db.Decimal(14, 2)
-  totalDeductions Decimal  @db.Decimal(14, 2)
-  netPay          Decimal  @db.Decimal(14, 2)
-  netPayRounded   Decimal  @default(0) @db.Decimal(14, 2)
-  roundingDifference Decimal @default(0) @db.Decimal(14, 2)
-  netPayWithAdvance Decimal @default(0) @db.Decimal(14, 2)
-  anomalies       String[] @default([])
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  id                 String   @id @default(uuid()) @db.Uuid
+  payrollRunId       String   @db.Uuid
+  employeeId         String
+  employeeName       String
+  department         String?
+  hoursWorked        Decimal  @db.Decimal(8, 2)
+  hourlyRate         Decimal  @db.Decimal(10, 2)
+  grossPay           Decimal  @db.Decimal(14, 2)
+  totalDeductions    Decimal  @db.Decimal(14, 2)
+  netPay             Decimal  @db.Decimal(14, 2)
+  netPayRounded      Decimal  @default(0) @db.Decimal(14, 2)
+  roundingDifference Decimal  @default(0) @db.Decimal(14, 2)
+  netPayWithAdvance  Decimal  @default(0) @db.Decimal(14, 2)
+  anomalies          String[] @default([])
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
 
   run PayrollRun @relation(fields: [payrollRunId], references: [id], onDelete: Cascade)
 
@@ -363,29 +366,29 @@ model PayrollItem {
 // Payroll Inputs — per-employee values used in payroll formula
 // ---------------------------------------------------------------------------
 model PayrollInput {
-  id                    String   @id @default(uuid()) @db.Uuid
-  employeeId            String
-  periodStart           DateTime @db.Date
-  periodEnd             DateTime @db.Date
-  lateMinutes           Int      @default(0)
-  earlyLeaveMinutes     Int      @default(0)
-  absenceDays           Int      @default(0)
-  sickLeaveDays         Int      @default(0)
-  adminLeaveDays        Int      @default(0)
-  unpaidLeaveDays       Int      @default(0)
-  deathLeaveDays        Int      @default(0)
-  unpaidHours           Decimal  @default(0) @db.Decimal(8, 2)
-  overtimeRegularMinutes Int     @default(0)
-  overtimeWeekendDays   Decimal  @default(0) @db.Decimal(6, 2)
-  penaltyAmount         Decimal  @default(0) @db.Decimal(14, 2)
-  clothingDeduction     Decimal  @default(0) @db.Decimal(14, 2)
-  bonusAdjustment       Decimal  @default(0) @db.Decimal(14, 2)
-  advanceAmount         Decimal  @default(0) @db.Decimal(14, 2)
-  insuranceAmount       Decimal? @db.Decimal(14, 2)
+  id                         String   @id @default(uuid()) @db.Uuid
+  employeeId                 String
+  periodStart                DateTime @db.Date
+  periodEnd                  DateTime @db.Date
+  lateMinutes                Int      @default(0)
+  earlyLeaveMinutes          Int      @default(0)
+  absenceDays                Int      @default(0)
+  sickLeaveDays              Int      @default(0)
+  adminLeaveDays             Int      @default(0)
+  unpaidLeaveDays            Int      @default(0)
+  deathLeaveDays             Int      @default(0)
+  unpaidHours                Decimal  @default(0) @db.Decimal(8, 2)
+  overtimeRegularMinutes     Int      @default(0)
+  overtimeWeekendDays        Decimal  @default(0) @db.Decimal(6, 2)
+  penaltyAmount              Decimal  @default(0) @db.Decimal(14, 2)
+  clothingDeduction          Decimal  @default(0) @db.Decimal(14, 2)
+  bonusAdjustment            Decimal  @default(0) @db.Decimal(14, 2)
+  advanceAmount              Decimal  @default(0) @db.Decimal(14, 2)
+  insuranceAmount            Decimal? @db.Decimal(14, 2)
   transportAllowanceOverride Decimal? @db.Decimal(14, 2)
-  notes                 String?
-  createdAt             DateTime @default(now())
-  updatedAt             DateTime @updatedAt
+  notes                      String?
+  createdAt                  DateTime @default(now())
+  updatedAt                  DateTime @updatedAt
 
   @@unique([employeeId, periodStart, periodEnd])
   @@index([periodStart, periodEnd])
@@ -420,17 +423,17 @@ model EmployeeSalary {
 // Advances (سلف) — employee advance/loan records
 // ---------------------------------------------------------------------------
 model EmployeeAdvance {
-  id              String   @id @default(uuid()) @db.Uuid
-  employeeId      String
-  employee        Employee @relation(fields: [employeeId], references: [employeeId], onDelete: Cascade)
-  advanceType     String   @default("salary")   // salary | clothing | other
-  totalAmount     Decimal  @db.Decimal(14, 2)
-  installmentAmount Decimal @default(0) @db.Decimal(14, 2)
-  remainingAmount Decimal  @db.Decimal(14, 2)
-  notes           String?
-  issueDate       DateTime @default(now())
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  id                String   @id @default(uuid()) @db.Uuid
+  employeeId        String
+  employee          Employee @relation(fields: [employeeId], references: [employeeId], onDelete: Cascade)
+  advanceType       String   @default("salary") // salary | clothing | other
+  totalAmount       Decimal  @db.Decimal(14, 2)
+  installmentAmount Decimal  @default(0) @db.Decimal(14, 2)
+  remainingAmount   Decimal  @db.Decimal(14, 2)
+  notes             String?
+  issueDate         DateTime @default(now())
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
 
   @@index([employeeId])
   @@index([employeeId, issueDate])
@@ -439,12 +442,12 @@ model EmployeeAdvance {
 }
 
 model DeletedRecordHistory {
-  id         String   @id @default(uuid()) @db.Uuid
+  id         String    @id @default(uuid()) @db.Uuid
   entityType String
   recordId   String
   payload    Json
   deletedBy  String?
-  deletedAt  DateTime @default(now())
+  deletedAt  DateTime  @default(now())
   restoredBy String?
   restoredAt DateTime?
 
@@ -458,13 +461,13 @@ model DeletedRecordHistory {
 // Insurance (تامينات) — social insurance details per employee
 // ---------------------------------------------------------------------------
 model EmployeeInsurance {
-  id                  String   @id @default(uuid()) @db.Uuid
-  employeeId          String   @unique
-  insuranceSalary     Decimal  @db.Decimal(14, 2)
+  id                   String    @id @default(uuid()) @db.Uuid
+  employeeId           String    @unique
+  insuranceSalary      Decimal   @db.Decimal(14, 2)
   socialSecurityNumber String?
-  registrationDate    DateTime?
-  createdAt           DateTime @default(now())
-  updatedAt           DateTime @updatedAt
+  registrationDate     DateTime?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
 
   @@map("employee_insurance")
 }
@@ -478,7 +481,7 @@ model EmployeeBonus {
   bonusAmount      Decimal  @default(0) @db.Decimal(14, 2)
   bonusReason      String?
   assistanceAmount Decimal  @default(0) @db.Decimal(14, 2)
-  period           String?  // e.g. "2026-04"
+  period           String? // e.g. "2026-04"
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
 
@@ -585,18 +588,18 @@ model Bus {
 }
 
 model BusPassenger {
-  id         String   @id @default(uuid()) @db.Uuid
-  busId      String   @db.Uuid
-  bus        Bus      @relation(fields: [busId], references: [id], onDelete: Cascade)
+  id         String    @id @default(uuid()) @db.Uuid
+  busId      String    @db.Uuid
+  bus        Bus       @relation(fields: [busId], references: [id], onDelete: Cascade)
   employeeId String
   name       String?  // optional passenger name for display
   paidAmount Decimal? @db.Decimal(12, 2)  // optional amount paid
   isManual   Boolean  @default(false)  // whether amount is manually set or calculated
   joinDate   DateTime @default(now()) @db.Date
   leaveDate  DateTime? @db.Date
-  status     String   @default("active")  // active | inactive
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
+  status     String    @default("active") // active | inactive
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
 
   @@unique([busId, employeeId])
   @@index([employeeId])
@@ -644,4 +647,71 @@ model AuditLog {
   @@index([action, createdAt])
 
   @@map("audit_logs")
+}
+
+// ---------------------------------------------------------------------------
+// Employee Resignation Management — termination, settlement, and rehire records
+// ---------------------------------------------------------------------------
+model TerminationRecord {
+  id              String   @id @default(uuid()) @db.Uuid
+  employeeId      String   
+  terminationDate DateTime @db.Date
+  terminationType String   
+  reason          String
+  notes           String?
+  processedBy     String   
+  createdAt       DateTime @default(now()) 
+  updatedAt       DateTime @updatedAt 
+
+  // Relations
+  rehireRecords RehireRecord[] @relation("TerminationToRehire")
+
+  @@index([employeeId])
+  @@index([terminationDate])
+  @@index([terminationType])
+  @@index([processedBy])
+  @@index([employeeId, terminationDate])
+  @@map("termination_records")
+}
+
+model FinancialSettlement {
+  id                String   @id @default(uuid()) @db.Uuid
+  employeeId        String   
+  settlementDate    DateTime @db.Date
+  processedBy       String   
+  finalSalaryAmount Decimal  @db.Decimal(14, 2)
+  deductions        Decimal  @default(0) @db.Decimal(14, 2)
+  bonuses           Decimal  @default(0) @db.Decimal(14, 2)
+  totalSettlement   Decimal  @db.Decimal(14, 2)
+  status            String   @default("completed") // pending | completed
+  notes             String?
+  createdAt         DateTime @default(now()) 
+  updatedAt         DateTime @updatedAt 
+
+  @@index([employeeId])
+  @@index([settlementDate])
+  @@index([status])
+  @@index([processedBy])
+  @@index([employeeId, status])
+  @@map("financial_settlements")
+}
+
+model RehireRecord {
+  id                    String   @id @default(uuid()) @db.Uuid
+  employeeId            String   
+  rehireDate            DateTime @db.Date
+  processedBy           String   
+  previousTerminationId String?  @db.Uuid
+  notes                 String?
+  createdAt             DateTime @default(now()) 
+  updatedAt             DateTime @updatedAt 
+
+  // Relations
+  previousTermination TerminationRecord? @relation("TerminationToRehire", fields: [previousTerminationId], references: [id], onDelete: SetNull)
+
+  @@index([employeeId])
+  @@index([rehireDate])
+  @@index([processedBy])
+  @@index([employeeId, rehireDate])
+  @@map("rehire_records")
 }
