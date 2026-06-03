@@ -76,15 +76,19 @@ export class AuthService {
   ) {}
 
   async login(dto: LoginDto) {
-    const user = await this.prisma.user.findFirst({
-      where: {
-        OR: [
-          { username: { equals: dto.username, mode: 'insensitive' } },
-          { email: { equals: dto.username, mode: 'insensitive' } },
-        ],
-      },
+    const normalizedUsername = dto.username.trim();
+
+    let user = await this.prisma.user.findFirst({
+      where: { username: normalizedUsername },
       include: { role: true },
     });
+
+    if (!user) {
+      user = await this.prisma.user.findFirst({
+        where: { email: normalizedUsername },
+        include: { role: true },
+      });
+    }
 
     const isPasswordCorrect = user
       ? await bcrypt.compare(dto.password, user.passwordHash)
@@ -307,11 +311,9 @@ export class AuthService {
   }
 
   async ensureAdminBootstrap() {
-    const adminRole = await this.prisma.role.upsert({
-      where: { name: 'admin' },
-      update: {},
-      create: { name: 'admin', permissions: AuthService.ADMIN_PERMISSIONS },
-    });
+    const adminRole =
+      (await this.prisma.role.findUnique({ where: { name: 'admin' } })) ??
+      (await this.prisma.role.create({ data: { name: 'admin', permissions: AuthService.ADMIN_PERMISSIONS } }));
 
     const password = this.config.get<string>('ADMIN_BOOTSTRAP_PASSWORD');
     if (!password && this.config.get('NODE_ENV') === 'production') {
@@ -319,25 +321,25 @@ export class AuthService {
     }
 
     const hash = await bcrypt.hash(password || 'password123', BCRYPT_DEFAULT_ROUNDS);
-    await this.prisma.user.upsert({
-      where: { username: this.config.get('ADMIN_USERNAME', 'admin') },
-      update: {},
-      create: {
-        username: this.config.get('ADMIN_USERNAME', 'admin'),
-        email: this.config.get('ADMIN_EMAIL', 'admin@warehouse.local'),
-        passwordHash: hash,
-        roleId: adminRole.id,
-        status: 'active',
-      },
-    });
+    const adminUsername = this.config.get('ADMIN_USERNAME', 'admin');
+    const existingAdmin = await this.prisma.user.findUnique({ where: { username: adminUsername } });
+    if (!existingAdmin) {
+      await this.prisma.user.create({
+        data: {
+          username: adminUsername,
+          email: this.config.get('ADMIN_EMAIL', 'admin@warehouse.local'),
+          passwordHash: hash,
+          roleId: adminRole.id,
+          status: 'active',
+        },
+      });
+    }
   }
 
   async ensureSuperadminBootstrap() {
-    const adminRole = await this.prisma.role.upsert({
-      where: { name: 'admin' },
-      update: {},
-      create: { name: 'admin', permissions: AuthService.ADMIN_PERMISSIONS },
-    });
+    const adminRole =
+      (await this.prisma.role.findUnique({ where: { name: 'admin' } })) ??
+      (await this.prisma.role.create({ data: { name: 'admin', permissions: AuthService.ADMIN_PERMISSIONS } }));
 
     const username = this.config.get<string>('SUPERADMIN_USERNAME', 'superadmin');
     const email = this.config.get<string>('SUPERADMIN_EMAIL', 'superadmin@warehouse.local');
@@ -348,17 +350,18 @@ export class AuthService {
     }
 
     const hash = await bcrypt.hash(password || 'SuperAdmin@2026!', BCRYPT_DEFAULT_ROUNDS);
-    await this.prisma.user.upsert({
-      where: { username },
-      update: {},
-      create: {
-        username,
-        email,
-        passwordHash: hash,
-        roleId: adminRole.id,
-        status: 'active',
-      },
-    });
+    const existingSuperadmin = await this.prisma.user.findUnique({ where: { username } });
+    if (!existingSuperadmin) {
+      await this.prisma.user.create({
+        data: {
+          username,
+          email,
+          passwordHash: hash,
+          roleId: adminRole.id,
+          status: 'active',
+        },
+      });
+    }
   }
 
   private async handleAutoAttendance(user: any, dto: BiometricLoginFinishDto) {
