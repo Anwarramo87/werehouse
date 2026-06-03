@@ -8,7 +8,7 @@ import { PublicAttendanceController } from './public-attendance.controller';
 import { PrismaModule } from '../prisma/prisma.module';
 
 @Module({
-  imports: [RealtimeModulePrismaModule],
+  imports: [RealtimeModule, PrismaModule],
   controllers: [AttendanceController, DailyLogsController, PublicAttendanceController],
   providers: [AttendanceService, DailyLogsService],
   exports: [AttendanceService, DailyLogsService],
