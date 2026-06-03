@@ -57,9 +57,9 @@ src/
 
 | المستخدم | الإيميل | كلمة المرور الافتراضية |
 |---|---|---|
-| `admin` | `admin@warehouse.local` | `password123` |
-| `developer` | `developer@warehouse.local` | `DevAdmin@2026!` |
-| `superadmin` | `superadmin@warehouse.local` | `SuperAdmin@2026!` |
+| `admin` | `admin@warehouse.local` | `REPLACE_WITH_PASSWORD` |
+| `developer` | `developer@warehouse.local` | `REPLACE_WITH_PASSWORD` |
+| `superadmin` | `superadmin@warehouse.local` | `REPLACE_WITH_PASSWORD` |
 
 > هذه الحسابات تُعاد تفعيلها تلقائياً عند كل تسجيل دخول حتى لو تم تعطيلها.
 
@@ -107,7 +107,7 @@ manage_salary       manage_advances     manage_insurance    manage_bonuses
 POST /api/auth/login
 {
   "username": "superadmin",
-  "password": "SuperAdmin@2026!"
+  "password": "REPLACE_WITH_PASSWORD"
 }
 ```
 

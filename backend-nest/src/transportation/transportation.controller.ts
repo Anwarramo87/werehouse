@@ -8,6 +8,7 @@ import {
   Put,
   UseGuards,
 } from '@nestjs/common';
+import { ApiTags, ApiCookieAuth } from '@nestjs/swagger';
 import { TransportationService } from './transportation.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { PermissionsGuard } from '../common/guards/permissions.guard';
@@ -17,6 +18,8 @@ import { UpdateBusDto } from './dto/update-bus.dto';
 import { AddPassengerDto } from './dto/add-passenger.dto';
 import { CalculateDeductionsDto } from '../attendance/dto/calculate-deductions.dto';
 
+@ApiTags('transportation')
+@ApiCookieAuth()
 @Controller('transportation')
 @UseGuards(JwtAuthGuard, PermissionsGuard)
 export class TransportationController {

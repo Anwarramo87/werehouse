@@ -10,6 +10,7 @@ import {
   Query,
   UseGuards,
 } from '@nestjs/common';
+import { ApiTags, ApiCookieAuth } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { PermissionsGuard } from '../common/guards/permissions.guard';
 import { Permissions } from '../common/decorators/permissions.decorator';
@@ -19,6 +20,8 @@ import { DiscountsService } from './discounts.service';
 import { CreateDiscountDto, DiscountKind } from './dto/create-discount.dto';
 import { DiscountsListQueryDto } from './dto/discounts-list-query.dto';
 
+@ApiTags('penalties')
+@ApiCookieAuth()
 @Controller('discounts')
 @UseGuards(JwtAuthGuard, PermissionsGuard)
 export class DiscountsController {

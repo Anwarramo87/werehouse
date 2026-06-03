@@ -11,24 +11,24 @@ import { JwtStrategy } from './jwt.strategy';
 import { AuditService } from '../common/services/audit.service';
 import { TokenRevocationService } from './token-revocation.service';
 import { RealtimeModule } from '../realtime/realtime.module';
+import { PrismaModule } from '../prisma/prisma.module';
 
 @Module({
   imports: [
     ConfigModule,
-    PassportModule.register({ defaultStrategy: 'jwt' }), // تحديد الاستراتيجية الافتراضية
+    PrismaModule,
+    PassportModule.register({ defaultStrategy: 'jwt' }),
     RealtimeModule,
     JwtModule.registerAsync({
       imports: [ConfigModule],
       inject: [ConfigService],
       useFactory: (config: ConfigService) => {
-        // تأكد أن القيمة القادمة من الـ ENV مطابقة لما يتوقعه نظام JWT
         const expiresIn = config.get<string>('JWT_EXPIRE', '1h'); 
-        
         return {
           secret: config.getOrThrow<string>('JWT_SECRET'),
           signOptions: { 
             expiresIn: expiresIn as StringValue,
-            algorithm: 'HS256', // تحديد الخوارزمية لزيادة الأمان
+            algorithm: 'HS256',
           },
         };
       },
@@ -41,6 +41,6 @@ import { RealtimeModule } from '../realtime/realtime.module';
     TokenRevocationService
   ],
   controllers: [AuthController],
-  exports: [AuthService, JwtModule], // تصدير الـ AuthService لاستخدامه في موديولات أخرى إذا لزم الأمر
+  exports: [AuthService, JwtModule, AuditService],
 })
 export class AuthModule {}

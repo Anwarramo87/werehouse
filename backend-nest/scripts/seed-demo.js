@@ -83,7 +83,6 @@ async function main() {
     where: { employeeId: 'EMP900001' },
     update: {
       name: 'Demo Employee',
-      email: 'demo.employee@warehouse.local',
       hourlyRate: new Prisma.Decimal(18.5),
       currency: 'SYP',
       department: 'Warehouse',
@@ -95,7 +94,6 @@ async function main() {
     create: {
       employeeId: 'EMP900001',
       name: 'Demo Employee',
-      email: 'demo.employee@warehouse.local',
       hourlyRate: new Prisma.Decimal(18.5),
       currency: 'SYP',
       department: 'Warehouse',

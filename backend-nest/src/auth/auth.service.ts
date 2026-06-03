@@ -14,6 +14,14 @@ import { BiometricLoginStartDto } from './dto/biometric-login-start.dto';
 import { BiometricRegisterFinishDto } from './dto/biometric-register-finish.dto';
 import { BiometricRegisterStartDto } from './dto/biometric-register-start.dto';
 import { BiometricRevokeDto } from './dto/biometric-revoke.dto';
+import {
+  DEFAULT_MAX_LOGIN_ATTEMPTS,
+  DEFAULT_LOCKOUT_MINUTES,
+  BCRYPT_DEFAULT_ROUNDS,
+  BIOMETRIC_CHALLENGE_BYTES,
+  BIOMETRIC_CHALLENGE_TTL_SECONDS,
+  AUTO_REFRESH_THRESHOLD_SECONDS,
+} from '../common/constants/auth.constants';
 
 type BiometricChallengePurpose = 'REGISTER' | 'LOGIN';
 
@@ -120,7 +128,7 @@ export class AuthService {
       (await this.prisma.role.findUnique({ where: { name: 'staff' } })) ??
       (await this.prisma.role.create({ data: { name: 'staff', permissions: ['view_attendance'] } }));
 
-    const hash = await bcrypt.hash(dto.password, 10);
+    const hash = await bcrypt.hash(dto.password, BCRYPT_DEFAULT_ROUNDS);
     const user = await this.prisma.user.create({
       data: { username: dto.username, email: dto.email, passwordHash: hash, roleId: role.id },
       include: { role: true },
@@ -144,7 +152,7 @@ export class AuthService {
 
   async startBiometricRegistration(userId: string, dto: BiometricRegisterStartDto) {
     const challengeId = randomBytes(16).toString('hex');
-    const challengeBase64 = randomBytes(32).toString('base64url');
+    const challengeBase64 = randomBytes(BIOMETRIC_CHALLENGE_BYTES).toString('base64url');
 
     this.biometricChallenges.set(challengeId, {
       id: challengeId,
@@ -152,7 +160,7 @@ export class AuthService {
       purpose: 'REGISTER',
       challengeHash: this.hashChallenge(challengeBase64),
       challengeBase64,
-      expiresAt: Date.now() + 90_000,
+      expiresAt: Date.now() + BIOMETRIC_CHALLENGE_TTL_SECONDS * 1000,
       keyId: dto.keyId,
       pendingPublicKeyBase64: dto.publicKeyBase64,
       pendingDeviceName: dto.deviceName,
@@ -195,7 +203,7 @@ export class AuthService {
 
     const credentials = await this.biometricCredentialModel().findMany({ where: { userId: user.id } });
     const challengeId = randomBytes(16).toString('hex');
-    const challengeBase64 = randomBytes(32).toString('base64url');
+    const challengeBase64 = randomBytes(BIOMETRIC_CHALLENGE_BYTES).toString('base64url');
 
     this.biometricChallenges.set(challengeId, {
       id: challengeId,
@@ -203,7 +211,7 @@ export class AuthService {
       purpose: 'LOGIN',
       challengeHash: this.hashChallenge(challengeBase64),
       challengeBase64,
-      expiresAt: Date.now() + 90_000,
+      expiresAt: Date.now() + BIOMETRIC_CHALLENGE_TTL_SECONDS * 1000,
     });
 
     return { challengeId, challengeBase64, allowedKeyIds: credentials.map((credential: { keyId: string }) => credential.keyId) };
@@ -258,7 +266,7 @@ export class AuthService {
   }
 
   async createUser(dto: CreateUserDto) {
-    const hash = await bcrypt.hash(dto.password, 10);
+    const hash = await bcrypt.hash(dto.password, BCRYPT_DEFAULT_ROUNDS);
     const user = await this.prisma.user.create({
       data: {
         username: dto.username,
@@ -288,7 +296,7 @@ export class AuthService {
 
   async rotateSessionIfNeeded(user: any) {
     const now = Math.floor(Date.now() / 1000);
-    if (user?.exp && user.exp - now < 300) {
+    if (user?.exp && user.exp - now < AUTO_REFRESH_THRESHOLD_SECONDS) {
       const dbUser = await this.prisma.user.findUnique({ where: { id: user.userId }, include: { role: true } });
       if (dbUser) {
         return this.jwtService.signAsync(this.buildAuthPayload(dbUser));
@@ -310,7 +318,7 @@ export class AuthService {
       throw new Error('ADMIN_BOOTSTRAP_PASSWORD must be set in production');
     }
 
-    const hash = await bcrypt.hash(password || 'password123', 10);
+    const hash = await bcrypt.hash(password || 'password123', BCRYPT_DEFAULT_ROUNDS);
     await this.prisma.user.upsert({
       where: { username: this.config.get('ADMIN_USERNAME', 'admin') },
       update: {},
@@ -339,7 +347,7 @@ export class AuthService {
       throw new Error('SUPERADMIN_PASSWORD must be set in production');
     }
 
-    const hash = await bcrypt.hash(password || 'SuperAdmin@2026!', 10);
+    const hash = await bcrypt.hash(password || 'SuperAdmin@2026!', BCRYPT_DEFAULT_ROUNDS);
     await this.prisma.user.upsert({
       where: { username },
       update: {},
@@ -414,8 +422,8 @@ export class AuthService {
   private async registerFailedLoginAttempt(user: any) {
     const attempts = (user.failedLoginAttempts || 0) + 1;
 
-    if (attempts >= 5) {
-      const lockoutUntil = new Date(Date.now() + 15 * 60_000);
+    if (attempts >= DEFAULT_MAX_LOGIN_ATTEMPTS) {
+      const lockoutUntil = new Date(Date.now() + DEFAULT_LOCKOUT_MINUTES * 60_000);
       await this.prisma.user.update({
         where: { id: user.id },
         data: { lockoutUntil, failedLoginAttempts: 0 },

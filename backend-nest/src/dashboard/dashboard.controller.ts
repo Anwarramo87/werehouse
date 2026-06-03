@@ -1,9 +1,12 @@
 import { Controller, Get, UseGuards } from '@nestjs/common';
+import { ApiTags, ApiCookieAuth } from '@nestjs/swagger';
 import { DashboardService } from './dashboard.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { PermissionsGuard } from '../common/guards/permissions.guard';
 import { Permissions } from '../common/decorators/permissions.decorator';
 
+@ApiTags('dashboard')
+@ApiCookieAuth()
 @Controller('dashboard')
 @UseGuards(JwtAuthGuard, PermissionsGuard)
 export class DashboardController {

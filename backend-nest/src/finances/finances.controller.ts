@@ -1,4 +1,5 @@
 import { Body, Controller, Get, Param, Post, Query, UseGuards } from '@nestjs/common';
+import { ApiTags, ApiCookieAuth } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { PermissionsGuard } from '../common/guards/permissions.guard';
 import { Permissions } from '../common/decorators/permissions.decorator';
@@ -7,6 +8,8 @@ import { CreateFinanceAdvanceDto } from './dto/create-finance-advance.dto';
 import { CreateFinanceBonusDto } from './dto/create-finance-bonus.dto';
 import { FinancesSummaryQueryDto } from './dto/finances-summary-query.dto';
 
+@ApiTags('finances')
+@ApiCookieAuth()
 @Controller('finances')
 @UseGuards(JwtAuthGuard, PermissionsGuard)
 export class FinancesController {

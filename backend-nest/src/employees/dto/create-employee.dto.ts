@@ -11,139 +11,148 @@ import {
   Min,
 } from 'class-validator';
 import { Type } from 'class-transformer';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
 export class CreateEmployeeDto {
+  @ApiProperty({ description: 'رقم الموظف (EMP + 3 أرقام أو أكثر)', example: 'EMP001' })
   @IsString()
   @Matches(/^EMP[0-9]{3,}$/, { message: 'employeeId must match EMP followed by 3+ digits' })
   employeeId: string;
 
-  /** الاسم الثلاثي */
+  @ApiProperty({ description: 'الاسم الثلاثي للموظف', example: 'أحمد محمد سالم' })
   @IsString()
   @IsNotEmpty()
   name: string;
 
+  @ApiProperty({ description: 'اسم المستخدم لتسجيل الدخول', example: 'ahmed.salem' })
   @IsString()
   @IsNotEmpty()
   username: string;
 
+  @ApiPropertyOptional({ description: 'كلمة المرور الأولية', example: 'TempPass@2025' })
   @IsString()
   @IsOptional()
   password: string;
 
-  /** رقم الموبايل */
+  @ApiPropertyOptional({ description: 'رقم الجوال', example: '0501234567' })
   @IsOptional()
   @IsString()
   @MaxLength(30)
   mobile?: string;
 
+  @ApiPropertyOptional({ description: 'رقم الهوية الوطنية', example: '1234567890' })
   @IsOptional()
   @IsString()
   @MaxLength(50)
   nationalId?: string;
 
-  /** تاريخ الميلاد */
+  @ApiPropertyOptional({ description: 'تاريخ الميلاد', example: '1990-05-15' })
   @IsOptional()
   @IsDateString()
   dateOfBirth?: string;
 
-  /** تاريخ الميلاد (اسم قديم من الفرونت) */
+  @ApiPropertyOptional({ description: 'تاريخ الميلاد (اسم بديل من الفرونت)', example: '1990-05-15' })
   @IsOptional()
   @IsDateString()
   birthDate?: string;
 
-  /** الجنس: male | female */
+  @ApiPropertyOptional({ description: 'الجنس', enum: ['male', 'female'], example: 'male' })
   @IsOptional()
   @IsIn(['male', 'female'])
   gender?: string;
 
-  /** المسمى الوظيفي */
+  @ApiPropertyOptional({ description: 'المسمى الوظيفي', example: 'مشرف مستودعات' })
   @IsOptional()
   @IsString()
   @MaxLength(100)
   jobTitle?: string;
 
-  /** المسمى الوظيفي الموحّد مع الفرونت */
+  @ApiPropertyOptional({ description: 'المسمى الوظيفي (اسم موحّد)', example: 'مشرف مستودعات' })
   @IsOptional()
   @IsString()
   @MaxLength(100)
   profession?: string;
 
-  /** القسم التابع له */
+  @ApiPropertyOptional({ description: 'اسم القسم', example: 'المستودعات' })
   @IsOptional()
   @IsString()
   department?: string;
 
+  @ApiPropertyOptional({ description: 'الأجر بالساعة', example: 25.5 })
   @IsOptional()
   @IsNumber()
   @Min(0)
   @Type(() => Number)
   hourlyRate?: number;
 
-  /** الراتب الكلي */
+  @ApiPropertyOptional({ description: 'الراتب الأساسي الكلي (شامل جميع البنود)', example: 1500000 })
   @IsOptional()
   @IsNumber()
   @Min(0)
   @Type(() => Number)
   baseSalary?: number;
 
-  /** الراتب المقطوع */
+  @ApiPropertyOptional({ description: 'الراتب المقطوع', example: 700000 })
   @IsOptional()
   @IsNumber()
   @Min(0)
   @Type(() => Number)
   lumpSumSalary?: number;
 
-  /** بدل غلاء معيشة */
+  @ApiPropertyOptional({ description: 'بدل غلاء المعيشة', example: 300000 })
   @IsOptional()
   @IsNumber()
   @Min(0)
   @Type(() => Number)
   livingAllowance?: number;
 
+  @ApiProperty({ description: 'معرّف الدور (Role ID)', example: 'clx1234abc' })
   @IsString()
   @IsNotEmpty()
   roleId: string;
 
-  /** وقت بداية الدوام (HH:mm) */
+  @ApiPropertyOptional({ description: 'وقت بداية الدوام (HH:mm)', example: '08:00' })
   @IsOptional()
   @IsString()
   scheduledStart?: string;
 
-  /** وقت نهاية الدوام (HH:mm) */
+  @ApiPropertyOptional({ description: 'وقت نهاية الدوام (HH:mm)', example: '17:00' })
   @IsOptional()
   @IsString()
   scheduledEnd?: string;
 
+  @ApiPropertyOptional({ description: 'تاريخ بداية الخدمة', example: '2020-01-01' })
   @IsOptional()
   @IsDateString()
   employmentStartDate?: string;
 
+  @ApiPropertyOptional({ description: 'تاريخ انتهاء الخدمة', example: '2025-12-31' })
   @IsOptional()
   @IsDateString()
   terminationDate?: string;
 
-  /** عدد أيام العمل في الفترة */
+  @ApiPropertyOptional({ description: 'عدد أيام العمل في الشهر', example: 26 })
   @IsOptional()
   @IsNumber()
   @Min(1)
   @Type(() => Number)
   workDaysInPeriod?: number;
 
-  /** عدد ساعات العمل في اليوم */
+  @ApiPropertyOptional({ description: 'عدد ساعات العمل في اليوم', example: 9 })
   @IsOptional()
   @IsNumber()
   @Min(1)
   @Type(() => Number)
   hoursPerDay?: number;
 
-  /** فترة السماح بالدقائق قبل خصم التأخير */
+  @ApiPropertyOptional({ description: 'فترة السماح بالتأخير بالدقائق قبل الخصم', example: 5 })
   @IsOptional()
   @IsNumber()
   @Min(0)
   @Type(() => Number)
   gracePeriodMinutes?: number;
 
-  /** مكان الإقامة (مدينة أو منطقة) */
+  @ApiPropertyOptional({ description: 'مكان الإقامة', example: 'بغداد - الكرخ' })
   @IsOptional()
   @IsString()
   @MaxLength(200)

@@ -4,7 +4,7 @@
   "values": [
     { "key": "baseUrl", "value": "http://localhost:5001/api", "enabled": true },
     { "key": "username", "value": "admin", "enabled": true },
-    { "key": "password", "value": "password123", "enabled": true },
+    { "key": "password", "value": "REPLACE_WITH_TEST_PASSWORD", "enabled": true },
     { "key": "token", "value": "", "enabled": true },
     { "key": "roleId", "value": "", "enabled": true },
     { "key": "employeeId", "value": "EMP9200", "enabled": true },

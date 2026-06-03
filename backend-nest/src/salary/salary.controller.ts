@@ -1,4 +1,5 @@
 import { Body, Controller, Delete, Get, Param, Post, Put, UseGuards } from '@nestjs/common';
+import { ApiTags, ApiCookieAuth } from '@nestjs/swagger';
 import { SalaryService } from './salary.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { PermissionsGuard } from '../common/guards/permissions.guard';
@@ -6,6 +7,8 @@ import { Permissions } from '../common/decorators/permissions.decorator';
 import { UpsertSalaryDto } from './dto/upsert-salary.dto';
 import { CalculateAllowancesDto } from './dto/calculate-allowances.dto';
 
+@ApiTags('salary')
+@ApiCookieAuth()
 @Controller('salary')
 @UseGuards(JwtAuthGuard, PermissionsGuard)
 export class SalaryController {

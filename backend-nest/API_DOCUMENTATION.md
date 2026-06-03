@@ -1,155 +1,253 @@
-# API Documentation (Backend)
+# API Documentation - HR Attendance and Salary Testing Environment
 
-This document provides a complete guide for the Frontend team to interact with the Warehouse Management System API.
-
-**Base URL:** `/api`
+This document outlines the core API endpoints for the HR Attendance and Salary testing environment. The base URL for all API calls is assumed to be `http://<your-backend-ip>:3000/api/v1`.
 
 ---
 
-## 🔐 Authentication
+## 1. Employee Management
 
-All endpoints (except login/register) require a **JWT Token** in the `Authorization` header.
+### **POST /employees**
 
-**Header:**
-`Authorization: Bearer <your_token>`
+Adds a new test employee to the system.
 
-### 1. Login
-- **Endpoint:** `POST /auth/login`
-- **Body:** `{ "username": "...", "password": "..." }`
-- **Response:** `{ "token": "...", "user": { ... } }`
+*   **URL**: `/employees`
+*   **Method**: `POST`
+*   **Authentication**: Required (JWT stored in HttpOnly cookie `warehouse_access_token`)
+*   **Permissions**: `edit_employees`
+*   **Request Body (JSON)**:
 
-### 2. Register (New User)
-- **Endpoint:** `POST /auth/register`
-- **Body:** `{ "username": "...", "email": "...", "password": "..." }`
-
----
-
-## 👥 Employees Management
-
-### 1. List Employees
-Retrieve a paginated list of employees.
-
-- **Endpoint:** `GET /employees`
-- **Auth Required:** Yes (`view_employees` permission)
-- **Query Parameters:**
-  | Parameter | Type | Description |
-  |---|---|---|
-  | `page` | number | Page number (default: 1) |
-  | `limit` | number | Items per page (default: 20) |
-  | `department` | string | Filter by department name |
-  | `status` | string | Filter by status (`active`, `inactive`, `terminated`) |
-  | `search` | string | Search by name, ID, username, mobile, or national ID |
-
-- **Response (Success 200):**
-```json
-{
-  "employees": [
+    ```json
     {
-      "id": "uuid",
+      "name": "John Doe",
+      "employeeId": "EMP001",
+      "mobile": "+1234567890",
+      "residence": "Some City, Some Country",
+      "nationalId": "123456789012",
+      "dateOfBirth": "1990-01-15",
+      "gender": "Male",
+      "jobTitle": "Software Engineer",
+      "profession": "Engineering",
+      "hourlyRate": 25.50,
+      "dailyRate": 204.00,
+      "baseSalary": 4080.00,
+      "livingAllowance": 500.00,
+      "employmentStartDate": "2023-01-01",
+      "department": "IT",
+      "status": "active"
+    }
+    ```
+
+    *   `name` (string, required): Employee's full name.
+    *   `employeeId` (string, required): Unique identifier for the employee.
+    *   `mobile` (string, optional): Employee's mobile number.
+    *   `residence` (string, optional): Employee's residential address.
+    *   `nationalId` (string, optional): Employee's national identification number (must be unique).
+    *   `dateOfBirth` (string, optional, `YYYY-MM-DD` format): Employee's date of birth.
+    *   `gender` (string, optional): Employee's gender.
+    *   `jobTitle` (string, optional): Employee's job title.
+    *   `profession` (string, optional): Employee's profession.
+    *   `hourlyRate` (number, required): Hourly rate for the employee.
+    *   `dailyRate` (number, optional): Daily rate for the employee.
+    *   `baseSalary` (number, optional): Base monthly salary.
+    *   `livingAllowance` (number, optional): Living allowance.
+    *   `employmentStartDate` (string, optional, `YYYY-MM-DD` format): Date when employment started.
+    *   `department` (string, optional): Employee's department.
+    *   `status` (string, optional, default: `active`): Employee's employment status.
+
+*   **Expected Response (201 Created)**:
+
+    ```json
+    {
+      "id": "uuid-of-new-employee",
       "employeeId": "EMP001",
       "name": "John Doe",
-      "username": "johndoe",
-      "mobile": "123456789",
-      "nationalId": "1234567890",
-      "dateOfBirth": "1990-01-01",
-      "gender": "male",
-      "jobTitle": "Manager",
-      "profession": "Manager",
-      "hourlyRate": "10.50",
-      "baseSalary": "500.00",
-      "lumpSumSalary": "0.00",
-      "livingAllowance": "50.00",
-      "roleId": "uuid",
-      "department": "Warehouse",
-      "departmentId": "uuid",
-      "scheduledStart": "08:00",
-      "scheduledEnd": "16:00",
-      "employmentStartDate": "2023-01-01",
+      "mobile": "+1234567890",
+      "residence": "Some City, Some Country",
+      "nationalId": "123456789012",
+      "dateOfBirth": "1990-01-15T00:00:00.000Z",
+      "gender": "Male",
+      "jobTitle": "Software Engineer",
+      "profession": "Engineering",
+      "hourlyRate": "25.50",
+      "dailyRate": "204.00",
+      "baseSalary": "4080.00",
+      "livingAllowance": "500.00",
+      "currency": "SYP",
+      "employmentStartDate": "2023-01-01T00:00:00.000Z",
+      "terminationDate": null,
+      "terminationReason": null,
+      "terminationType": null,
+      "terminationNotes": null,
+      "isSettled": false,
+      "financialSettlementStatus": "pending",
+      "financialSettlementDate": null,
+      "rehireDate": null,
+      "isFinanciallySettled": false,
+      "department": "IT",
+      "departmentId": "uuid-of-department",
       "status": "active",
       "workDaysInPeriod": 26,
       "hoursPerDay": 8,
-      "gracePeriodMinutes": 15
+      "gracePeriodMinutes": 15,
+      "createdAt": "2024-06-01T12:00:00.000Z",
+      "updatedAt": "2024-06-01T12:00:00.000Z"
     }
-  ],
-  "pagination": { "page": 1, "limit": 20, "total": 100, "pages": 5 }
-}
-```
+    ```
 
-### 2. Create Employee
-**Note:** This automatically creates a corresponding `User` account for login.
+### **GET /employees**
 
-- **Endpoint:** `POST /employees`
-- **Auth Required:** Yes (`edit_employees` permission)
-- **Request Body:**
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `employeeId` | string | Yes | Format: `EMP` + 3+ digits (e.g. `EMP001`) |
-| `name` | string | Yes | Full name |
-| `username` | string | Yes | Login username |
-| `password` | string | Yes | Login password |
-| `mobile` | string | No | Phone number |
-| `nationalId` | string | No | National ID |
-| `dateOfBirth` | string | No | ISO Date (YYYY-MM-DD) |
-| `gender` | string | No | `male` or `female` |
-| `jobTitle` | string | No | Job title |
-| `profession` | string | No | Profession |
-| `department` | string | No | Department name |
-| `baseSalary` | number | No | Monthly base salary |
-| `lumpSumSalary` | number | No | Lump sum salary |
-| `livingAllowance` | number | No | Living allowance |
-| `roleId` | string | Yes | Valid Role UUID |
-| `scheduledStart`| string | No | Format `HH:mm` |
-| `scheduledEnd` | string | No | Format `HH:mm` |
-| `employmentStartDate`| string | No | ISO Date |
-| `workDaysInPeriod`| number | No | Default: 26 |
-| `hoursPerDay` | number | No | Default: 8 |
-| `gracePeriodMinutes`| number | No | Default: 15 |
+Retrieves a list of all employees, with optional filtering and pagination.
 
-- **Response (Success 201):**
-```json
-{ "message": "Employee created successfully", "employee": { ... } }
-```
+*   **URL**: `/employees`
+*   **Method**: `GET`
+*   **Authentication**: Required
+*   **Permissions**: `view_employees`
+*   **Query Parameters**:
 
-### 3. Update Employee
-- **Endpoint:** `PUT /employees/:employeeId`
-- **Auth Required:** Yes (`edit_employees` permission)
-- **Request Body:** Same as `CreateEmployeeDto` but all fields are optional.
+    *   `page` (number, optional, default: 1): The page number for pagination.
+    *   `limit` (number, optional, default: 10): The number of employees per page.
+    *   `search` (string, optional): A search term to filter employees by name or employeeId.
+    *   `status` (string, optional): Filter by employee status (e.g., `active`, `terminated`).
+    *   `department` (string, optional): Filter by department name.
 
-### 4. Get Employee Profile
-- **Endpoint:** `GET /employees/:employeeId/profile`
-- **Auth Required:** Yes (`view_employees` permission)
-- **Query Parameters:** `startDate`, `endDate`, `attendanceLimit`, `advancesLimit`, `bonusesLimit` (all optional).
+*   **Expected Response (200 OK)**:
 
-### 5. Terminate / Settle / Remove
-- **Terminate:** `PATCH /employees/:employeeId/terminate` (Body: `{ "terminationDate": "...", "terminationReason": "..." }`)
-- **Settle:** `PATCH /employees/:employeeId/settle`
-- **Remove:** `DELETE /employees/:employeeId`
+    ```json
+    {
+      "data": [
+        {
+          "id": "uuid-of-employee-1",
+          "employeeId": "EMP001",
+          "name": "John Doe",
+          "hourlyRate": "25.50",
+          "dailyRate": "204.00",
+          "department": "IT",
+          "status": "active"
+          // ... other employee fields
+        },
+        {
+          "id": "uuid-of-employee-2",
+          "employeeId": "EMP002",
+          "name": "Jane Smith",
+          "hourlyRate": "30.00",
+          "dailyRate": "240.00",
+          "department": "HR",
+          "status": "active"
+          // ... other employee fields
+        }
+      ],
+      "meta": {
+        "total": 2,
+        "lastPage": 1,
+        "currentPage": 1,
+        "perPage": 10
+      }
+    }
+    ```
 
 ---
 
-## 🚌 Transportation Management
+## 2. Attendance Management
 
-### 1. List Buses
-- **Endpoint:** `GET /transportation/buses`
-- **Auth Required:** Yes (`view_employees` permission)
+### **POST /attendance/check-in**
 
-### 2. Create Bus
-- **Endpoint:** `POST /transportation/buses`
-- **Auth Required:** Yes (`edit_employees` permission)
+Records an employee's check-in. This endpoint does not require authentication for biometric device integration.
 
-### 3. Add Passenger to Bus
-- **Endpoint:** `POST /transportation/buses/:busId/passengers`
-- **Auth Required:** Yes (`edit_employees` permission)
+*   **URL**: `/attendance/check-in`
+*   **Method**: `POST`
+*   **Authentication**: Not Required (Public access for biometric devices)
+*   **Request Body (JSON)**:
+
+    ```json
+    {
+      "employeeId": "EMP001"
+    }
+    ```
+
+    *   `employeeId` (string, required): The unique identifier of the employee checking in.
+
+*   **Expected Response (201 Created)**:
+
+    ```json
+    {
+      "message": "Check-in successful",
+      "employeeId": "EMP001",
+      "timestamp": "2024-06-01T08:00:00.000Z"
+    }
+    ```
+
+*   **Error Responses**:
+    *   **400 Bad Request**: `{"statusCode": 400, "message": "employeeId is required"}` if `employeeId` is missing.
+    *   **400 Bad Request**: `{"statusCode": 400, "message": "Employee already checked in today"}` if the employee has already checked in for the current day.
+
+### **POST /attendance/check-out**
+
+Records an employee's check-out and calculates the hours worked for the shift. This endpoint does not require authentication for biometric device integration.
+
+*   **URL**: `/attendance/check-out`
+*   **Method**: `POST`
+*   **Authentication**: Not Required (Public access for biometric devices)
+*   **Request Body (JSON)**:
+
+    ```json
+    {
+      "employeeId": "EMP001"
+    }
+    ```
+
+    *   `employeeId` (string, required): The unique identifier of the employee checking out.
+
+*   **Expected Response (201 Created)**:
+
+    ```json
+    {
+      "message": "Check-out successful",
+      "employeeId": "EMP001",
+      "timestamp": "2024-06-01T17:00:00.000Z",
+      "hoursWorked": 9.00
+    }
+    ```
+
+*   **Error Responses**:
+    *   **400 Bad Request**: `{"statusCode": 400, "message": "employeeId is required"}` if `employeeId` is missing.
+    *   **400 Bad Request**: `{"statusCode": 400, "message": "Employee already checked out today"}` if the employee has already checked out for the current day.
+    *   **400 Bad Request**: `{"statusCode": 400, "message": "Employee must check in first"}` if there is no corresponding check-in record for the current day.
 
 ---
 
-## 💰 Payroll & Attendance
+## 3. Salary Calculation
 
-### 1. Attendance (Biometric)
-- **Start Login:** `POST /auth/biometric/login/start`
-- **Finish Login:** `POST /auth/biometric/login/finish` (Includes `markAttendance: true`)
+### **GET /salary/calculate**
 
-### 2. Calculate Deductions
-- **Endpoint:** `POST /transportation/calculate-deductions`
-- **Auth Required:** Yes (`view_payroll` permission)
-```
+Calculates the gross and net salary for a specific employee for a given month and year, based on recorded attendance. This endpoint does not require authentication for biometric device integration.
+
+*   **URL**: `/salary/public/calculate`
+*   **Method**: `GET`
+*   **Authentication**: Not Required (Public access for biometric devices)
+*   **Query Parameters**:
+
+    *   `employeeId` (string, required): The unique identifier of the employee.
+    *   `month` (string, required): The month for salary calculation (e.g., `01` for January, `12` for December).
+    *   `year` (number, required): The year for salary calculation (e.g., `2024`).
+
+*   **Expected Response (200 OK)**:
+
+    ```json
+    {
+      "employeeId": "EMP001",
+      "employeeName": "John Doe",
+      "period": {
+        "startDate": "2024-01-01",
+        "endDate": "2024-01-31"
+      },
+      "hoursWorked": 160.00,
+      "hourlyRate": 25.50,
+      "grossSalary": 4080.00,
+      "deductions": 0,
+      "netSalary": 4080.00
+    }
+    ```
+
+*   **Error Responses**:
+    *   **400 Bad Request**: `{"statusCode": 400, "message": "employeeId, month, and year are required"}` if any required query parameter is missing.
+    *   **400 Bad Request**: `{"statusCode": 400, "message": "Employee not found"}` if the provided `employeeId` does not exist.

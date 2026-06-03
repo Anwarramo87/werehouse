@@ -12,6 +12,7 @@ import {
   UseGuards,
   UseInterceptors,
 } from '@nestjs/common';
+import { ApiTags, ApiCookieAuth } from '@nestjs/swagger';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { Request } from 'express';
 import { AttendanceService } from './attendance.service';
@@ -28,6 +29,8 @@ import { AttendanceAlertsQueryDto } from './dto/attendance-alerts-query.dto';
 import { CalculateDeductionsDto } from './dto/calculate-deductions.dto';
 import { AuthenticatedUser } from '../common/types/authenticated-user.types';
 
+@ApiTags('attendance')
+@ApiCookieAuth()
 @Controller('attendance')
 @UseGuards(JwtAuthGuard, PermissionsGuard)
 export class AttendanceController {

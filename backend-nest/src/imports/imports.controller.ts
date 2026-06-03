@@ -10,6 +10,7 @@ import {
   UseGuards,
   UseInterceptors,
 } from '@nestjs/common';
+import { ApiTags, ApiCookieAuth, ApiOperation, ApiConsumes } from '@nestjs/swagger';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { Request, Response } from 'express';
 import { ImportsService } from './imports.service';
@@ -19,7 +20,10 @@ import { Permissions } from '../common/decorators/permissions.decorator';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { AuthenticatedUser } from '../common/types/authenticated-user.types';
 import { ImportsHistoryQueryDto } from './dto/imports-history-query.dto';
+import { MAX_UPLOAD_SIZE_BYTES } from '../common/pipes/file-validation.pipe';
 
+@ApiTags('imports')
+@ApiCookieAuth()
 @Controller('imports')
 @UseGuards(JwtAuthGuard, PermissionsGuard)
 export class ImportsController {
@@ -99,7 +103,7 @@ export class ImportsController {
       cb(null, true);
     },
     limits: {
-      fileSize: 10 * 1024 * 1024,
+      fileSize: MAX_UPLOAD_SIZE_BYTES,
     },
   };
 
