@@ -1,4 +1,5 @@
-import { IsDateString, IsEnum, IsOptional, IsString, Matches } from 'class-validator';
+import { IsDateString, IsEnum, IsInt, IsOptional, IsString, Matches, Max, Min } from 'class-validator';
+import { Type } from 'class-transformer';
 import { LeaveRequestStatusDto, LeaveRequestTypeDto } from './create-leave-request.dto';
 
 export class LeavesListQueryDto {
@@ -22,4 +23,18 @@ export class LeavesListQueryDto {
   @IsOptional()
   @IsDateString()
   endDate?: string;
+
+  // ── Pagination ─────────────────────────────────────────────────────────────
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  page?: number;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(500)
+  limit?: number;
 }
