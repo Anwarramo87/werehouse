@@ -77,18 +77,12 @@ model Employee {
   terminationDate           DateTime?            @db.Date
   terminationType           String? // resignation | termination
   terminationReason         String?
-  terminationType String?
-  terminationNotes String?
   terminationNotes          String?
   financialSettlementStatus String               @default("pending") // pending | completed
   financialSettlementDate   DateTime?            @db.Date
   rehireDate                DateTime?            @db.Date
   isSettled                 Boolean              @default(false)
   isFinanciallySettled      Boolean              @default(false)
-  financialSettlementStatus String @default("pending")
-  financialSettlementDate DateTime? @db.Date
-  rehireDate     DateTime? @db.Date
-  isFinanciallySettled Boolean @default(false)
   department                String               @default("Warehouse")
   departmentId              String?              @db.Uuid
   departmentEntity          Department?          @relation(fields: [departmentId], references: [id], onDelete: SetNull)
@@ -510,55 +504,69 @@ model EmployeePenalty {
 }
 
 model TerminationRecord {
-  id                    String   @id @default(uuid()) @db.Uuid
-  employeeId            String
-  employee              Employee @relation(fields: [employeeId], references: [employeeId], onDelete: Cascade)
-  terminationDate       DateTime @db.Date
-  terminationType       String
-  reason                String
-  notes                 String?
-  processedBy           String
-  createdAt             DateTime @default(now())
-  updatedAt             DateTime @updatedAt
+  id              String   @id @default(uuid()) @db.Uuid
+  employeeId      String   
+  employee        Employee @relation(fields: [employeeId], references: [employeeId], onDelete: Cascade)
+  terminationDate DateTime @db.Date
+  terminationType String   
+  reason          String
+  notes           String?
+  processedBy     String   
+  createdAt       DateTime @default(now()) 
+  updatedAt       DateTime @updatedAt 
+
+  // Relations
+  rehireRecords RehireRecord[] @relation("TerminationToRehire")
 
   @@index([employeeId])
   @@index([terminationDate])
+  @@index([terminationType])
+  @@index([processedBy])
+  @@index([employeeId, terminationDate])
   @@map("termination_records")
 }
 
 model FinancialSettlement {
-  id                       String   @id @default(uuid()) @db.Uuid
-  employeeId               String
-  employee                 Employee @relation(fields: [employeeId], references: [employeeId], onDelete: Cascade)
-  settlementDate           DateTime @db.Date
-  processedBy              String
-  finalSalaryAmount        Decimal  @db.Decimal(14, 2)
-  deductions               Decimal  @db.Decimal(14, 2) @default(0)
-  bonuses                  Decimal  @db.Decimal(14, 2) @default(0)
-  totalSettlement          Decimal  @db.Decimal(14, 2)
-  status                   String   @default("completed")
-  notes                    String?
-  createdAt                DateTime @default(now())
-  updatedAt                DateTime @updatedAt
+  id                String   @id @default(uuid()) @db.Uuid
+  employeeId        String   
+  employee          Employee @relation(fields: [employeeId], references: [employeeId], onDelete: Cascade)
+  settlementDate    DateTime @db.Date
+  processedBy       String   
+  finalSalaryAmount Decimal  @db.Decimal(14, 2)
+  deductions        Decimal  @default(0) @db.Decimal(14, 2)
+  bonuses           Decimal  @default(0) @db.Decimal(14, 2)
+  totalSettlement   Decimal  @db.Decimal(14, 2)
+  status            String   @default("completed") // pending | completed
+  notes             String?
+  createdAt         DateTime @default(now()) 
+  updatedAt         DateTime @updatedAt 
 
   @@index([employeeId])
   @@index([settlementDate])
+  @@index([status])
+  @@index([processedBy])
+  @@index([employeeId, status])
   @@map("financial_settlements")
 }
 
 model RehireRecord {
-  id                       String   @id @default(uuid()) @db.Uuid
-  employeeId               String
-  employee                 Employee @relation(fields: [employeeId], references: [employeeId], onDelete: Cascade)
-  rehireDate               DateTime @db.Date
-  processedBy              String
-  previousTerminationId    String?
-  notes                    String?
-  createdAt                DateTime @default(now())
-  updatedAt                DateTime @updatedAt
+  id                    String   @id @default(uuid()) @db.Uuid
+  employeeId            String   
+  employee              Employee @relation(fields: [employeeId], references: [employeeId], onDelete: Cascade)
+  rehireDate            DateTime @db.Date
+  processedBy           String   
+  previousTerminationId String?  @db.Uuid
+  notes                 String?
+  createdAt             DateTime @default(now()) 
+  updatedAt             DateTime @updatedAt 
+
+  // Relations
+  previousTermination TerminationRecord? @relation("TerminationToRehire", fields: [previousTerminationId], references: [id], onDelete: SetNull)
 
   @@index([employeeId])
   @@index([rehireDate])
+  @@index([processedBy])
+  @@index([employeeId, rehireDate])
   @@map("rehire_records")
 }
 
@@ -647,71 +655,4 @@ model AuditLog {
   @@index([action, createdAt])
 
   @@map("audit_logs")
-}
-
-// ---------------------------------------------------------------------------
-// Employee Resignation Management — termination, settlement, and rehire records
-// ---------------------------------------------------------------------------
-model TerminationRecord {
-  id              String   @id @default(uuid()) @db.Uuid
-  employeeId      String   
-  terminationDate DateTime @db.Date
-  terminationType String   
-  reason          String
-  notes           String?
-  processedBy     String   
-  createdAt       DateTime @default(now()) 
-  updatedAt       DateTime @updatedAt 
-
-  // Relations
-  rehireRecords RehireRecord[] @relation("TerminationToRehire")
-
-  @@index([employeeId])
-  @@index([terminationDate])
-  @@index([terminationType])
-  @@index([processedBy])
-  @@index([employeeId, terminationDate])
-  @@map("termination_records")
-}
-
-model FinancialSettlement {
-  id                String   @id @default(uuid()) @db.Uuid
-  employeeId        String   
-  settlementDate    DateTime @db.Date
-  processedBy       String   
-  finalSalaryAmount Decimal  @db.Decimal(14, 2)
-  deductions        Decimal  @default(0) @db.Decimal(14, 2)
-  bonuses           Decimal  @default(0) @db.Decimal(14, 2)
-  totalSettlement   Decimal  @db.Decimal(14, 2)
-  status            String   @default("completed") // pending | completed
-  notes             String?
-  createdAt         DateTime @default(now()) 
-  updatedAt         DateTime @updatedAt 
-
-  @@index([employeeId])
-  @@index([settlementDate])
-  @@index([status])
-  @@index([processedBy])
-  @@index([employeeId, status])
-  @@map("financial_settlements")
-}
-
-model RehireRecord {
-  id                    String   @id @default(uuid()) @db.Uuid
-  employeeId            String   
-  rehireDate            DateTime @db.Date
-  processedBy           String   
-  previousTerminationId String?  @db.Uuid
-  notes                 String?
-  createdAt             DateTime @default(now()) 
-  updatedAt             DateTime @updatedAt 
-
-  // Relations
-  previousTermination TerminationRecord? @relation("TerminationToRehire", fields: [previousTerminationId], references: [id], onDelete: SetNull)
-
-  @@index([employeeId])
-  @@index([rehireDate])
-  @@index([processedBy])
-  @@index([employeeId, rehireDate])
-  @@map("rehire_records")
 }
