@@ -1,4 +1,5 @@
 import { Body, Controller, Delete, Get, Param, Post, Put, Query, UseGuards } from '@nestjs/common';
+import { ApiTags, ApiCookieAuth } from '@nestjs/swagger';
 import { InventoryService } from './inventory.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { PermissionsGuard } from '../common/guards/permissions.guard';
@@ -9,6 +10,8 @@ import { ReserveStockDto } from './dto/reserve-stock.dto';
 import { InventoryProductsQueryDto } from './dto/inventory-products-query.dto';
 import { UpdateProductDto } from './dto/update-product.dto';
 
+@ApiTags('inventory')
+@ApiCookieAuth()
 @Controller('inventory')
 @UseGuards(JwtAuthGuard, PermissionsGuard)
 export class InventoryController {

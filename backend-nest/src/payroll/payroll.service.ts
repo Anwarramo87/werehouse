@@ -9,14 +9,23 @@ import { PayrollInputsQueryDto, UpsertPayrollInputDto } from './dto/payroll-inpu
 import { Queue } from 'bullmq';
 import { QUEUE_JOBS, QUEUE_NAMES } from '../queues/queue.constants';
 import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
+import {
+  PAYROLL_BATCH_SIZE,
+  WORK_DAYS_PER_MONTH,
+  WORK_HOURS_PER_DAY,
+  MINUTES_PER_HOUR as MINUTES_PER_HOUR_NUM,
+  OVERTIME_MULTIPLIER,
+  SICK_LEAVE_DEDUCTION_RATIO,
+  WEEKEND_MULTIPLIER,
+  PAYROLL_ROUNDING_UNIT,
+} from '../common/constants/payroll.constants';
 
-const PAYROLL_BATCH_SIZE = 250;
-const STANDARD_WORK_DAYS = new Prisma.Decimal(26);
-const STANDARD_HOURS_PER_DAY = new Prisma.Decimal(9);
-const MINUTES_PER_HOUR = new Prisma.Decimal(60);
-const MULTIPLIER_OVERTIME = new Prisma.Decimal(1.5);
-const MULTIPLIER_SICK_LEAVE = new Prisma.Decimal(0.5);
-const MULTIPLIER_WEEKEND = new Prisma.Decimal(2);
+const STANDARD_WORK_DAYS = new Prisma.Decimal(WORK_DAYS_PER_MONTH);
+const STANDARD_HOURS_PER_DAY = new Prisma.Decimal(WORK_HOURS_PER_DAY);
+const MINUTES_PER_HOUR = new Prisma.Decimal(MINUTES_PER_HOUR_NUM);
+const MULTIPLIER_OVERTIME = new Prisma.Decimal(OVERTIME_MULTIPLIER);
+const MULTIPLIER_SICK_LEAVE = new Prisma.Decimal(SICK_LEAVE_DEDUCTION_RATIO);
+const MULTIPLIER_WEEKEND = new Prisma.Decimal(WEEKEND_MULTIPLIER);
 
 type PayrollQueuePayload = {
   payrollRunId: string;
@@ -45,7 +54,7 @@ export class PayrollService {
     if (!Number.isFinite(numeric) || numeric === 0) {
       return new Prisma.Decimal(0);
     }
-    return new Prisma.Decimal(Math.ceil(numeric / 1000) * 1000);
+    return new Prisma.Decimal(Math.ceil(numeric / PAYROLL_ROUNDING_UNIT) * PAYROLL_ROUNDING_UNIT);
   }
 
   private resolveAttendanceValue(value: number | null | undefined, fallback: number, enabled: boolean) {
@@ -911,7 +920,7 @@ export class PayrollService {
         const transportAllowance = includeTransportationDeductions
           ? transportAllowanceBase
               .div(STANDARD_WORK_DAYS)
-              .times(this.toDecimal(Math.max(0, 26 - leaveTotal)))
+              .times(this.toDecimal(Math.max(0, WORK_DAYS_PER_MONTH - leaveTotal)))
           : transportAllowanceBase;
 
         const grossPay = g3

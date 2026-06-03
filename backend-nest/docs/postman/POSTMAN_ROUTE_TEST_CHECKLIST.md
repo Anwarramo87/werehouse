@@ -8,7 +8,7 @@ Use this checklist to test all main backend routes in order.
 - API prefix: `/api`
 - Login account:
 	- username: `admin`
-	- password: `password123`
+	- password: `REPLACE_WITH_PASSWORD`
 
 Postman variables to create:
 
@@ -35,7 +35,7 @@ Body:
 ```json
 {
 	"username": "admin",
-	"password": "password123"
+	"password": "REPLACE_WITH_PASSWORD"
 }
 ```
 

@@ -61,39 +61,46 @@ model Employee {
   userId         String?  @unique @db.Uuid
   user           User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
   mobile         String?
-  /** مكان الإقامة (مدينة / منطقة) */
   residence      String?  @db.VarChar(200)
   nationalId     String?  @unique
   dateOfBirth    DateTime? @db.Date
-  gender         String?   // male | female
+  gender         String?
   jobTitle       String?
   profession     String?
   hourlyRate     Decimal  @db.Decimal(10, 2)
-  // حقول الراتب المباشرة على الموظف
+  dailyRate      Decimal? @db.Decimal(10, 2)
   baseSalary     Decimal? @db.Decimal(14, 2)
-  livingAllowance Decimal? @db.Decimal(14, 2) // بدل غلاء معيشة
+  livingAllowance Decimal? @db.Decimal(14, 2)
   currency       String   @default("SYP")
   scheduledStart String?
   scheduledEnd   String?
   employmentStartDate DateTime? @db.Date
   terminationDate DateTime? @db.Date
   terminationReason String?
+  terminationType String?
+  terminationNotes String?
   isSettled      Boolean @default(false)
+  financialSettlementStatus String @default("pending")
+  financialSettlementDate DateTime? @db.Date
+  rehireDate     DateTime? @db.Date
+  isFinanciallySettled Boolean @default(false)
   department     String   @default("Warehouse")
   departmentId   String?  @db.Uuid
   departmentEntity Department? @relation(fields: [departmentId], references: [id], onDelete: SetNull)
   roleId         String?  @db.Uuid
   role           Role?    @relation(fields: [roleId], references: [id], onDelete: SetNull)
   status         String   @default("active")
-  // إعدادات الراتب الدائمة للموظف
   workDaysInPeriod Int @default(26)
   hoursPerDay Int @default(8)
-  overtimeCalculation Json? // إعدادات إضافي الأسبوع/العيد
+  overtimeCalculation Json?
   gracePeriodMinutes Int @default(15)
   attendanceRecords AttendanceRecord[]
   dailyAttendanceLogs DailyAttendanceLog[] @relation("DailyAttendanceLogs")
   advances       EmployeeAdvance[]
   leaveRequests  LeaveRequest[]
+  terminationRecords TerminationRecord[]
+  financialSettlements FinancialSettlement[]
+  rehireRecords RehireRecord[]
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
@@ -105,6 +112,11 @@ model Employee {
   @@index([departmentId])
   @@index([status, createdAt])
   @@index([department, status, createdAt])
+  @@index([terminationDate])
+  @@index([terminationType])
+  @@index([financialSettlementStatus])
+  @@index([status, terminationDate])
+  @@index([financialSettlementStatus, financialSettlementDate])
   @@map("employees")
 }
 
@@ -482,7 +494,7 @@ model EmployeeBonus {
 model EmployeePenalty {
   id         String   @id @default(uuid()) @db.Uuid
   employeeId String
-  category   String   // restaurant | clothing | penalty | other
+  category   String
   amount     Decimal  @db.Decimal(14, 2)
   reason     String?
   issueDate  DateTime @default(now())
@@ -492,6 +504,59 @@ model EmployeePenalty {
   @@index([employeeId])
   @@index([employeeId, issueDate])
   @@map("employee_penalties")
+}
+
+model TerminationRecord {
+  id                    String   @id @default(uuid()) @db.Uuid
+  employeeId            String
+  employee              Employee @relation(fields: [employeeId], references: [employeeId], onDelete: Cascade)
+  terminationDate       DateTime @db.Date
+  terminationType       String
+  reason                String
+  notes                 String?
+  processedBy           String
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  @@index([employeeId])
+  @@index([terminationDate])
+  @@map("termination_records")
+}
+
+model FinancialSettlement {
+  id                       String   @id @default(uuid()) @db.Uuid
+  employeeId               String
+  employee                 Employee @relation(fields: [employeeId], references: [employeeId], onDelete: Cascade)
+  settlementDate           DateTime @db.Date
+  processedBy              String
+  finalSalaryAmount        Decimal  @db.Decimal(14, 2)
+  deductions               Decimal  @db.Decimal(14, 2) @default(0)
+  bonuses                  Decimal  @db.Decimal(14, 2) @default(0)
+  totalSettlement          Decimal  @db.Decimal(14, 2)
+  status                   String   @default("completed")
+  notes                    String?
+  createdAt                DateTime @default(now())
+  updatedAt                DateTime @updatedAt
+
+  @@index([employeeId])
+  @@index([settlementDate])
+  @@map("financial_settlements")
+}
+
+model RehireRecord {
+  id                       String   @id @default(uuid()) @db.Uuid
+  employeeId               String
+  employee                 Employee @relation(fields: [employeeId], references: [employeeId], onDelete: Cascade)
+  rehireDate               DateTime @db.Date
+  processedBy              String
+  previousTerminationId    String?
+  notes                    String?
+  createdAt                DateTime @default(now())
+  updatedAt                DateTime @updatedAt
+
+  @@index([employeeId])
+  @@index([rehireDate])
+  @@map("rehire_records")
 }
 
 // ---------------------------------------------------------------------------
@@ -537,4 +602,46 @@ model BusPassenger {
   @@index([employeeId])
   @@index([busId, status])
   @@map("bus_passengers")
+}
+
+// =============================================================================
+// Audit Log — سجل التدقيق الكامل لكل العمليات الحساسة
+// =============================================================================
+model AuditLog {
+  id           String   @id @default(cuid())
+
+  /// من نفّذ العملية (userId)
+  actorId      String?
+
+  /// اسم المستخدم المنفِّذ
+  actorUsername String?
+
+  /// نوع العملية: user.create | employee.update | payroll.run | auth.login ...
+  action       String
+
+  /// نوع الكيان المتأثر: employee | user | payroll | attendance ...
+  targetType   String?
+
+  /// معرّف الكيان المتأثر
+  targetId     String?
+
+  /// عنوان الـ IP
+  ipAddress    String?
+
+  /// User Agent (المتصفح أو التطبيق)
+  userAgent    String?
+
+  /// بيانات إضافية (JSON حر)
+  metadata     Json?
+
+  createdAt    DateTime @default(now())
+
+  /// فهرس للبحث بالمستخدم والتاريخ
+  @@index([actorId, createdAt])
+  /// فهرس للبحث بنوع الكيان
+  @@index([targetType, createdAt])
+  /// فهرس للبحث بنوع العملية
+  @@index([action, createdAt])
+
+  @@map("audit_logs")
 }

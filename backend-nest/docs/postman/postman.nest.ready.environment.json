@@ -4,7 +4,7 @@
   "values": [
     { "key": "baseUrl",       "value": "https://werehouse-production-dabe.up.railway.app/api", "enabled": true },
     { "key": "username",      "value": "superadmin",                "enabled": true },
-    { "key": "password",      "value": "SuperAdmin@2026!",          "enabled": true },
+    { "key": "password",      "value": "REPLACE_WITH_TEST_PASSWORD",          "enabled": true },
     { "key": "token",         "value": "",                          "enabled": true },
     { "key": "roleId",        "value": "",                          "enabled": true },
     { "key": "employeeId",    "value": "EMP003",                    "enabled": true },

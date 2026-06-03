@@ -103,7 +103,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"username\": \"newuser\",\n  \"email\": \"newuser@example.com\",\n  \"password\": \"password12345\"\n}"
+              "raw": "{\n  \"username\": \"newuser\",\n  \"email\": \"newuser@example.com\",\n  \"password\": \"REPLACE_WITH_PASSWORD\"\n}"
             },
             "url": "{{baseUrl}}/auth/register"
           }
@@ -148,7 +148,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"username\": \"new.user\",\n  \"email\": \"new.user@example.com\",\n  \"password\": \"password123\",\n  \"roleId\": \"{{roleId}}\",\n  \"status\": \"active\"\n}"
+              "raw": "{\n  \"username\": \"new.user\",\n  \"email\": \"new.user@example.com\",\n  \"password\": \"REPLACE_WITH_PASSWORD\",\n  \"roleId\": \"{{roleId}}\",\n  \"status\": \"active\"\n}"
             },
             "url": "{{baseUrl}}/auth/users"
           }
@@ -784,7 +784,7 @@
   "variable": [
     { "key": "baseUrl", "value": "http://localhost:5001/api" },
     { "key": "username", "value": "admin" },
-    { "key": "password", "value": "password123" },
+    { "key": "password", "value": "REPLACE_WITH_PASSWORD" },
     { "key": "token", "value": "" },
     { "key": "roleId", "value": "" },
     { "key": "employeeId", "value": "EMP9200" },

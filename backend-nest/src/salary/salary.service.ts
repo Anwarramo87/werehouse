@@ -5,11 +5,15 @@ import { UpsertSalaryDto } from './dto/upsert-salary.dto';
 import { CalculateAllowancesDto } from './dto/calculate-allowances.dto';
 import { promises as fs } from 'fs';
 import * as path from 'path';
+import {
+  RESPONSIBILITY_ALLOWANCE_RATIO,
+  EXTRA_EFFORT_ALLOWANCE_RATIO,
+} from '../common/constants/payroll.constants';
 
 // نسب التوزيع — Prisma.Decimal لضمان دقة الفاصلة العشرية الكاملة
-const RESPONSIBILITY_RATIO = new Prisma.Decimal('0.50');
-const EXTRA_EFFORT_RATIO   = new Prisma.Decimal('0.30');
-const PRODUCTION_RATIO     = new Prisma.Decimal('0.20');
+const RESPONSIBILITY_RATIO = new Prisma.Decimal(RESPONSIBILITY_ALLOWANCE_RATIO.toString());
+const EXTRA_EFFORT_RATIO   = new Prisma.Decimal(EXTRA_EFFORT_ALLOWANCE_RATIO.toString());
+const PRODUCTION_RATIO     = new Prisma.Decimal((1 - RESPONSIBILITY_ALLOWANCE_RATIO - EXTRA_EFFORT_ALLOWANCE_RATIO).toString());
 
 @Injectable()
 export class SalaryService {

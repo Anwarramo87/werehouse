@@ -1,10 +1,13 @@
 import { Body, Controller, Delete, Get, Param, Patch, Put, UseGuards } from '@nestjs/common';
+import { ApiTags, ApiCookieAuth } from '@nestjs/swagger';
 import { InsuranceService } from './insurance.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { PermissionsGuard } from '../common/guards/permissions.guard';
 import { Permissions } from '../common/decorators/permissions.decorator';
 import { UpsertInsuranceDto } from './dto/upsert-insurance.dto';
 
+@ApiTags('insurance')
+@ApiCookieAuth()
 @Controller('insurance')
 @UseGuards(JwtAuthGuard, PermissionsGuard)
 export class InsuranceController {

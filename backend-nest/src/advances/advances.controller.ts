@@ -1,4 +1,5 @@
 import { Body, Controller, Delete, Get, Param, Post, Put, Query, UseGuards, ParseUUIDPipe } from '@nestjs/common';
+import { ApiTags, ApiCookieAuth } from '@nestjs/swagger';
 import { AdvancesService } from './advances.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { PermissionsGuard } from '../common/guards/permissions.guard';
@@ -9,6 +10,8 @@ import { CreateAdvanceDto } from './dto/create-advance.dto';
 import { UpdateAdvanceDto } from './dto/update-advance.dto';
 import { AdvancesListQueryDto } from './dto/advances-list-query.dto';
 
+@ApiTags('advances')
+@ApiCookieAuth()
 @Controller('advances')
 @UseGuards(JwtAuthGuard, PermissionsGuard) // الحماية مطبقة على كل الدوال تلقائياً
 export class AdvancesController {

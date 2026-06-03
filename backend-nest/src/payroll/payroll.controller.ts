@@ -1,5 +1,6 @@
 import { Body, Controller, Delete, Get, Param, Post, Put, Query, Res, UseGuards } from '@nestjs/common';
 import { Req } from '@nestjs/common';
+import { ApiTags, ApiCookieAuth } from '@nestjs/swagger';
 import { Request } from 'express';
 import { Response } from 'express';
 import { PayrollService } from './payroll.service';
@@ -15,6 +16,8 @@ import { PayrollSummaryQueryDto } from './dto/payroll-summary-query.dto';
 import { RejectPayrollDto } from './dto/reject-payroll.dto';
 import { PayrollInputsQueryDto, UpsertPayrollInputDto } from './dto/payroll-input.dto';
 
+@ApiTags('payroll')
+@ApiCookieAuth()
 @Controller('payroll')
 @UseGuards(JwtAuthGuard, PermissionsGuard)
 export class PayrollController {

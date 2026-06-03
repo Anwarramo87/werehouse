@@ -1,10 +1,13 @@
 import { Body, Controller, Delete, Get, Param, Post, Put, UseGuards } from '@nestjs/common';
+import { ApiTags, ApiCookieAuth } from '@nestjs/swagger';
 import { DepartmentsService } from './departments.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { PermissionsGuard } from '../common/guards/permissions.guard';
 import { Permissions } from '../common/decorators/permissions.decorator';
 import { CreateDepartmentDto } from './dto/create-department.dto';
 
+@ApiTags('departments')
+@ApiCookieAuth()
 @Controller('departments')
 @UseGuards(JwtAuthGuard, PermissionsGuard)
 export class DepartmentsController {

@@ -8,6 +8,7 @@ import {
   Res,
   UseGuards,
 } from '@nestjs/common';
+import { ApiTags, ApiOperation, ApiCookieAuth, ApiResponse } from '@nestjs/swagger';
 import { ConfigService } from '@nestjs/config';
 import { Throttle } from '@nestjs/throttler';
 import { Request, Response } from 'express';
@@ -28,6 +29,7 @@ import { AuditService } from '../common/services/audit.service';
 import { AuthenticatedUser } from '../common/types/authenticated-user.types';
 import { RequestWithCookies } from '../common/types/request-context.types';
 
+@ApiTags('auth')
 @Controller('auth')
 export class AuthController implements OnModuleInit {
   constructor(
@@ -48,6 +50,10 @@ export class AuthController implements OnModuleInit {
 
   @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @Post('login')
+  @ApiOperation({ summary: 'تسجيل الدخول', description: 'يقبل username أو email مع كلمة المرور، يُرجع JWT في HttpOnly Cookie' })
+  @ApiResponse({ status: 200, description: 'تم تسجيل الدخول بنجاح' })
+  @ApiResponse({ status: 401, description: 'بيانات الدخول غير صحيحة' })
+  @ApiResponse({ status: 429, description: 'تجاوزت حد الطلبات المسموح' })
   async login(@Body() dto: LoginDto, @Res({ passthrough: true }) res: Response) {
     const result = await this.authService.login(dto);
     this.setAuthCookie(res, result.token);
@@ -107,6 +113,8 @@ export class AuthController implements OnModuleInit {
   }
 
   @Post('logout')
+  @ApiOperation({ summary: 'تسجيل الخروج', description: 'يُلغي الـ JWT الحالي ويحذف الـ Cookie' })
+  @ApiResponse({ status: 200, description: 'تم تسجيل الخروج بنجاح' })
   async logout(@Req() req: Request, @Res({ passthrough: true }) res: Response) {
     const token = this.extractTokenFromRequest(req);
     if (token) {
@@ -122,6 +130,10 @@ export class AuthController implements OnModuleInit {
 
   @UseGuards(JwtAuthGuard)
   @Get('me')
+  @ApiCookieAuth()
+  @ApiOperation({ summary: 'بيانات المستخدم الحالي', description: 'يُرجع معلومات المستخدم المسجّل + يجدد الـ token إذا اقترب من الانتهاء' })
+  @ApiResponse({ status: 200, description: 'بيانات المستخدم' })
+  @ApiResponse({ status: 401, description: 'غير مصادق' })
   async me(@CurrentUser() user: AuthenticatedUser, @Res({ passthrough: true }) res: Response) {
     const rotatedToken = await this.authService.rotateSessionIfNeeded(user);
     if (rotatedToken) {

@@ -8,6 +8,7 @@ import {
   Query,
   UseGuards,
 } from '@nestjs/common';
+import { ApiTags, ApiCookieAuth } from '@nestjs/swagger';
 import { DevicesService } from './devices.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { PermissionsGuard } from '../common/guards/permissions.guard';
@@ -16,6 +17,8 @@ import { CreateDeviceDto } from './dto/create-device.dto';
 import { UpdateDeviceDto } from './dto/update-device.dto';
 import { DevicesListQueryDto } from './dto/devices-list-query.dto';
 
+@ApiTags('devices')
+@ApiCookieAuth()
 @Controller('devices')
 @UseGuards(JwtAuthGuard, PermissionsGuard)
 export class DevicesController {

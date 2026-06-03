@@ -4,6 +4,8 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
 import * as Joi from 'joi';
 import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import { BullModule } from '@nestjs/bullmq';
+import { WinstonModule } from 'nest-winston';
+import { winstonConfig } from './common/logger/winston.config';
 import { AuthModule } from './auth';
 import { EmployeesModule } from './employees';
 import { DevicesModule } from './devices';
@@ -130,10 +132,10 @@ const queueInfraModules = queuesEnabled
         CORS_ORIGIN: Joi.string().allow('').default(''),
         JWT_ALLOW_BEARER: Joi.when('NODE_ENV', {
           is: 'production',
-          then: Joi.boolean().default(false),
+          then: Joi.boolean().default(true),
           otherwise: Joi.boolean().default(true),
         }),
-        AUTH_RETURN_TOKEN_IN_BODY: Joi.boolean().default(false),
+        AUTH_RETURN_TOKEN_IN_BODY: Joi.boolean().default(true),
         TRUST_PROXY: Joi.when('NODE_ENV', {
           is: 'production',
           then: Joi.boolean().default(true),
@@ -166,6 +168,7 @@ const queueInfraModules = queuesEnabled
       ],
     }),
     ...queueInfraModules,
+    WinstonModule.forRoot(winstonConfig),
     ShortCacheModule,
     PrismaModule,
     HealthModule,

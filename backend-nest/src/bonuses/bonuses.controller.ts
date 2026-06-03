@@ -1,4 +1,5 @@
 import { Body, Controller, Delete, Get, Param, Post, Put, Query, UseGuards } from '@nestjs/common';
+import { ApiTags, ApiCookieAuth } from '@nestjs/swagger';
 import { BonusesService } from './bonuses.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { PermissionsGuard } from '../common/guards/permissions.guard';
@@ -14,6 +15,8 @@ import { BonusesListQueryDto } from './dto/bonuses-list-query.dto';
  *
  * كلاهما يشيران لنفس الـ service تماماً.
  */
+@ApiTags('bonuses')
+@ApiCookieAuth()
 @Controller(['bonuses', 'rewards'])
 @UseGuards(JwtAuthGuard, PermissionsGuard)
 export class BonusesController {

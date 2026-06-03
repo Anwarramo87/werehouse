@@ -1,4 +1,5 @@
 import { Body, Controller, Delete, Get, Param, Post, Put, Query, UseGuards } from '@nestjs/common';
+import { ApiTags, ApiCookieAuth } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { PermissionsGuard } from '../common/guards/permissions.guard';
 import { Permissions } from '../common/decorators/permissions.decorator';
@@ -7,6 +8,8 @@ import { CreatePenaltyDto } from './dto/create-penalty.dto';
 import { UpdatePenaltyDto } from './dto/update-penalty.dto';
 import { PenaltiesListQueryDto } from './dto/penalties-list-query.dto';
 
+@ApiTags('penalties')
+@ApiCookieAuth()
 @Controller('penalties')
 @UseGuards(JwtAuthGuard, PermissionsGuard)
 export class PenaltiesController {

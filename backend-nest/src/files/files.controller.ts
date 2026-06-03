@@ -8,6 +8,7 @@ import {
   UseGuards,
   UseInterceptors,
 } from '@nestjs/common';
+import { ApiTags, ApiCookieAuth } from '@nestjs/swagger';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { Request } from 'express';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
@@ -18,6 +19,8 @@ import { AuthenticatedUser } from '../common/types/authenticated-user.types';
 import { GENERAL_FILE_EXTENSIONS, FilesService } from './files.service';
 import { FilesListQueryDto } from './dto/files-list-query.dto';
 
+@ApiTags('files')
+@ApiCookieAuth()
 @Controller('files')
 @UseGuards(JwtAuthGuard, PermissionsGuard)
 export class FilesController {

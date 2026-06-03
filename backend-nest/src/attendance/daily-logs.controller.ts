@@ -9,6 +9,7 @@ import {
   Query,
   UseGuards,
 } from '@nestjs/common';
+import { ApiTags, ApiCookieAuth } from '@nestjs/swagger';
 import { DailyLogsService } from './daily-logs.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { PermissionsGuard } from '../common/guards/permissions.guard';
@@ -20,6 +21,8 @@ import { DailyLogQueryDto } from './dto/daily-log-query.dto';
 import { MonthlySummaryQueryDto } from './dto/monthly-summary-query.dto';
 import { AuthenticatedUser } from '../common/types/authenticated-user.types';
 
+@ApiTags('attendance')
+@ApiCookieAuth()
 @Controller('attendance/daily-logs')
 @UseGuards(JwtAuthGuard, PermissionsGuard)
 export class DailyLogsController {

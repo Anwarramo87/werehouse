@@ -1,4 +1,5 @@
 import { Body, Controller, Delete, Get, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
+import { ApiTags, ApiCookieAuth } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { PermissionsGuard } from '../common/guards/permissions.guard';
 import { Permissions } from '../common/decorators/permissions.decorator';
@@ -7,6 +8,8 @@ import { CreateLeaveRequestDto } from './dto/create-leave-request.dto';
 import { LeavesListQueryDto } from './dto/leaves-list-query.dto';
 import { UpdateLeaveRequestDto } from './dto/update-leave-request.dto';
 
+@ApiTags('leaves')
+@ApiCookieAuth()
 @Controller('leaves')
 @UseGuards(JwtAuthGuard, PermissionsGuard)
 export class LeavesController {

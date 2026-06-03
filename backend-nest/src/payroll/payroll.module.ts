@@ -3,6 +3,7 @@ import { BullModule } from '@nestjs/bullmq';
 import { PayrollController } from './payroll.controller';
 import { PayrollService } from './payroll.service';
 import { AuditService } from '../common/services/audit.service';
+import { PrismaModule } from '../prisma/prisma.module';
 import { QUEUE_NAMES } from '../queues/queue.constants';
 
 const queuesEnabled = process.env.NODE_ENV !== 'test' && process.env.QUEUES_ENABLED !== 'false';
@@ -18,7 +19,7 @@ const payrollQueueModules =
     : [];
 
 @Module({
-  imports: [...payrollQueueModules],
+  imports: [...payrollQueueModules, PrismaModule],
   controllers: [PayrollController],
   providers: [PayrollService, AuditService],
 })
