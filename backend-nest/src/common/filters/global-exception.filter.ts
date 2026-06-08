@@ -6,6 +6,7 @@ import {
   HttpStatus,
   Logger,
 } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { Request, Response } from 'express';
 import { RequestWithCorrelationId } from '../types/request-context.types';
 
@@ -25,12 +26,17 @@ export class GlobalExceptionFilter implements ExceptionFilter {
     const correlationId = request.correlationId || request.headers['x-correlation-id'] || null;
 
     const isHttpException = exception instanceof HttpException;
-    const statusCode = isHttpException
-      ? exception.getStatus()
-      : HttpStatus.INTERNAL_SERVER_ERROR;
+    const isDbConnectionError = this.isDatabaseConnectionError(exception);
+    const statusCode = isDbConnectionError
+      ? HttpStatus.SERVICE_UNAVAILABLE
+      : isHttpException
+        ? exception.getStatus()
+        : HttpStatus.INTERNAL_SERVER_ERROR;
 
     const exceptionResponse = isHttpException ? exception.getResponse() : null;
-    const message = this.extractMessage(exceptionResponse, exception);
+    const message = isDbConnectionError
+      ? 'Database connection failed. Check DATABASE_URL or database availability.'
+      : this.extractMessage(exceptionResponse, exception);
 
     if (statusCode >= 400) {
       this.logger.warn(
@@ -101,7 +107,24 @@ export class GlobalExceptionFilter implements ExceptionFilter {
     if (statusCode === 403) return 'FORBIDDEN';
     if (statusCode === 404) return 'NOT_FOUND';
     if (statusCode === 429) return 'TOO_MANY_REQUESTS';
+    if (statusCode === 503) return 'SERVICE_UNAVAILABLE';
     if (statusCode >= 500) return 'INTERNAL_SERVER_ERROR';
     return 'REQUEST_FAILED';
+  }
+
+  private isDatabaseConnectionError(exception: unknown) {
+    if (exception instanceof Prisma.PrismaClientKnownRequestError) {
+      return ['ECONNREFUSED', 'P1001', 'P1002'].includes(exception.code);
+    }
+
+    if (exception instanceof Prisma.PrismaClientInitializationError) {
+      return true;
+    }
+
+    if (exception instanceof Error) {
+      return /ECONNREFUSED|Connection refused/i.test(exception.message);
+    }
+
+    return false;
   }
 }

@@ -786,8 +786,9 @@ export class PayrollService {
     const bonusesByEmployee = new Map<string, { bonus: number; deductions: number }>();
     for (const bonus of bonuses) {
       const current = bonusesByEmployee.get(bonus.employeeId) || { bonus: 0, deductions: 0 };
+      // المكافآت (bonusAmount + assistanceAmount) تُضاف للراتب
       current.bonus += Number(bonus.bonusAmount || 0);
-      current.deductions += Number(bonus.assistanceAmount || 0);
+      current.bonus += Number(bonus.assistanceAmount || 0);
       bonusesByEmployee.set(bonus.employeeId, current);
     }
 
@@ -861,13 +862,12 @@ export class PayrollService {
 
         const employeeBonuses = bonusesByEmployee.get(employee.employeeId);
         const bonusAmount = this.toDecimal(employeeBonuses?.bonus || 0);
-        const administrativeDeductions = this.toDecimal(employeeBonuses?.deductions || 0);
         const advancesInstallments = this.toDecimal(advancesByEmployee.get(employee.employeeId) || 0);
         const penaltiesTotal = this.toDecimal(penaltiesByEmployee.get(employee.employeeId) || 0);
 
-        const penaltyAmountBase = penaltiesTotal.plus(administrativeDeductions);
+        // العقوبات فقط (بدون assistanceAmount لأنها مكافآت)
         const penaltyAmount = this.toDecimal(
-          input?.penaltyAmount ?? penaltyAmountBase,
+          input?.penaltyAmount ?? penaltiesTotal,
         );
         const clothingDeduction = this.toDecimal(
           (input as unknown as { clothingDeduction?: Prisma.Decimal })?.clothingDeduction ?? 0,
