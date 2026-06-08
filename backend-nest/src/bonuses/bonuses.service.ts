@@ -1,5 +1,6 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
+import { paginatedResponse, resolvePagination } from '../common/utils/pagination.util';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateBonusDto } from './dto/create-bonus.dto';
 import { UpdateBonusDto } from './dto/update-bonus.dto';
@@ -54,15 +55,8 @@ export class BonusesService {
       this.prisma.employeeBonus.count({ where }),
     ]);
 
-    return {
-      rewards: records,
-      pagination: {
-        page,
-        limit,
-        total,
-        pages: Math.ceil(total / limit),
-      },
-    };
+    return paginatedResponse(records, page, limit, total);
+
   }
 
   async getById(id: string) {

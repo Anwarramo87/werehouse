@@ -1,7 +1,7 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma, LeaveRequestStatus, LeaveRequestType } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
-import { resolvePagination } from '../common/utils/pagination.util';
+import { paginatedResponse, resolvePagination } from '../common/utils/pagination.util';
 import { BulkCreateLeaveRequestDto, CreateLeaveRequestDto } from './dto/create-leave-request.dto';
 import { UpdateLeaveRequestDto } from './dto/update-leave-request.dto';
 import { LeavesListQueryDto } from './dto/leaves-list-query.dto';
@@ -296,10 +296,7 @@ export class LeavesService {
       this.prisma.leaveRequest.count({ where }),
     ]);
 
-    return {
-      leaveRequests,
-      pagination: { page, limit, total, pages: Math.ceil(total / Math.max(1, limit)) },
-    };
+    return paginatedResponse(leaveRequests, page, limit, total);
   }
 
   async getById(id: string) {

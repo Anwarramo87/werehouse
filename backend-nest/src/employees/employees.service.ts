@@ -6,7 +6,7 @@ import {
 import { Prisma } from '@prisma/client';
 import * as bcrypt from 'bcryptjs';
 import { PrismaService } from '../prisma/prisma.service';
-import { resolvePagination } from '../common/utils/pagination.util';
+import { paginatedResponse, paginationMeta, resolvePagination } from '../common/utils/pagination.util';
 import { CreateEmployeeDto } from './dto/create-employee.dto';
 import { UpdateEmployeeDto } from './dto/update-employee.dto';
 import { EmployeesListQueryDto } from './dto/employees-list-query.dto';
@@ -18,6 +18,14 @@ import { RehireEmployeeDto } from './dto/rehire-employee.dto';
 import { FinancialSettlementDto } from './dto/financial-settlement.dto';
 import { ResignedEmployeesQueryDto } from './dto/resigned-employees-query.dto';
 import { AuthenticatedUser } from '../common/types/authenticated-user.types';
+import { BCRYPT_DEFAULT_ROUNDS } from '../common/constants/auth.constants';
+import {
+  DEFAULT_DEPARTMENT,
+  DEFAULT_HOURS_PER_DAY,
+  DEFAULT_WORK_DAYS_IN_PERIOD,
+  MAX_BASE_SALARY,
+  MAX_HOURLY_RATE,
+} from './employees.constants';
 
 const DEFAULT_PROFILE_RANGE_DAYS = 30;
 const DEFAULT_PROFILE_LIMIT = 200;
@@ -36,7 +44,7 @@ export class EmployeesService {
   }
 
   private normalizeDepartmentName(value?: string | null) {
-    return this.normalizeOptionalString(value) ?? 'Warehouse';
+    return this.normalizeOptionalString(value) ?? DEFAULT_DEPARTMENT;
   }
 
   private parseOptionalDate(value: string | null | undefined, fieldName: string) {
@@ -152,15 +160,7 @@ export class EmployeesService {
       this.prisma.employee.count({ where }),
     ]);
 
-    return {
-      employees,
-      pagination: {
-        page,
-        limit,
-        total,
-        pages: Math.ceil(total / limit),
-      },
-    };
+    return paginatedResponse(employees, page, limit, total);
   }
 
   async stats() {
@@ -194,18 +194,33 @@ export class EmployeesService {
     });
   }
 
-  async byDepartment(department: string) {
-    const employees = await this.prisma.employee.findMany({
-      where: { department, status: 'active' },
-      include: this.employeeSelect(),
-      orderBy: { createdAt: 'desc' },
-    });
+  async byDepartment(department: string, query: Record<string, any> = {}) {
+    const page = Math.max(1, query?.page ?? 1);
+    const limit = Math.min(200, Math.max(1, query?.limit ?? 50));
+    const skip = (page - 1) * limit;
 
-    return { department, count: employees.length, employees };
+    const where: Prisma.EmployeeWhereInput = { department, status: 'active' };
+
+    const [employees, total] = await Promise.all([
+      this.prisma.employee.findMany({
+        where,
+        include: this.employeeSelect(),
+        orderBy: { createdAt: 'desc' },
+        skip,
+        take: limit,
+      }),
+      this.prisma.employee.count({ where }),
+    ]);
+
+    return {
+      data: employees,
+      ...paginationMeta(page, limit, total),
+      department,
+    };
   }
 
   async create(dto: CreateEmployeeDto) {
-    const loginName = this.normalizeLoginName(dto.username);
+    const loginName = this.normalizeLoginName(dto.username || dto.employeeId);
     const mobile = this.normalizeOptionalString(dto.mobile);
     const residence = this.normalizeOptionalString(dto.residence);
     const nationalId = this.normalizeOptionalString(dto.nationalId);
@@ -219,10 +234,8 @@ export class EmployeesService {
     const department = await this.resolveDepartment(departmentName);
     const profession = this.normalizeOptionalString(dto.profession ?? dto.jobTitle);
     const baseSalary = dto.baseSalary ?? null;
-    const resolvedWorkDaysInPeriod = dto.workDaysInPeriod ?? 26;
-    const resolvedHoursPerDay = dto.hoursPerDay ?? 8;
-    const maxHourlyRate = 99999999.99;
-    const maxBaseSalary = 999999999999.99;
+    const resolvedWorkDaysInPeriod = dto.workDaysInPeriod ?? DEFAULT_WORK_DAYS_IN_PERIOD;
+    const resolvedHoursPerDay = dto.hoursPerDay ?? DEFAULT_HOURS_PER_DAY;
     const resolvedHourlyRate =
       dto.hourlyRate ??
       (baseSalary != null
@@ -233,11 +246,11 @@ export class EmployeesService {
       throw new BadRequestException('baseSalary is required when hourlyRate is not provided');
     }
 
-    if (baseSalary != null && baseSalary > maxBaseSalary) {
+    if (baseSalary != null && baseSalary > MAX_BASE_SALARY) {
       throw new BadRequestException('baseSalary is too large');
     }
 
-    if (resolvedHourlyRate > maxHourlyRate) {
+    if (resolvedHourlyRate > MAX_HOURLY_RATE) {
       throw new BadRequestException('baseSalary is too large for hourlyRate');
     }
 
@@ -276,7 +289,7 @@ export class EmployeesService {
     }
 
     const passwordToHash = dto.password || dto.employeeId;
-    const passwordHash = await bcrypt.hash(passwordToHash, 10);
+    const passwordHash = await bcrypt.hash(passwordToHash, BCRYPT_DEFAULT_ROUNDS);
 
     const created = await this.prisma.$transaction(async (transaction) => {
       const user = await transaction.user.create({
@@ -284,7 +297,7 @@ export class EmployeesService {
           username: loginName,
           email: loginName,
           passwordHash,
-          roleId: dto.roleId,
+          roleId: dto.roleId || null,
           status: 'active',
         },
       });
@@ -304,7 +317,7 @@ export class EmployeesService {
           baseSalary: baseSalary != null ? new Prisma.Decimal(baseSalary) : null,
           livingAllowance:
             dto.livingAllowance != null ? new Prisma.Decimal(dto.livingAllowance) : null,
-          roleId: dto.roleId,
+          roleId: dto.roleId || null,
           department: department.name,
           departmentId: department.id,
           scheduledStart: dto.scheduledStart || null,
@@ -312,8 +325,8 @@ export class EmployeesService {
           employmentStartDate,
           terminationDate: null,
           status: 'active',
-          workDaysInPeriod: dto.workDaysInPeriod ?? 26,
-          hoursPerDay: dto.hoursPerDay ?? 8,
+          workDaysInPeriod: dto.workDaysInPeriod ?? DEFAULT_WORK_DAYS_IN_PERIOD,
+          hoursPerDay: dto.hoursPerDay ?? DEFAULT_HOURS_PER_DAY,
           gracePeriodMinutes: dto.gracePeriodMinutes ?? 15,
         },
         include: this.employeeSelect(),
@@ -404,7 +417,7 @@ export class EmployeesService {
     }
 
     const loginName = dto.username !== undefined ? this.normalizeLoginName(dto.username) : undefined;
-    const passwordHash = dto.password !== undefined ? await bcrypt.hash(dto.password, 10) : undefined;
+    const passwordHash = dto.password !== undefined ? await bcrypt.hash(dto.password, BCRYPT_DEFAULT_ROUNDS) : undefined;
 
     if (loginName !== undefined) {
       const userConflict = await this.findAuthUserByLogin(loginName);
@@ -641,6 +654,23 @@ export class EmployeesService {
   }
 
   async terminate(employeeId: string, dto: TerminateEmployeeDto) {
+    return this._applySimpleTermination(employeeId, dto, 'terminated', 'termination', 'Employee terminated successfully');
+  }
+
+  async resign(employeeId: string, dto: TerminateEmployeeDto) {
+    return this._applySimpleTermination(employeeId, dto, 'resigned', 'resignation', 'Employee resigned successfully');
+  }
+
+  /**
+   * Shared helper for terminate() and resign() — both differ only in status/type/message.
+   */
+  private async _applySimpleTermination(
+    employeeId: string,
+    dto: TerminateEmployeeDto,
+    status: string,
+    terminationType: string,
+    successMessage: string,
+  ) {
     const employee = await this.prisma.employee.findUnique({ where: { employeeId } });
 
     if (!employee) throw new NotFoundException('Employee not found');
@@ -650,9 +680,9 @@ export class EmployeesService {
     const updated = await this.prisma.employee.update({
       where: { employeeId },
       data: {
-        status: 'terminated',
+        status,
         terminationDate,
-        terminationType: 'termination',
+        terminationType,
         terminationReason: dto.terminationReason || null,
         terminationNotes: null,
         financialSettlementStatus: 'pending',
@@ -664,7 +694,7 @@ export class EmployeesService {
 
     await this.shortCache.invalidatePrefix('employees:stats');
 
-    return { message: 'Employee terminated successfully', employee: updated };
+    return { message: successMessage, employee: updated };
   }
 
   async terminateEmployee(dto: TerminateEmployeeInput, user: AuthenticatedUser) {
@@ -734,33 +764,6 @@ export class EmployeesService {
       employee: result.employee,
       terminationRecord: result.terminationRecord,
     };
-  }
-
-  async resign(employeeId: string, dto: TerminateEmployeeDto) {
-    const employee = await this.prisma.employee.findUnique({ where: { employeeId } });
-
-    if (!employee) throw new NotFoundException('Employee not found');
-
-    const terminationDate = this.parseOptionalDate(dto.terminationDate, 'terminationDate') || new Date();
-
-    const updated = await this.prisma.employee.update({
-      where: { employeeId },
-      data: {
-        status: 'resigned',
-        terminationDate,
-        terminationType: 'resignation',
-        terminationReason: dto.terminationReason || null,
-        terminationNotes: null,
-        financialSettlementStatus: 'pending',
-        isSettled: false,
-        isFinanciallySettled: false,
-      },
-      include: this.employeeSelect(),
-    });
-
-    await this.shortCache.invalidatePrefix('employees:stats');
-
-    return { message: 'Employee resigned successfully', employee: updated };
   }
 
   async settle(employeeId: string) {
@@ -1054,14 +1057,8 @@ export class EmployeesService {
     }, {});
 
     return {
-      success: true,
-      employees,
-      pagination: {
-        page,
-        limit,
-        total,
-        pages: Math.ceil(total / limit),
-      },
+      data: employees,
+      ...paginationMeta(page, limit, total),
       statistics: {
         currentMonth: currentMonthCount,
         previousMonths: previousMonthsCount,

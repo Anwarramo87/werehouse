@@ -4,7 +4,7 @@ import { parse as parseCsv } from 'csv-parse/sync';
 import { extname } from 'path';
 import * as XLSX from 'xlsx';
 import { PrismaService } from '../prisma/prisma.service';
-import { resolvePagination } from '../common/utils/pagination.util';
+import { paginationMeta, resolvePagination } from '../common/utils/pagination.util';
 import { CreateAttendanceDto } from './dto/create-attendance.dto';
 import { UpdateAttendanceDto } from './dto/update-attendance.dto';
 import { AttendanceListQueryDto } from './dto/attendance-list-query.dto';
@@ -418,6 +418,7 @@ export class AttendanceService {
     const [records, total] = await Promise.all([
       this.prisma.attendanceRecord.findMany({
         where,
+        include: { employee: { select: { name: true, employeeId: true } } },
         orderBy: { timestamp: 'desc' },
         skip,
         take: limit,
@@ -426,8 +427,8 @@ export class AttendanceService {
     ]);
 
     return {
-      records,
-      pagination: { page, limit, total, pages: Math.ceil(total / limit) },
+      data: records,
+      ...paginationMeta(page, limit, total),
     };
   }
 
@@ -540,18 +541,21 @@ export class AttendanceService {
     };
   }
 
-  async month(month: string) {
+  async month(month: string, page = 1, limit = 100) {
     const range = this.resolveMonthRange(month);
+    const skip = (page - 1) * limit;
 
-    const records = await this.prisma.attendanceRecord.findMany({
-      where: {
-        date: {
-          gte: range.startDate,
-          lte: range.endDate,
-        },
-      },
-      orderBy: [{ date: 'asc' }, { timestamp: 'asc' }],
-    });
+    const [records, total] = await Promise.all([
+      this.prisma.attendanceRecord.findMany({
+        where: { date: { gte: range.startDate, lte: range.endDate } },
+        orderBy: [{ date: 'asc' }, { timestamp: 'asc' }],
+        skip,
+        take: limit,
+      }),
+      this.prisma.attendanceRecord.count({
+        where: { date: { gte: range.startDate, lte: range.endDate } },
+      }),
+    ]);
 
     const employeeCount = new Set(records.map((record) => record.employeeId)).size;
     const lateCount = records.filter(
@@ -559,14 +563,15 @@ export class AttendanceService {
     ).length;
 
     return {
+      data: records,
+      ...paginationMeta(page, limit, total),
       month,
       period: range,
       statistics: {
-        totalRecords: records.length,
+        totalRecords: total,
         totalEmployees: employeeCount,
         totalLateRecords: lateCount,
       },
-      records,
     };
   }
 
@@ -615,14 +620,27 @@ export class AttendanceService {
     return { message: 'Attendance record updated successfully', record: updated };
   }
 
-  async listDeletedHistory() {
-    return this.prisma.deletedRecordHistory.findMany({
-      where: {
-        entityType: ATTENDANCE_DELETION_ENTITY,
-        restoredAt: null,
-      },
-      orderBy: { deletedAt: 'desc' },
-    });
+  async listDeletedHistory(query: { page?: number; limit?: number }) {
+    const page = Math.max(1, query.page ?? 1);
+    const limit = Math.min(200, Math.max(1, query.limit ?? 20));
+    const skip = (page - 1) * limit;
+
+    const where = { entityType: ATTENDANCE_DELETION_ENTITY, restoredAt: null };
+
+    const [records, total] = await Promise.all([
+      this.prisma.deletedRecordHistory.findMany({
+        where,
+        orderBy: { deletedAt: 'desc' },
+        skip,
+        take: limit,
+      }),
+      this.prisma.deletedRecordHistory.count({ where }),
+    ]);
+
+    return {
+      data: records,
+      ...paginationMeta(page, limit, total),
+    };
   }
 
   async remove(recordId: string, deletedBy?: string) {

@@ -7,7 +7,7 @@ import { extname } from 'path';
 import { Queue } from 'bullmq';
 import * as XLSX from 'xlsx';
 import { QUEUE_JOBS, QUEUE_NAMES } from '../queues/queue.constants';
-import { resolvePagination } from '../common/utils/pagination.util';
+import { paginatedResponse, resolvePagination } from '../common/utils/pagination.util';
 import { ImportsHistoryQueryDto } from './dto/imports-history-query.dto';
 
 type ParsedRow = Record<string, string>;
@@ -187,7 +187,7 @@ export class ImportsService {
       this.prisma.importJob.count({ where }),
     ]);
 
-    return { imports, pagination: { page, limit, total, pages: Math.ceil(total / limit) } };
+    return paginatedResponse(imports, page, limit, total);
   }
 
   async stats() {

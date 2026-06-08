@@ -46,33 +46,34 @@ export class DashboardService {
     const [
       totalEmployees,
       todayAttendanceRecords,
-      salaryRecords,
+      salaryAggregate,
       latestPayrollRun,
     ] = await Promise.all([
       // إجمالي الموظفين النشطين
       this.prisma.employee.count({ where: { status: 'active' } }),
 
-      // سجلات الحضور لليوم
+      // سجلات الحضور لليوم (نحتفظ بالحد الأقصى 10,000 سجل لليوم الواحد)
       this.prisma.attendanceRecord.findMany({
         where: { date: today },
         include: { employee: { select: { name: true, employeeId: true, scheduledStart: true } } },
         orderBy: { timestamp: 'asc' },
+        take: 10000,
       }),
 
-      // سجلات الرواتب
-      this.prisma.employeeSalary.findMany({
-        select: {
-          employeeId: true,
+      // تجميع الرواتب عبر قاعدة البيانات بدلاً من جلب كل السجلات
+      this.prisma.employeeSalary.aggregate({
+        _sum: {
           baseSalary: true,
           lumpSumSalary: true,
           livingAllowance: true,
           responsibilityAllowance: true,
           extraEffortAllowance: true,
           productionIncentive: true,
-          insuranceAmount: true,
           transportAllowance: true,
         },
       }),
+
+      // آخر تشغيل رواتب مكتمل
       this.prisma.payrollRun.findFirst({
         where: { status: 'completed' },
         orderBy: { runDate: 'desc' },
@@ -82,8 +83,9 @@ export class DashboardService {
       }),
     ]);
 
+    const salaryAgg = salaryAggregate as Record<string, unknown>;
+
     // ─── حضور اليوم ───────────────────────────────────────────────────────
-    // نجمع أول IN لكل موظف اليوم
     const presentMap = new Map<string, { name: string; checkIn: string }>();
     for (const rec of todayAttendanceRecords) {
       if (rec.type === 'IN' && !presentMap.has(rec.employeeId)) {
@@ -96,15 +98,11 @@ export class DashboardService {
     const presentEmployees = Array.from(presentMap.values());
     const presentCount = presentEmployees.length;
 
-    // ─── الغياب (محسوب بطريقة مُخففة لتجنّب جلب كل الموظفين)
-    // بدلاً من جلب جميع الموظفين النشطين، نحسب العدد الغائب بطرح الحاضرين من الإجمالي.
-    // نُعيد مصفوفة فارغة للأسماء لتجنّب تحميل جدول الموظفين بالكامل — إذا احتجنا أسماء،
-    // يمكن توفير endpoint منفصل يحمّل عينات أو صفحة من الأسماء.
+    // ─── الغياب ──────────────────────────────────────────────────────────
     const absentCount = Math.max(0, totalEmployees - presentCount);
     const absentEmployees: { employeeId: string; name: string }[] = [];
 
     // ─── التأخير ──────────────────────────────────────────────────────────
-    // نجمع أول IN لكل موظف مع بيانات shiftPair لحساب التأخير بدقة
     type LateEntry = { employeeId: string; name: string; minutesLate: number };
     const firstInMap = new Map<string, {
       timestamp: Date;
@@ -115,7 +113,7 @@ export class DashboardService {
 
     for (const rec of todayAttendanceRecords) {
       if (rec.type !== 'IN') continue;
-      if (firstInMap.has(rec.employeeId)) continue; // نحتفظ بأول IN فقط
+      if (firstInMap.has(rec.employeeId)) continue;
       const sp = rec.shiftPair as Record<string, unknown> | null;
       firstInMap.set(rec.employeeId, {
         timestamp: rec.timestamp,
@@ -154,16 +152,13 @@ export class DashboardService {
       if (rec.type !== 'OUT') continue;
       const shiftPair = rec.shiftPair as Record<string, unknown> | null;
       const hoursWorked = Number(shiftPair?.hoursWorked ?? 0);
-      // نعتبر أكثر من 8 ساعات عمل إضافي
       const standardHours = 8;
       const overtimeHours = Math.max(0, hoursWorked - standardHours);
       const overtimeMinutes = Math.round(overtimeHours * 60);
 
       if (overtimeMinutes > 0) {
-        // حساب أجر الإضافي بناءً على الراتب الساعي
-        const salaryRec = salaryRecords.find((s) => s.employeeId === rec.employeeId);
+        const salaryRec = salaryAgg as Record<string, unknown> | undefined;
         const baseSalary = Number(salaryRec?.baseSalary ?? 0);
-        // الراتب الساعي = الراتب الأساسي / (26 يوم * 8 ساعات)
         const hourlyRate = baseSalary / (26 * 8);
         const overtimePay = Number((hourlyRate * overtimeHours * 1.5).toFixed(2));
 
@@ -177,63 +172,50 @@ export class DashboardService {
       }
     }
 
-    // ─── الرواتب المستحقة ─────────────────────────────────────────────────
-    // نعتمد أحدث تشغيل رواتب إن وجد، وإلا نرجع لتقدير ثابت من السجل
+    // ─── الرواتب المستحقة من التجميعات ─────────────────────────────────
     const payrollRunTotal = latestPayrollRun?.items?.reduce((sum, item) => {
       return sum + Number(item.netPayRounded ?? item.netPay ?? 0);
     }, 0);
-    const fallbackTotalDueSalaries = salaryRecords.reduce((sum, s) => {
+
+    const fallbackTotalDueSalaries = (() => {
+      const s = salaryAgg as Record<string, unknown> | undefined;
       const fixedEarnings =
-        Number(s.baseSalary) +
-        Number(s.lumpSumSalary) +
-        Number(s.livingAllowance) +
-        Number(s.responsibilityAllowance) +
-        Number(s.extraEffortAllowance) +
-        Number(s.productionIncentive) +
-        Number(s.transportAllowance);
-      const deductions = Number(s.insuranceAmount);
-      return sum + fixedEarnings - deductions;
-    }, 0);
+        Number(s?.baseSalary ?? 0) +
+        Number(s?.lumpSumSalary ?? 0) +
+        Number(s?.livingAllowance ?? 0) +
+        Number(s?.responsibilityAllowance ?? 0) +
+        Number(s?.extraEffortAllowance ?? 0) +
+        Number(s?.productionIncentive ?? 0) +
+        Number(s?.transportAllowance ?? 0);
+      const deductions = Number(s?.insuranceAmount ?? 0);
+      return fixedEarnings - deductions;
+    })();
+
     const totalReceivedSalaries = payrollRunTotal ?? 0;
     const totalDueSalaries = fallbackTotalDueSalaries;
 
     return {
-      // ─── إجمالي الموظفين
       totalEmployees,
-
-      // ─── حضور اليوم
       attendance: {
         count: presentCount,
         employees: presentEmployees,
       },
-
-      // ─── الغياب
       absence: {
         count: absentCount,
         employees: absentEmployees,
       },
-
-      // ─── الرواتب المستحقة
       totalDueSalaries: Number(totalDueSalaries.toFixed(2)),
-
-      // ─── الرواتب المقبوضة
       totalReceivedSalaries: Number(totalReceivedSalaries.toFixed(2)),
-
-      // ─── التأخير
       lateness: {
         totalMinutes: totalLateMinutes,
         count: lateEmployees.length,
         employees: lateEmployees,
       },
-
-      // ─── العمل الإضافي
       overtime: {
         totalMinutes: totalOvertimeMinutes,
         count: overtimeEmployees.length,
         employees: overtimeEmployees,
       },
-
-      // ─── تاريخ التقرير
       reportDate: today,
     };
   }

@@ -26,8 +26,8 @@ export class CreateEmployeeDto {
 
   @ApiProperty({ description: 'اسم المستخدم لتسجيل الدخول', example: 'ahmed.salem' })
   @IsString()
-  @IsNotEmpty()
-  username: string;
+  @IsOptional()
+  username?: string;
 
   @ApiPropertyOptional({ description: 'كلمة المرور الأولية', example: 'TempPass@2025' })
   @IsString()
@@ -106,10 +106,10 @@ export class CreateEmployeeDto {
   @Type(() => Number)
   livingAllowance?: number;
 
-  @ApiProperty({ description: 'معرّف الدور (Role ID)', example: 'clx1234abc' })
+  @ApiProperty({ description: 'معرّف الدور (Role ID)', example: 'clx1234abc', required: false })
   @IsString()
-  @IsNotEmpty()
-  roleId: string;
+  @IsOptional()
+  roleId?: string;
 
   @ApiPropertyOptional({ description: 'وقت بداية الدوام (HH:mm)', example: '08:00' })
   @IsOptional()

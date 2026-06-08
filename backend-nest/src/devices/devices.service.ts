@@ -5,7 +5,7 @@ import {
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
-import { resolvePagination } from '../common/utils/pagination.util';
+import { paginatedResponse, resolvePagination } from '../common/utils/pagination.util';
 import { CreateDeviceDto } from './dto/create-device.dto';
 import { UpdateDeviceDto } from './dto/update-device.dto';
 import { DevicesListQueryDto } from './dto/devices-list-query.dto';
@@ -31,15 +31,7 @@ export class DevicesService {
       this.prisma.device.count({ where }),
     ]);
 
-    return {
-      devices,
-      pagination: {
-        page,
-        limit,
-        total,
-        pages: Math.ceil(total / limit),
-      },
-    };
+    return paginatedResponse(devices, page, limit, total);
   }
 
   async create(dto: CreateDeviceDto) {

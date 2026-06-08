@@ -80,8 +80,13 @@ See:
 
 ## Documentation Map
 
+All documentation lives in the [`docs/`](./docs/) folder.
+
 - Core backend explanation (Arabic): `docs/BACKEND_EXPLAINED_AR.md`
 - Backend comparison (Arabic): `docs/AR_BACKEND_COMPARISON.md`
+- API documentation: `docs/API_DOCUMENTATION.md`
+- Migration summary: `docs/MIGRATION_SUMMARY.md`
+- Schema tables reference: `docs/schema-tables.md`
 - Postman assets and checklist: `docs/postman/`
 	- `docs/postman/postman.nest.collection.json`
 	- `docs/postman/postman.nest.environment.json`

@@ -6,6 +6,7 @@ import * as bcrypt from 'bcryptjs';
 import { PrismaService } from '../prisma/prisma.service';
 import { TokenRevocationService } from './token-revocation.service';
 import { RealtimeGateway } from '../realtime/realtime.gateway';
+import { ShortCacheService } from '../common/cache/short-cache.service';
 import { LoginDto } from './dto/login.dto';
 import { RegisterDto } from './dto/register.dto';
 import { CreateUserDto } from './dto/create-user.dto';
@@ -41,7 +42,23 @@ interface BiometricChallengeRecord {
 @Injectable()
 export class AuthService {
   private readonly logger = new Logger(AuthService.name);
-  private readonly biometricChallenges = new Map<string, BiometricChallengeRecord>();
+
+  private challengeKey(challengeId: string) {
+    return `auth:biometric:challenge:${challengeId}`;
+  }
+
+  private async setChallenge(challengeId: string, record: BiometricChallengeRecord) {
+    const ttl = Math.max(1, Math.ceil((record.expiresAt - Date.now()) / 1000));
+    await this.shortCache.setJson(this.challengeKey(challengeId), record, ttl);
+  }
+
+  private async getChallenge(challengeId: string): Promise<BiometricChallengeRecord | null> {
+    const key = this.challengeKey(challengeId);
+    const value = await this.shortCache.getJson<BiometricChallengeRecord>(key);
+    if (!value) return null;
+    await this.shortCache.del(key);
+    return value;
+  }
 
   private static readonly ADMIN_PERMISSIONS = [
     'view_employees',
@@ -73,6 +90,7 @@ export class AuthService {
     private readonly config: ConfigService,
     private readonly tokenRevocation: TokenRevocationService,
     private readonly realtimeGateway: RealtimeGateway,
+    private readonly shortCache: ShortCacheService,
   ) {}
 
   async login(dto: LoginDto) {
@@ -154,7 +172,7 @@ export class AuthService {
     const challengeId = randomBytes(16).toString('hex');
     const challengeBase64 = randomBytes(BIOMETRIC_CHALLENGE_BYTES).toString('base64url');
 
-    this.biometricChallenges.set(challengeId, {
+    const record: BiometricChallengeRecord = {
       id: challengeId,
       userId,
       purpose: 'REGISTER',
@@ -164,13 +182,15 @@ export class AuthService {
       keyId: dto.keyId,
       pendingPublicKeyBase64: dto.publicKeyBase64,
       pendingDeviceName: dto.deviceName,
-    });
+    };
+
+    await this.setChallenge(challengeId, record);
 
     return { challengeId, challengeBase64 };
   }
 
   async finishBiometricRegistration(userId: string, dto: BiometricRegisterFinishDto) {
-    const challenge = this.consumeChallenge(dto.challengeId, 'REGISTER', userId);
+    const challenge = await this.consumeChallenge(dto.challengeId, 'REGISTER', userId);
     if (!challenge) {
       throw new BadRequestException('تحدي غير صالح');
     }
@@ -205,20 +225,22 @@ export class AuthService {
     const challengeId = randomBytes(16).toString('hex');
     const challengeBase64 = randomBytes(BIOMETRIC_CHALLENGE_BYTES).toString('base64url');
 
-    this.biometricChallenges.set(challengeId, {
+    const record: BiometricChallengeRecord = {
       id: challengeId,
       userId: user.id,
       purpose: 'LOGIN',
       challengeHash: this.hashChallenge(challengeBase64),
       challengeBase64,
       expiresAt: Date.now() + BIOMETRIC_CHALLENGE_TTL_SECONDS * 1000,
-    });
+    };
+
+    await this.setChallenge(challengeId, record);
 
     return { challengeId, challengeBase64, allowedKeyIds: credentials.map((credential: { keyId: string }) => credential.keyId) };
   }
 
   async finishBiometricLogin(dto: BiometricLoginFinishDto) {
-    const challenge = this.consumeChallenge(dto.challengeId, 'LOGIN');
+    const challenge = await this.consumeChallenge(dto.challengeId, 'LOGIN');
     if (!challenge) {
       throw new BadRequestException('التحدي منتهي');
     }
@@ -314,11 +336,11 @@ export class AuthService {
     });
 
     const password = this.config.get<string>('ADMIN_BOOTSTRAP_PASSWORD');
-    if (!password && this.config.get('NODE_ENV') === 'production') {
-      throw new Error('ADMIN_BOOTSTRAP_PASSWORD must be set in production');
+    if (!password) {
+      throw new Error('ADMIN_BOOTSTRAP_PASSWORD must be set');
     }
 
-    const hash = await bcrypt.hash(password || 'password123', BCRYPT_DEFAULT_ROUNDS);
+    const hash = await bcrypt.hash(password, BCRYPT_DEFAULT_ROUNDS);
     await this.prisma.user.upsert({
       where: { username: this.config.get('ADMIN_USERNAME', 'admin') },
       update: {},
@@ -342,12 +364,11 @@ export class AuthService {
     const username = this.config.get<string>('SUPERADMIN_USERNAME', 'superadmin');
     const email = this.config.get<string>('SUPERADMIN_EMAIL', 'superadmin@warehouse.local');
     const password = this.config.get<string>('SUPERADMIN_PASSWORD');
-
-    if (!password && this.config.get('NODE_ENV') === 'production') {
-      throw new Error('SUPERADMIN_PASSWORD must be set in production');
+    if (!password) {
+      throw new Error('SUPERADMIN_PASSWORD must be set');
     }
 
-    const hash = await bcrypt.hash(password || 'SuperAdmin@2026!', BCRYPT_DEFAULT_ROUNDS);
+    const hash = await bcrypt.hash(password, BCRYPT_DEFAULT_ROUNDS);
     await this.prisma.user.upsert({
       where: { username },
       update: {},
@@ -450,14 +471,13 @@ export class AuthService {
     }
   }
 
-  private consumeChallenge(challengeId: string, purpose: BiometricChallengePurpose, userId?: string) {
-    const challenge = this.biometricChallenges.get(challengeId);
+  private async consumeChallenge(challengeId: string, purpose: BiometricChallengePurpose, userId?: string) {
+    const challenge = await this.getChallenge(challengeId);
     if (!challenge) {
       return null;
     }
 
-    if (challenge.usedAt || challenge.expiresAt < Date.now() || challenge.purpose !== purpose) {
-      this.biometricChallenges.delete(challengeId);
+    if (challenge.purpose !== purpose) {
       return null;
     }
 
@@ -465,8 +485,6 @@ export class AuthService {
       return null;
     }
 
-    challenge.usedAt = new Date();
-    this.biometricChallenges.delete(challengeId);
     return challenge;
   }
 

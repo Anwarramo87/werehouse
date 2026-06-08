@@ -11,7 +11,7 @@ import { AttendanceService } from './attendance.service';
 import { PrismaService } from '../prisma/prisma.service';
 
 @ApiTags('attendance')
-@Controller('attendance')
+@Controller('attendance/public')
 export class PublicAttendanceController {
   constructor(
     private readonly attendanceService: AttendanceService,
