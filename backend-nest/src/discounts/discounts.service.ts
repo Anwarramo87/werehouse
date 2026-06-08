@@ -62,7 +62,7 @@ export class DiscountsService {
         kind: DiscountKind.ASSISTANCE,
       }));
 
-    return [...advanceRecords, ...bonusRecords].sort(
+    return [...advanceRecords].sort(
       (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime(),
     );
   }
@@ -92,23 +92,10 @@ export class DiscountsService {
     }
 
     const period = dto.date ? dto.date.slice(0, 7) : undefined;
-    const record = await this.bonusesService.create({
-      employeeId: dto.employeeId,
-      bonusAmount: 0,
-      bonusReason: dto.type || 'خصم متنوع',
-      assistanceAmount: dto.amount,
-      ...(period && { period }), // تمرير period فقط إذا كانت موجودة
-    });
-
-    return {
-      id: record.id,
-      employeeId: record.employeeId,
-      type: record.bonusReason || 'خصم متنوع',
-      amount: this.toNumber(record.assistanceAmount),
-      date: record.createdAt.toISOString(),
-      notes: record.bonusReason ?? null,
-      kind: DiscountKind.ASSISTANCE,
-    };
+    
+    // لم نعد نستخدم assistanceAmount في discounts
+    // assistanceAmount الآن تُستخدم فقط في bonuses (مكافآت)
+    throw new BadRequestException('Use bonuses endpoint to create assistance records');
   }
 
   async remove(id: string, kind?: DiscountKind, deletedBy?: string) {
@@ -117,10 +104,6 @@ export class DiscountsService {
       if (advance) {
         return this.advancesService.remove(id, deletedBy);
       }
-      const bonus = await this.bonusesService.getById(id).catch(() => null);
-      if (bonus) {
-        return this.bonusesService.remove(id);
-      }
       throw new BadRequestException('Record not found');
     }
 
@@ -128,6 +111,6 @@ export class DiscountsService {
       return this.advancesService.remove(id, deletedBy);
     }
 
-    return this.bonusesService.remove(id);
+    throw new BadRequestException('Invalid kind for discounts endpoint');
   }
 }
