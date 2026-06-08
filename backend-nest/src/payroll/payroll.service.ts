@@ -2,7 +2,7 @@ import { BadRequestException, Injectable, Logger, NotFoundException, Optional } 
 import { InjectQueue } from '@nestjs/bullmq';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
-import { resolvePagination } from '../common/utils/pagination.util';
+import { paginationMeta, resolvePagination } from '../common/utils/pagination.util';
 import { CalculatePayrollDto } from './dto/calculate-payroll.dto';
 import { PayrollListQueryDto } from './dto/payroll-list-query.dto';
 import { PayrollInputsQueryDto, UpsertPayrollInputDto } from './dto/payroll-input.dto';
@@ -162,10 +162,16 @@ export class PayrollService {
       this.prisma.payrollRun.count({ where }),
     ]);
 
-    return { payrollRuns, pagination: { page, limit, total, pages: Math.ceil(total / limit) } };
+    return {
+      data: payrollRuns,
+      ...paginationMeta(page, limit, total),
+    };
   }
 
   async listInputs(query: PayrollInputsQueryDto) {
+    const page = Math.max(1, (query as any).page ?? 1);
+    const limit = Math.min(200, Math.max(1, (query as any).limit ?? 50));
+    const skip = (page - 1) * limit;
     const where: Prisma.PayrollInputWhereInput = {};
     if (query.employeeId) where.employeeId = query.employeeId;
     if (query.periodStart && query.periodEnd) {
@@ -173,10 +179,20 @@ export class PayrollService {
       where.periodEnd = new Date(query.periodEnd);
     }
 
-    return this.prisma.payrollInput.findMany({
-      where,
-      orderBy: { updatedAt: 'desc' },
-    });
+    const [records, total] = await Promise.all([
+      this.prisma.payrollInput.findMany({
+        where,
+        orderBy: { updatedAt: 'desc' },
+        skip,
+        take: limit,
+      }),
+      this.prisma.payrollInput.count({ where }),
+    ]);
+
+    return {
+      data: records,
+      ...paginationMeta(page, limit, total),
+    };
   }
 
   async upsertInput(dto: UpsertPayrollInputDto) {

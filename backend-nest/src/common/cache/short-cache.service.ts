@@ -130,6 +130,62 @@ export class ShortCacheService implements OnModuleInit, OnModuleDestroy {
     return value;
   }
 
+  async getJson<T>(key: string): Promise<T | null> {
+    this.pruneExpired(Date.now());
+
+    const memoryHit = this.memory.get(key);
+    if (memoryHit && memoryHit.expiresAt > Date.now()) {
+      try {
+        return JSON.parse(memoryHit.value) as T;
+      } catch {
+        this.memory.delete(key);
+      }
+    }
+
+    if (this.redisReady && this.redisClient) {
+      try {
+        const cached = await this.redisClient.get(this.redisKey(key));
+        if (cached) {
+          return JSON.parse(cached) as T;
+        }
+      } catch (error) {
+        this.disableRedis(`read failed: ${this.describeError(error)}`);
+      }
+    }
+
+    return null;
+  }
+
+  async setJson<T>(key: string, value: T, ttlSeconds: number): Promise<void> {
+    const ttl = Math.max(1, Math.floor(ttlSeconds));
+    const serialized = JSON.stringify(value);
+
+    this.memory.set(key, {
+      value: serialized,
+      expiresAt: Date.now() + ttl * 1000,
+    });
+
+    if (this.redisReady && this.redisClient) {
+      try {
+        await this.redisClient.set(this.redisKey(key), serialized, 'EX', ttl);
+      } catch (error) {
+        this.disableRedis(`write failed: ${this.describeError(error)}`);
+      }
+    }
+  }
+
+  async del(key: string): Promise<void> {
+    this.memory.delete(key);
+
+    if (this.redisReady && this.redisClient) {
+      try {
+        await this.redisClient.del(this.redisKey(key));
+      } catch (error) {
+        this.disableRedis(`delete failed: ${this.describeError(error)}`);
+      }
+    }
+  }
+
   async invalidatePrefix(prefix: string): Promise<void> {
     if (!this.cacheEnabled || !prefix) {
       return;

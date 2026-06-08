@@ -95,8 +95,8 @@ export class AttendanceController {
 
   @Get('deleted/history')
   @Permissions('edit_attendance')
-  listDeletedHistory() {
-    return this.attendanceService.listDeletedHistory();
+  listDeletedHistory(@Query() query: { page?: number; limit?: number }) {
+    return this.attendanceService.listDeletedHistory(query);
   }
 
   @Post()

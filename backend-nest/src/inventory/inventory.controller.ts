@@ -73,8 +73,8 @@ export class InventoryController {
 
   @Get('alerts/low-stock')
   @Permissions('view_inventory')
-  lowStock() {
-    return this.inventoryService.lowStockAlerts();
+  lowStock(@Query() query: { page?: number; limit?: number }) {
+    return this.inventoryService.lowStockAlerts(query);
   }
 
   @Get('stats')

@@ -24,8 +24,8 @@ model User {
   username             String                @unique
   email                String?               @unique
   passwordHash         String
-  roleId               String                @db.Uuid
-  role                 Role                  @relation(fields: [roleId], references: [id], onDelete: Restrict)
+  roleId               String?               @db.Uuid
+  role                 Role?                 @relation(fields: [roleId], references: [id], onDelete: Restrict)
   status               String                @default("active")
   failedLoginAttempts  Int                   @default(0)
   lockoutUntil         DateTime?
@@ -352,6 +352,7 @@ model PayrollItem {
   run PayrollRun @relation(fields: [payrollRunId], references: [id], onDelete: Cascade)
 
   @@unique([payrollRunId, employeeId])
+  @@index([payrollRunId])
   @@index([employeeId, createdAt])
   @@map("payroll_items")
 }
@@ -649,9 +650,8 @@ model AuditLog {
 
   /// فهرس للبحث بالمستخدم والتاريخ
   @@index([actorId, createdAt])
-  /// فهرس للبحث بنوع الكيان
   @@index([targetType, createdAt])
-  /// فهرس للبحث بنوع العملية
+  @@index([targetId])
   @@index([action, createdAt])
 
   @@map("audit_logs")

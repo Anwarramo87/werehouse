@@ -21,3 +21,15 @@ export const resolvePagination = (
 
   return { page, limit, skip };
 };
+
+export const paginationMeta = (page: number, limit: number, total: number) => ({
+  total,
+  page,
+  limit,
+  totalPages: Math.max(1, Math.ceil(total / limit)),
+});
+
+export const paginatedResponse = <T>(data: T[], page: number, limit: number, total: number) => ({
+  data,
+  ...paginationMeta(page, limit, total),
+});

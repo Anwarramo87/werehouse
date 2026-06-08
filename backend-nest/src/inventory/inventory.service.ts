@@ -1,7 +1,7 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
-import { resolvePagination } from '../common/utils/pagination.util';
+import { paginatedResponse, paginationMeta, resolvePagination } from '../common/utils/pagination.util';
 import { CreateProductDto } from './dto/create-product.dto';
 import { AdjustStockDto } from './dto/adjust-stock.dto';
 import { ReserveStockDto } from './dto/reserve-stock.dto';
@@ -53,7 +53,7 @@ export class InventoryService {
       this.prisma.product.count({ where }),
     ]);
 
-    return { products, pagination: { page, limit, total, pages: Math.ceil(total / limit) } };
+    return paginatedResponse(products, page, limit, total);
   }
 
   async createProduct(dto: CreateProductDto) {
@@ -185,7 +185,11 @@ export class InventoryService {
     return { message: 'Reservation released successfully', stockLevel: updated };
   }
 
-  async lowStockAlerts() {
+  async lowStockAlerts(query?: { page?: number; limit?: number }) {
+    const page = Math.max(1, query?.page ?? 1);
+    const limit = Math.min(200, Math.max(1, query?.limit ?? 50));
+    const skip = (page - 1) * limit;
+
     return this.shortCache.getOrSetJson('inventory:alerts:low-stock', 20, async () => {
       const [products, stockSums] = await Promise.all([
         this.prisma.product.findMany({
@@ -202,7 +206,7 @@ export class InventoryService {
         stockSums.map((entry) => [entry.sku, entry._sum.available ?? 0]),
       );
 
-      const alerts: LowStockAlert[] = products
+      const allAlerts: LowStockAlert[] = products
         .filter((product) => (availableBySku.get(product.sku) ?? 0) < product.reorderLevel)
         .map((product) => ({
           sku: product.sku,
@@ -211,7 +215,13 @@ export class InventoryService {
           reorderLevel: product.reorderLevel,
         }));
 
-      return { alerts, count: alerts.length };
+      const total = allAlerts.length;
+      const alerts = allAlerts.slice(skip, skip + limit);
+
+      return {
+        data: alerts,
+        ...paginationMeta(page, limit, total),
+      };
     });
   }
 

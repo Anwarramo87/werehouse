@@ -91,6 +91,13 @@ export class TransportationController {
     return this.transportationService.removePassenger(busId, employeeId);
   }
 
+  /** POST /api/transportation/buses/:busId/recalculate-discounts */
+  @Post('buses/:busId/recalculate-discounts')
+  @Permissions('edit_employees')
+  recalculateDiscounts(@Param('busId') busId: string) {
+    return this.transportationService.recalculateDiscounts(busId);
+  }
+
   /** POST /api/transportation/calculate-deductions */
   @Post('calculate-deductions')
   @Permissions('view_payroll')

@@ -10,10 +10,15 @@ import { CreateBusDto } from './dto/create-bus.dto';
 import { UpdateBusDto } from './dto/update-bus.dto';
 import { AddPassengerDto } from './dto/add-passenger.dto';
 import { randomBytes } from 'crypto';
+import { DiscountsService } from '../discounts/discounts.service';
+import { DiscountKind } from '../discounts/dto/create-discount.dto';
 
 @Injectable()
 export class TransportationService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly discountsService: DiscountsService,
+  ) {}
 
   private generateBusId(): string {
     return `BUS${randomBytes(3).toString('hex').toUpperCase()}`;
@@ -139,7 +144,10 @@ export class TransportationService {
   async addPassenger(busId: string, dto: AddPassengerDto) {
     const bus = await this.prisma.bus.findFirst({
       where: { OR: [{ id: busId }, { busId }] },
-      include: { _count: { select: { passengers: { where: { status: 'active' } } } } },
+      include: { 
+        _count: { select: { passengers: { where: { status: 'active' } } } },
+        passengers: { where: { status: 'active' } }
+      },
     });
     if (!bus) throw new NotFoundException(`Bus not found: ${busId}`);
 
@@ -162,12 +170,16 @@ export class TransportationService {
     const existing = await this.prisma.busPassenger.findUnique({
       where: { busId_employeeId: { busId: bus.id, employeeId: dto.employeeId } },
     });
+    
+    let passenger;
+    let isNewPassenger = false;
+    
     if (existing) {
       if (existing.status === 'active') {
         throw new ConflictException(`Employee ${dto.employeeId} is already on this bus`);
       }
       // إعادة تفعيل إذا كان غير نشط
-      return this.prisma.busPassenger.update({
+      passenger = await this.prisma.busPassenger.update({
         where: { id: existing.id },
         data: {
           status: 'active',
@@ -178,23 +190,102 @@ export class TransportationService {
           leaveDate: null,
         },
       });
+      isNewPassenger = true;
+    } else {
+      passenger = await this.prisma.busPassenger.create({
+        data: {
+          busId: bus.id,
+          employeeId: dto.employeeId,
+          name: dto.name,
+          paidAmount: dto.paidAmount !== undefined ? new Prisma.Decimal(dto.paidAmount.toString()) : null,
+          isManual: dto.isManual ?? false,
+          joinDate: dto.joinDate ? new Date(dto.joinDate) : new Date(),
+        },
+      });
+      isNewPassenger = true;
     }
 
-    return this.prisma.busPassenger.create({
-      data: {
-        busId: bus.id,
-        employeeId: dto.employeeId,
-        name: dto.name,
-        paidAmount: dto.paidAmount !== undefined ? new Prisma.Decimal(dto.paidAmount.toString()) : null,
-        isManual: dto.isManual ?? false,
-        joinDate: dto.joinDate ? new Date(dto.joinDate) : new Date(),
-      },
-    });
+    // حساب التكلفة الصافية بعد خصم الشركة
+    const netCost = Number(
+      new Prisma.Decimal(bus.totalCost.toString())
+        .times(new Prisma.Decimal((100 - Number(bus.companyDeductionPct)).toString()))
+        .div(100)
+        .toFixed(2),
+    );
+
+    // عدد الركاب بعد إضافة الموظف الجديد
+    const totalPassengers = bus._count.passengers + 1;
+    
+    // التكلفة لكل موظف = التكلفة الصافية ÷ عدد الموظفين
+    const costPerEmployee = Number((netCost / totalPassengers).toFixed(2));
+
+    // إضافة/تحديث الخصومات لجميع الموظفين في الباص
+    if (isNewPassenger) {
+      try {
+        // الحصول على جميع موظفي الباص (بما فيهم الجديد)
+        const allPassengers = [...bus.passengers, passenger];
+
+        // تحديد نص السبب للبحث
+        const transportReason = `بدل مواصلات - ${bus.route} (${bus.plateNumber})`;
+
+        console.log(`[Transportation] Processing ${allPassengers.length} passengers, cost per employee: ${costPerEmployee}`);
+
+        for (const p of allPassengers) {
+          // البحث عن خصم موجود لهذا الموظف لهذا الباص
+          const existingDiscounts = await this.prisma.$queryRaw<any[]>`
+            SELECT eb.id, eb."employeeId", eb."bonusReason", eb."assistanceAmount"
+            FROM "EmployeeBonus" eb
+            WHERE eb."employeeId" = ${p.employeeId}
+            AND eb."bonusReason" LIKE ${`%${bus.plateNumber}%`}
+            AND eb."deletedAt" IS NULL
+          `;
+
+          if (existingDiscounts.length > 0) {
+            // تحديث الخصم الموجود
+            const discountId = existingDiscounts[0].id;
+            const oldAmount = existingDiscounts[0].assistanceAmount;
+            console.log(`[Transportation] Updating discount for ${p.employeeId}: ${oldAmount} → ${costPerEmployee}`);
+            
+            await this.prisma.employeeBonus.update({
+              where: { id: discountId },
+              data: {
+                assistanceAmount: new Prisma.Decimal(costPerEmployee.toString()),
+              },
+            });
+          } else {
+            // إضافة خصم جديد
+            console.log(`[Transportation] Creating new discount for ${p.employeeId}: ${costPerEmployee}`);
+            
+            await this.discountsService.create(
+              {
+                employeeId: p.employeeId,
+                type: transportReason, // نستخدم type لأن bonusReason يُخزّن من type
+                kind: DiscountKind.ASSISTANCE,
+                amount: costPerEmployee,
+                date: new Date().toISOString().split('T')[0],
+                notes: transportReason,
+              },
+              DiscountKind.ASSISTANCE,
+            );
+          }
+        }
+        
+        console.log(`[Transportation] Successfully processed all discounts`);
+      } catch (error) {
+        // في حال فشل إضافة الخصم، نسجل الخطأ لكن لا نلغي العملية
+        console.error('[Transportation] Failed to create/update transportation discounts:', error);
+      }
+    }
+
+    return passenger;
   }
 
   async removePassenger(busId: string, employeeId: string) {
     const bus = await this.prisma.bus.findFirst({
       where: { OR: [{ id: busId }, { busId }] },
+      include: { 
+        passengers: { where: { status: 'active' } }
+      },
     });
     if (!bus) throw new NotFoundException(`Bus not found: ${busId}`);
 
@@ -205,10 +296,73 @@ export class TransportationService {
       throw new NotFoundException(`Passenger ${employeeId} not found on this bus`);
     }
 
-    return this.prisma.busPassenger.update({
+    // إزالة الموظف من الباص
+    await this.prisma.busPassenger.update({
       where: { id: passenger.id },
       data: { status: 'inactive', leaveDate: new Date() },
     });
+
+    // حذف خصم بدل المواصلات للموظف المُزال
+    try {
+      const existingDiscounts = await this.prisma.$queryRaw<any[]>`
+        SELECT eb.id, eb."employeeId", eb."bonusReason"
+        FROM "EmployeeBonus" eb
+        WHERE eb."employeeId" = ${employeeId}
+        AND eb."bonusReason" LIKE ${`%${bus.plateNumber}%`}
+        AND eb."deletedAt" IS NULL
+      `;
+
+      if (existingDiscounts.length > 0) {
+        await this.prisma.employeeBonus.update({
+          where: { id: existingDiscounts[0].id },
+          data: { deletedAt: new Date() },
+        });
+      }
+    } catch (error) {
+      console.error('Failed to remove transportation discount:', error);
+    }
+
+    // إعادة حساب التكلفة للموظفين المتبقين
+    const remainingPassengers = bus.passengers.filter(p => p.employeeId !== employeeId);
+    
+    if (remainingPassengers.length > 0) {
+      try {
+        // حساب التكلفة الصافية بعد خصم الشركة
+        const netCost = Number(
+          new Prisma.Decimal(bus.totalCost.toString())
+            .times(new Prisma.Decimal((100 - Number(bus.companyDeductionPct)).toString()))
+            .div(100)
+            .toFixed(2),
+        );
+
+        // التكلفة لكل موظف = التكلفة الصافية ÷ عدد الموظفين المتبقين
+        const costPerEmployee = Number((netCost / remainingPassengers.length).toFixed(2));
+
+        // تحديث الخصومات لجميع الموظفين المتبقين
+        for (const p of remainingPassengers) {
+          const existingDiscounts = await this.prisma.$queryRaw<any[]>`
+            SELECT eb.id, eb."employeeId", eb."bonusReason"
+            FROM "EmployeeBonus" eb
+            WHERE eb."employeeId" = ${p.employeeId}
+            AND eb."bonusReason" LIKE ${`%${bus.plateNumber}%`}
+            AND eb."deletedAt" IS NULL
+          `;
+
+          if (existingDiscounts.length > 0) {
+            await this.prisma.employeeBonus.update({
+              where: { id: existingDiscounts[0].id },
+              data: {
+                assistanceAmount: new Prisma.Decimal(costPerEmployee.toString()),
+              },
+            });
+          }
+        }
+      } catch (error) {
+        console.error('Failed to recalculate transportation discounts:', error);
+      }
+    }
+
+    return { message: 'Passenger removed and discounts recalculated successfully' };
   }
 
   async listPassengers(busId: string) {
@@ -321,5 +475,102 @@ export class TransportationService {
         totalTransportationDeduction: Math.round(totalTransportationDeduction * 100) / 100,
       },
     };
+  }
+
+  // ─── Recalculate Discounts ────────────────────────────────────────────────
+
+  async recalculateDiscounts(busId: string) {
+    const bus = await this.prisma.bus.findFirst({
+      where: { OR: [{ id: busId }, { busId }] },
+      include: { 
+        passengers: { where: { status: 'active' } }
+      },
+    });
+    
+    if (!bus) throw new NotFoundException(`Bus not found: ${busId}`);
+
+    const passengers = bus.passengers;
+    
+    if (passengers.length === 0) {
+      return {
+        message: 'No passengers to recalculate',
+        updated: 0,
+      };
+    }
+
+    try {
+      // حساب التكلفة الصافية بعد خصم الشركة
+      const netCost = Number(
+        new Prisma.Decimal(bus.totalCost.toString())
+          .times(new Prisma.Decimal((100 - Number(bus.companyDeductionPct)).toString()))
+          .div(100)
+          .toFixed(2),
+      );
+
+      // التكلفة لكل موظف
+      const costPerEmployee = Number((netCost / passengers.length).toFixed(2));
+      const transportReason = `بدل مواصلات - ${bus.route} (${bus.plateNumber})`;
+
+      console.log(`[Transportation] Recalculating ${passengers.length} passengers, cost per employee: ${costPerEmployee}`);
+
+      let updated = 0;
+      let created = 0;
+
+      for (const p of passengers) {
+        // البحث عن خصم موجود
+        const existingDiscounts = await this.prisma.$queryRaw<any[]>`
+          SELECT eb.id, eb."employeeId", eb."bonusReason", eb."assistanceAmount"
+          FROM "EmployeeBonus" eb
+          WHERE eb."employeeId" = ${p.employeeId}
+          AND eb."bonusReason" LIKE ${`%${bus.plateNumber}%`}
+          AND eb."deletedAt" IS NULL
+        `;
+
+        if (existingDiscounts.length > 0) {
+          // تحديث الخصم الموجود
+          const discountId = existingDiscounts[0].id;
+          const oldAmount = existingDiscounts[0].assistanceAmount;
+          
+          console.log(`[Transportation] Updating discount for ${p.employeeId}: ${oldAmount} → ${costPerEmployee}`);
+          
+          await this.prisma.employeeBonus.update({
+            where: { id: discountId },
+            data: {
+              assistanceAmount: new Prisma.Decimal(costPerEmployee.toString()),
+            },
+          });
+          updated++;
+        } else {
+          // إضافة خصم جديد
+          console.log(`[Transportation] Creating new discount for ${p.employeeId}: ${costPerEmployee}`);
+          
+          await this.discountsService.create(
+            {
+              employeeId: p.employeeId,
+              type: transportReason,
+              kind: DiscountKind.ASSISTANCE,
+              amount: costPerEmployee,
+              date: new Date().toISOString().split('T')[0],
+              notes: transportReason,
+            },
+            DiscountKind.ASSISTANCE,
+          );
+          created++;
+        }
+      }
+
+      console.log(`[Transportation] Recalculation complete: ${updated} updated, ${created} created`);
+
+      return {
+        message: 'Discounts recalculated successfully',
+        totalPassengers: passengers.length,
+        costPerEmployee,
+        updated,
+        created,
+      };
+    } catch (error) {
+      console.error('[Transportation] Failed to recalculate discounts:', error);
+      throw new BadRequestException('Failed to recalculate discounts');
+    }
   }
 }

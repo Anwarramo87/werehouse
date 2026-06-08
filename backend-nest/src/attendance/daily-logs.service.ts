@@ -1,7 +1,7 @@
 import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { Prisma, DailyRecordType } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
-import { resolvePagination } from '../common/utils/pagination.util';
+import { paginatedResponse, paginationMeta, resolvePagination } from '../common/utils/pagination.util';
 import { CreateDailyLogDto } from './dto/create-daily-log.dto';
 import { UpdateDailyLogDto } from './dto/update-daily-log.dto';
 import { DailyLogQueryDto } from './dto/daily-log-query.dto';

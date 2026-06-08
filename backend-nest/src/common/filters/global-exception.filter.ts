@@ -32,6 +32,19 @@ export class GlobalExceptionFilter implements ExceptionFilter {
     const exceptionResponse = isHttpException ? exception.getResponse() : null;
     const message = this.extractMessage(exceptionResponse, exception);
 
+    if (statusCode >= 400) {
+      this.logger.warn(
+        JSON.stringify({
+          correlationId,
+          method: request.method,
+          path: request.originalUrl,
+          statusCode,
+          message,
+          body: statusCode === 400 ? request.body : undefined,
+        }),
+      );
+    }
+
     if (statusCode >= 500) {
       this.logger.error(
         JSON.stringify({

@@ -50,9 +50,9 @@ export class DiscountsService {
       kind: DiscountKind.ADVANCE,
     }));
 
-    const bonusRecords: DiscountRecord[] = bonuses.rewards
-      .filter((bonus) => this.toNumber(bonus.assistanceAmount) > 0)
-      .map((bonus) => ({
+    const bonusRecords: DiscountRecord[] = (bonuses.data ?? [])
+      .filter((bonus: { assistanceAmount: Prisma.Decimal | number | string }) => this.toNumber(bonus.assistanceAmount) > 0)
+      .map((bonus: { id: string; employeeId: string; bonusReason: string | null; assistanceAmount: Prisma.Decimal | number | string; createdAt: Date }) => ({
         id: bonus.id,
         employeeId: bonus.employeeId,
         type: bonus.bonusReason || 'خصم متنوع',

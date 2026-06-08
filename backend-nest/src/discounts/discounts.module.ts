@@ -8,5 +8,6 @@ import { DiscountsService } from './discounts.service';
   imports: [AdvancesModule, BonusesModule],
   controllers: [DiscountsController],
   providers: [DiscountsService],
+  exports: [DiscountsService],
 })
 export class DiscountsModule {}
