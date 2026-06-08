@@ -385,7 +385,7 @@ export class AuthService {
   private async handleAutoAttendance(user: any, dto: BiometricLoginFinishDto) {
     const employee = await this.prisma.employee.findFirst({
       where: {
-        OR: [{ contactEmail: user.email }, { employeeId: user.username.toUpperCase() }],
+        OR: [{ userId: user.id }, { employeeId: user.username.toUpperCase() }],
       },
     });
 
