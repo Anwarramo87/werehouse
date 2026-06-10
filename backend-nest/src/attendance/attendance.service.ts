@@ -427,7 +427,7 @@ export class AttendanceService {
     ]);
 
     return {
-      data: records,
+      records,
       ...paginationMeta(page, limit, total),
     };
   }
@@ -563,7 +563,7 @@ export class AttendanceService {
     ).length;
 
     return {
-      data: records,
+      records,
       ...paginationMeta(page, limit, total),
       month,
       period: range,
@@ -638,7 +638,7 @@ export class AttendanceService {
     ]);
 
     return {
-      data: records,
+      records,
       ...paginationMeta(page, limit, total),
     };
   }
