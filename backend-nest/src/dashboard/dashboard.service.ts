@@ -47,7 +47,6 @@ export class DashboardService {
       totalEmployees,
       todayAttendanceRecords,
       salaryAggregate,
-      latestPayrollRun,
     ] = await Promise.all([
       // إجمالي الموظفين النشطين
       this.prisma.employee.count({ where: { status: 'active' } }),
@@ -70,15 +69,6 @@ export class DashboardService {
           extraEffortAllowance: true,
           productionIncentive: true,
           transportAllowance: true,
-        },
-      }),
-
-      // آخر تشغيل رواتب مكتمل
-      this.prisma.payrollRun.findFirst({
-        where: { status: 'completed' },
-        orderBy: { runDate: 'desc' },
-        include: {
-          items: { select: { netPayRounded: true, netPay: true } },
         },
       }),
     ]);
@@ -173,26 +163,48 @@ export class DashboardService {
     }
 
     // ─── الرواتب المستحقة من التجميعات ─────────────────────────────────
-    const payrollRunTotal = latestPayrollRun?.items?.reduce((sum, item) => {
-      return sum + Number(item.netPayRounded ?? item.netPay ?? 0);
-    }, 0);
+    const sumBase = Number(salaryAgg._sum?.baseSalary ?? 0);
+    const sumLumpSum = Number(salaryAgg._sum?.lumpSumSalary ?? 0);
+    const sumLiving = Number(salaryAgg._sum?.livingAllowance ?? 0);
+    const sumResponsibility = Number(salaryAgg._sum?.responsibilityAllowance ?? 0);
+    const sumExtraEffort = Number(salaryAgg._sum?.extraEffortAllowance ?? 0);
+    const sumProductionIncentive = Number(salaryAgg._sum?.productionIncentive ?? 0);
+    const sumTransport = Number(salaryAgg._sum?.transportAllowance ?? 0);
+    const totalDueSalaries = sumBase + sumLumpSum + sumLiving + sumResponsibility + sumExtraEffort + sumProductionIncentive + sumTransport;
+    
+    // إجمالي المقبوض من آخر تشغيل رواتب (أولًا الشهر الحالي، إن لم يكن موجودًا آخر تشغيل مكتمل على الإطلاق)
+    const now = new Date();
+    const currentYear = now.getFullYear();
+    const currentMonthIndex = now.getMonth();
+    const periodStartDate = new Date(Date.UTC(currentYear, currentMonthIndex, 1));
+    const periodEndDate = new Date(Date.UTC(currentYear, currentMonthIndex + 1, 0));
 
-    const fallbackTotalDueSalaries = (() => {
-      const s = salaryAgg as Record<string, unknown> | undefined;
-      const fixedEarnings =
-        Number(s?.baseSalary ?? 0) +
-        Number(s?.lumpSumSalary ?? 0) +
-        Number(s?.livingAllowance ?? 0) +
-        Number(s?.responsibilityAllowance ?? 0) +
-        Number(s?.extraEffortAllowance ?? 0) +
-        Number(s?.productionIncentive ?? 0) +
-        Number(s?.transportAllowance ?? 0);
-      const deductions = Number(s?.insuranceAmount ?? 0);
-      return fixedEarnings - deductions;
-    })();
+    const currentMonthRuns = await this.prisma.payrollRun.findMany({
+      where: {
+        periodStart: { gte: periodStartDate, lte: periodEndDate },
+        status: 'completed',
+      },
+      orderBy: { runDate: 'desc' },
+      include: { items: { select: { netPayRounded: true, netPay: true } } },
+    });
 
-    const totalReceivedSalaries = payrollRunTotal ?? 0;
-    const totalDueSalaries = fallbackTotalDueSalaries;
+    let latestRun = null;
+    if (currentMonthRuns.length > 0) {
+      latestRun = currentMonthRuns[0];
+    } else {
+      latestRun = await this.prisma.payrollRun.findFirst({
+        where: { status: 'completed' },
+        orderBy: { runDate: 'desc' },
+        include: { items: { select: { netPayRounded: true, netPay: true } } },
+      });
+    }
+
+    let totalReceivedSalaries = 0;
+    if (latestRun && latestRun.items) {
+      totalReceivedSalaries = latestRun.items.reduce((sum, item) => {
+        return sum + Number(item.netPayRounded ?? item.netPay ?? 0);
+      }, 0);
+    }
 
     return {
       totalEmployees,
