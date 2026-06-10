@@ -73,7 +73,17 @@ export class DashboardService {
       }),
     ]);
 
-    const salaryAgg = salaryAggregate as Record<string, unknown>;
+    const salaryAgg = salaryAggregate as {
+      _sum?: {
+        baseSalary?: Prisma.Decimal | null;
+        lumpSumSalary?: Prisma.Decimal | null;
+        livingAllowance?: Prisma.Decimal | null;
+        responsibilityAllowance?: Prisma.Decimal | null;
+        extraEffortAllowance?: Prisma.Decimal | null;
+        productionIncentive?: Prisma.Decimal | null;
+        transportAllowance?: Prisma.Decimal | null;
+      };
+    };
 
     // ─── حضور اليوم ───────────────────────────────────────────────────────
     const presentMap = new Map<string, { name: string; checkIn: string }>();
@@ -147,8 +157,7 @@ export class DashboardService {
       const overtimeMinutes = Math.round(overtimeHours * 60);
 
       if (overtimeMinutes > 0) {
-        const salaryRec = salaryAgg as Record<string, unknown> | undefined;
-        const baseSalary = Number(salaryRec?.baseSalary ?? 0);
+        const baseSalary = Number(salaryAgg._sum?.baseSalary ?? 0);
         const hourlyRate = baseSalary / (26 * 8);
         const overtimePay = Number((hourlyRate * overtimeHours * 1.5).toFixed(2));
 
