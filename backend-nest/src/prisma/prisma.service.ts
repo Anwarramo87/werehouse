@@ -14,7 +14,7 @@ type PrismaQueryEventClient = {
 };
 
 // How often to ping Neon to prevent it from sleeping (ms)
-const KEEPALIVE_INTERVAL_MS = 4 * 60 * 1000; // every 4 minutes
+const KEEPALIVE_INTERVAL_MS = 2 * 60 * 1000; // every 2 minutes (أسرع)
 
 @Injectable()
 export class PrismaService
@@ -82,8 +82,8 @@ export class PrismaService
    * Connect with retry logic — handles Neon cold-start delays.
    */
   async onModuleInit() {
-    const maxRetries = 5;
-    const retryDelayMs = 3_000;
+    const maxRetries = 3; // قللنا من 5 إلى 3
+    const retryDelayMs = 2_000; // قللنا من 3000 إلى 2000
 
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
       try {
