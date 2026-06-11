@@ -241,6 +241,94 @@ export class PayrollService {
     });
   }
 
+  async calculateProvisionalSettlement(employeeId: string, terminationDateStr: string) {
+    const terminationDate = new Date(terminationDateStr);
+    const month = terminationDateStr.substring(0, 7); // YYYY-MM
+
+    const [employee, employeeSalary] = await Promise.all([
+      this.prisma.employee.findUnique({ where: { employeeId } }),
+      this.prisma.employeeSalary.findUnique({ where: { employeeId } }),
+    ]);
+
+    if (!employee) {
+      throw new NotFoundException(`Employee with ID ${employeeId} not found.`);
+    }
+
+    // 2. Fetch bonuses up to termination date
+    const bonuses = await this.prisma.employeeBonus.findMany({
+      where: {
+        employeeId,
+        period: month,
+      },
+    });
+    const totalBonuses = bonuses.reduce((sum, b) => {
+      return sum.plus(this.toDecimal(b.bonusAmount)).plus(this.toDecimal(b.assistanceAmount));
+    }, new Prisma.Decimal(0));
+
+    // 3. Fetch deductions (advances and penalties) up to termination date
+    const advances = await this.prisma.employeeAdvance.findMany({
+      where: {
+        employeeId,
+        issueDate: { lte: terminationDate },
+        remainingAmount: { gt: 0 },
+      },
+    });
+
+    const penalties = await this.prisma.employeePenalty.findMany({
+      where: {
+        employeeId,
+        issueDate: { lte: terminationDate },
+      },
+    });
+    
+    const totalAdvances = advances.reduce((sum, a) => {
+      // Deduct only the installment amount, or remaining amount if less
+      const installment = this.toDecimal(a.installmentAmount).toNumber();
+      const remaining = this.toDecimal(a.remainingAmount).toNumber();
+      const deductible = Math.min(installment, remaining);
+      return sum.plus(new Prisma.Decimal(deductible));
+    }, new Prisma.Decimal(0));
+
+    const totalPenalties = penalties.reduce((sum, p) => {
+      return sum.plus(this.toDecimal(p.amount));
+    }, new Prisma.Decimal(0));
+
+    // For simplicity, we'll aggregate all other deductions as 'otherDeductions'
+    // In a real scenario, you'd fetch and calculate other deductions like insurance, etc.
+    const otherDeductions = this.toDecimal(employeeSalary?.insuranceAmount); // Example
+
+    const totalDeductions = totalAdvances.plus(totalPenalties).plus(otherDeductions);
+
+    // 4. Calculate earned salary up to termination date
+    // This is a simplified calculation. A full implementation would consider attendance, leaves, etc.
+    let earnedSalary = new Prisma.Decimal(0);
+    if (employee.baseSalary) {
+      const baseSalaryPerDay = this.toDecimal(employee.baseSalary).div(STANDARD_WORK_DAYS);
+      const daysWorkedInTerminationMonth = new Prisma.Decimal(terminationDate.getDate());
+      earnedSalary = baseSalaryPerDay.mul(daysWorkedInTerminationMonth);
+    } else if (employee.hourlyRate) {
+      // Fallback to hourly rate if base salary is not defined
+      const hourlyRate = this.toDecimal(employee.hourlyRate);
+      const hoursPerDay = this.toDecimal(employee.hoursPerDay ?? WORK_HOURS_PER_DAY);
+      const daysWorkedInTerminationMonth = new Prisma.Decimal(terminationDate.getDate());
+      earnedSalary = hourlyRate.mul(hoursPerDay).mul(daysWorkedInTerminationMonth);
+    }
+
+    // Final calculation for provisional settlement
+    const provisionalFinalSalary = earnedSalary.plus(totalBonuses).minus(totalDeductions);
+
+    return {
+      employeeId: employee.employeeId,
+      employeeName: employee.name,
+      terminationDate: terminationDateStr,
+      earnedSalary: earnedSalary.toFixed(2),
+      bonuses: totalBonuses.toFixed(2),
+      deductions: totalDeductions.toFixed(2),
+      provisionalTotal: provisionalFinalSalary.toFixed(2),
+      currency: employee.currency ?? 'SYP',
+    };
+  }
+
   async calculate(dto: CalculatePayrollDto, userId?: string) {
     const runDateKey = dto.periodStart.slice(0, 10).replace(/-/g, '');
     const runId = `PAY${runDateKey}-${Date.now().toString().slice(-4)}`;
