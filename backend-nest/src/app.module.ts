@@ -30,6 +30,7 @@ import { DiscountsModule } from './discounts/discounts.module';
 import { PenaltiesModule } from './penalties/penalties.module';
 import { LeavesModule } from './leaves/leaves.module';
 import { DepartmentsModule } from './departments';
+import { BiometricModule } from './biometric/biometric.module';
 
 function parseBooleanEnv(value: string | undefined): boolean | undefined {
   if (value === undefined) {
@@ -177,6 +178,7 @@ const queueInfraModules = queuesEnabled
     EmployeesModule,
     DevicesModule,
     AttendanceModule,
+    BiometricModule,
     PayrollModule,
     InventoryModule,
     ImportsModule,
