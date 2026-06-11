@@ -50,6 +50,15 @@ export class PayrollController {
     return this.payrollService.upsertInput(dto);
   }
 
+  @Get('provisional-settlement')
+  @Permissions('view_payroll')
+  provisionalSettlement(
+    @Query('employeeId') employeeId: string,
+    @Query('terminationDate') terminationDate: string,
+  ) {
+    return this.payrollService.calculateProvisionalSettlement(employeeId, terminationDate);
+  }
+
   @Post('calculate')
   @Permissions('run_payroll')
   calculate(@Body() dto: CalculatePayrollDto, @CurrentUser() user: AuthenticatedUser) {
