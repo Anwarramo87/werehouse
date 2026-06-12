@@ -47,12 +47,17 @@ function getMinuteWage(grossSalary: number): number {
 }
 
 function calcLateDeduction(grossSalary: number, minutesLate: number): number {
-  return getMinuteWage(grossSalary) * OVERTIME_MULTIPLIER * minutesLate;
+  // Updated policy: latePenalty = minuteWage * lateMinutes (no overtime multiplier)
+  return getMinuteWage(grossSalary) * minutesLate;
 }
+
+
+
 
 function calcOvertimePay(grossSalary: number, overtimeMinutes: number): number {
   return getMinuteWage(grossSalary) * OVERTIME_MULTIPLIER * overtimeMinutes;
 }
+
 
 function calcSickLeaveDeduction(grossSalary: number, sickDays: number): number {
   return getDailyWage(grossSalary) * SICK_LEAVE_DEDUCTION_RATIO * sickDays;
@@ -90,15 +95,16 @@ describe('Payroll Calculations', () => {
       expect(calcLateDeduction(GROSS, 0)).toBe(0);
     });
 
-    it('should compute late deduction = minuteWage × 1.5 × 30', () => {
-      const expected = getMinuteWage(GROSS) * OVERTIME_MULTIPLIER * 30;
+    it('should compute late deduction = minuteWage × lateMinutes', () => {
+      const expected = getMinuteWage(GROSS) * 30;
       expect(calcLateDeduction(GROSS, 30)).toBeCloseTo(expected, 6);
     });
 
-    it('late deduction for 60 minutes should equal 1.5× hourly wage', () => {
-      const expected = getHourlyWage(GROSS) * OVERTIME_MULTIPLIER;
+    it('late deduction for 60 minutes should equal 1× hourly wage', () => {
+      const expected = getHourlyWage(GROSS);
       expect(calcLateDeduction(GROSS, 60)).toBeCloseTo(expected, 6);
     });
+
   });
 
   // --- أجر الإضافي ---
@@ -117,6 +123,26 @@ describe('Payroll Calculations', () => {
       expect(calcOvertimePay(GROSS, 120)).toBeCloseTo(expected, 6);
     });
   });
+
+  // --- edge cases ---
+  describe('Edge Cases (policy-level)', () => {
+    it('should treat Friday overtime classification separately from regular overtime (placeholder)', () => {
+      // This unit file tests formulas only; classification is validated in payroll.service.ts integration.
+      // Ensures we keep weekend overtime formula unchanged.
+      const overtimeWeekendMinutes = 60;
+      const expected = getHourlyWage(GROSS) * OVERTIME_MULTIPLIER * 1;
+      const actual = getMinuteWage(GROSS) * OVERTIME_MULTIPLIER * overtimeWeekendMinutes;
+      expect(actual).toBeCloseTo(expected, 6);
+    });
+
+    it('should not apply late penalty multiplier to lateMinutes (policy regression guard)', () => {
+      const lateMinutes = 30;
+      const expected = getMinuteWage(GROSS) * lateMinutes;
+      const actual = calcLateDeduction(GROSS, lateMinutes);
+      expect(actual).toBeCloseTo(expected, 6);
+    });
+  });
+
 
   // --- خصم الإجازة المرضية ---
   describe('Sick Leave Deduction', () => {

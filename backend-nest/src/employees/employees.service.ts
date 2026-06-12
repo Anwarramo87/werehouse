@@ -17,6 +17,7 @@ import { TerminateEmployeeInput } from './dto/terminate-employee-zod.dto';
 import { RehireEmployeeDto } from './dto/rehire-employee.dto';
 import { FinancialSettlementDto } from './dto/financial-settlement.dto';
 import { ResignedEmployeesQueryDto } from './dto/resigned-employees-query.dto';
+import { BulkTerminateDepartmentDto } from './dto/bulk-terminate-department.dto';
 import { AuthenticatedUser } from '../common/types/authenticated-user.types';
 import { BCRYPT_DEFAULT_ROUNDS } from '../common/constants/auth.constants';
 import {
@@ -134,12 +135,26 @@ export class EmployeesService {
     });
   }
 
+  private applyEmployeeStatusFilter(where: Prisma.EmployeeWhereInput, queryStatus?: string | null) {
+    // Policy:
+    // - default: exclude terminated/resigned only
+    // - allow overriding with queryStatus
+    const excluded = ['terminated', 'resigned'];
+
+    if (queryStatus) {
+      where.status = queryStatus;
+      return;
+    }
+
+    where.status = { notIn: excluded };
+  }
+
   async list(query: EmployeesListQueryDto) {
     const { page, limit, skip } = resolvePagination(query);
     const where: Prisma.EmployeeWhereInput = {};
 
     if (query.department) where.department = query.department;
-    if (query.status) where.status = query.status;
+    this.applyEmployeeStatusFilter(where, query.status ?? undefined);
 
     if (query.search) {
       where.OR = [
@@ -151,6 +166,7 @@ export class EmployeesService {
     }
 
     const [employees, total] = await Promise.all([
+
       this.prisma.employee.findMany({
         where,
         orderBy: { createdAt: 'desc' },
@@ -164,6 +180,7 @@ export class EmployeesService {
   }
 
   async stats() {
+    // Stats is a pure aggregation; keep all statuses visible.
     return this.shortCache.getOrSetJson('employees:stats', 30, async () => {
       const [total, active, inactive, terminated, resigned, groupedByDepartment] = await Promise.all([
         this.prisma.employee.count(),
@@ -176,6 +193,8 @@ export class EmployeesService {
           _count: { _all: true },
         }),
       ]);
+
+
 
       const byDepartment = groupedByDepartment.reduce<Record<string, number>>((accumulator, entry) => {
         const key = entry.department || 'Unassigned';
@@ -199,7 +218,9 @@ export class EmployeesService {
     const limit = Math.min(200, Math.max(1, query?.limit ?? 50));
     const skip = (page - 1) * limit;
 
-    const where: Prisma.EmployeeWhereInput = { department, status: 'active' };
+    const where: Prisma.EmployeeWhereInput = { department };
+    this.applyEmployeeStatusFilter(where, query?.status ?? undefined);
+
 
     const [employees, total] = await Promise.all([
       this.prisma.employee.findMany({
@@ -224,6 +245,7 @@ export class EmployeesService {
     const mobile = this.normalizeOptionalString(dto.mobile);
     const residence = this.normalizeOptionalString(dto.residence);
     const nationalId = this.normalizeOptionalString(dto.nationalId);
+    const biometricNumber = dto.biometricNumber ?? null;
     const birthDate = this.parseOptionalDate(dto.birthDate ?? dto.dateOfBirth, 'birthDate');
     const employmentStartDate = this.parseOptionalDate(
       dto.employmentStartDate,
@@ -268,6 +290,7 @@ export class EmployeesService {
           OR: [
             { employeeId: dto.employeeId },
             ...(nationalId ? [{ nationalId }] : []),
+            ...(biometricNumber !== null ? [{ biometricNumber }] : []),
           ],
         },
       }),
@@ -281,6 +304,10 @@ export class EmployeesService {
 
       if (nationalId && existingEmployee.nationalId === nationalId) {
         throw new BadRequestException('Employee national ID already exists');
+      }
+
+      if (biometricNumber !== null && existingEmployee.biometricNumber === biometricNumber) {
+        throw new BadRequestException('Employee biometric number already exists');
       }
     }
 
@@ -305,6 +332,7 @@ export class EmployeesService {
       const employee = await transaction.employee.create({
         data: {
           employeeId: dto.employeeId,
+          biometricNumber,
           name: dto.name,
           mobile,
               residence,
@@ -416,6 +444,18 @@ export class EmployeesService {
       }
     }
 
+    if (dto.biometricNumber !== undefined) {
+      const conflict = await this.prisma.employee.findFirst({
+        where: {
+          AND: [{ employeeId: { not: employeeId } }, { biometricNumber: dto.biometricNumber }],
+        },
+      });
+
+      if (conflict) {
+        throw new BadRequestException('Employee biometric number already exists');
+      }
+    }
+
     const loginName = dto.username !== undefined ? this.normalizeLoginName(dto.username) : undefined;
     const passwordHash = dto.password !== undefined ? await bcrypt.hash(dto.password, BCRYPT_DEFAULT_ROUNDS) : undefined;
 
@@ -449,6 +489,7 @@ export class EmployeesService {
 
       const payload: Prisma.EmployeeUncheckedUpdateInput = {
         ...(dto.name !== undefined && { name: dto.name }),
+        ...(dto.biometricNumber !== undefined && { biometricNumber: dto.biometricNumber }),
         ...(mobile !== undefined && { mobile }),
         ...(dto.residence !== undefined && { residence: this.normalizeOptionalString(dto.residence) }),
         ...(nationalId !== undefined && { nationalId }),
@@ -763,6 +804,52 @@ export class EmployeesService {
       message: actionMessage, 
       employee: result.employee,
       terminationRecord: result.terminationRecord,
+    };
+  }
+
+async bulkTerminateDepartment(dto: BulkTerminateDepartmentDto, user: AuthenticatedUser) {
+    const status = dto.terminationType === 'resignation' ? 'resigned' : 'terminated';
+    const terminationDate = this.parseOptionalDate(dto.terminationDate, 'terminationDate') || new Date();
+
+    const employees = await this.prisma.employee.findMany({
+      where: {
+        department: dto.department,
+        status: 'active',
+      },
+      select: { employeeId: true, name: true },
+    });
+
+    if (employees.length === 0) {
+      return { success: true, message: 'لا يوجد موظفين نشطين في هذا القسم', terminatedCount: 0 };
+    }
+
+    const results = await this.prisma.$transaction(
+      employees.map((emp) =>
+        this.prisma.employee.update({
+          where: { employeeId: emp.employeeId },
+          data: {
+            status,
+            terminationDate,
+            terminationType: dto.terminationType,
+            terminationReason: dto.terminationReason || null,
+            terminationNotes: dto.terminationNotes || null,
+            financialSettlementStatus: 'pending',
+            isSettled: false,
+            isFinanciallySettled: false,
+          },
+          include: this.employeeSelect(),
+        }),
+      ),
+    );
+
+    await this.shortCache.invalidatePrefix('employees:stats');
+
+    const actionLabel = dto.terminationType === 'resignation' ? 'استقالة' : 'إقالة';
+    return {
+      success: true,
+      message: `تم ${actionLabel} جماعي لـ ${results.length} موظف في قسم "${dto.department}"`,
+      terminatedCount: results.length,
+      employees: results,
     };
   }
 

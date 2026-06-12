@@ -21,6 +21,7 @@ import { EmployeesListQueryDto } from './dto/employees-list-query.dto';
 import { EmployeeProfileQueryDto } from './dto/employee-profile-query.dto';
 import { TerminateEmployeeDto } from './dto/terminate-employee.dto';
 import { TerminateEmployeeZodDto } from './dto/terminate-employee-zod.dto';
+import { BulkTerminateDepartmentDto } from './dto/bulk-terminate-department.dto';
 import { RehireEmployeeDto } from './dto/rehire-employee.dto';
 import { FinancialSettlementDto } from './dto/financial-settlement.dto';
 import { ResignedEmployeesQueryDto } from './dto/resigned-employees-query.dto';
@@ -147,6 +148,16 @@ export class EmployeesController {
     @CurrentUser() user: AuthenticatedUser,
   ) {
     return this.employeesService.processFinancialSettlement(dto, user);
+  }
+
+  @Post('bulk-terminate-department')
+  @Permissions('edit_employees')
+  @ApiOperation({ summary: 'إنهاء خدمة جميع موظفي قسم محدد' })
+  bulkTerminateDepartment(
+    @Body() dto: BulkTerminateDepartmentDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.employeesService.bulkTerminateDepartment(dto, user);
   }
 
   @Delete(':employeeId')

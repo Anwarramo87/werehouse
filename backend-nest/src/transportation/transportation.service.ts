@@ -313,11 +313,16 @@ export class TransportationService {
       `;
 
       if (existingDiscounts.length > 0) {
+        // Schema does not expose deletedAt on EmployeeBonus update input.
+        // Keep soft-delete behavior compatible with current model by nullifying assistanceAmount.
         await this.prisma.employeeBonus.update({
           where: { id: existingDiscounts[0].id },
-          data: { deletedAt: new Date() },
+          data: {
+            assistanceAmount: new Prisma.Decimal(0),
+          },
         });
       }
+
     } catch (error) {
       console.error('Failed to remove transportation discount:', error);
     }

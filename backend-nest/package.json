@@ -26,6 +26,7 @@
     "prisma:generate": "prisma generate",
     "prisma:push": "prisma db push --accept-data-loss",
     "seed:demo": "node scripts/seed-demo.js",
+    "import:legacy-employees": "node scripts/import-legacy-employees.js",
     "seed:employees": "ts-node prisma/seed-employees-payroll.ts",
     "test:e2e": "jest --config ./test/jest-e2e.json",
     "test:salary": "npx jest ./test/salary.calculate-allowances.e2e-spec.ts --config ./test/jest-e2e.json -i --runInBand",

@@ -767,7 +767,17 @@ export class PayrollService {
     const includeAttendanceDeductions = dto.includeAttendanceDeductions !== false;
     const includeTransportationDeductions = dto.includeTransportationDeductions !== false;
 
-    const [salaryRecords, bonuses, advances, penalties, attendanceInRecords, payrollInputs] = await Promise.all([
+    const [
+      salaryRecords,
+      bonuses,
+      advances,
+      penalties,
+      attendanceInRecords,
+      payrollInputs,
+      dailyOvertimeLogs,
+    ] = await Promise.all([
+
+
       this.prisma.employeeSalary.findMany({
         where: { employeeId: { in: employeeIds } },
       }),
@@ -823,7 +833,24 @@ export class PayrollService {
           periodEnd: new Date(periodEnd),
         },
       }),
+      // DailyAttendanceLog: base automated overtime data
+      this.prisma.dailyAttendanceLog.findMany({
+        where: {
+          employeeId: { in: employeeIds },
+          recordType: 'OVERTIME_MINUTES',
+          date: {
+            gte: periodStart,
+            lte: periodEnd,
+          },
+        },
+        select: {
+          employeeId: true,
+          date: true,
+          value: true,
+        },
+      }),
     ]);
+
 
     const salaryByEmployee = new Map(salaryRecords.map((record) => [record.employeeId, record]));
     const employeeById = new Map(targetEmployees.map((employee) => [employee.employeeId, employee]));
@@ -832,6 +859,33 @@ export class PayrollService {
     const attendanceDatesByEmployee = new Map<string, Set<string>>();
     const lateMinutesByEmployee = new Map<string, number>();
     const overtimeMinutesByEmployee = new Map<string, number>();
+
+    const overtimeWeekendMinutesByEmployee = new Map<string, number>();
+    const overtimeWeekendDaysByEmployee = new Map<string, number>();
+
+    // Classify weekend overtime (Friday) from DailyAttendanceLog
+    for (const log of dailyOvertimeLogs) {
+      // NOTE timezone: relies on JS Date created by Prisma for `date` field.
+      const d = new Date(log.date);
+      const isFriday = d.getDay() === 5;
+      if (!isFriday) continue;
+
+      const minutes = Number(log.value ?? 0);
+      if (!Number.isFinite(minutes) || minutes <= 0) continue;
+
+      overtimeWeekendMinutesByEmployee.set(
+        log.employeeId,
+        (overtimeWeekendMinutesByEmployee.get(log.employeeId) || 0) + minutes,
+      );
+
+      // For days representation: convert minutes to working day-hours model later if needed.
+      // Here we approximate weekend overtime days as 1 per any weekend log day.
+      overtimeWeekendDaysByEmployee.set(
+        log.employeeId,
+        (overtimeWeekendDaysByEmployee.get(log.employeeId) || 0) + 1,
+      );
+    }
+
 
     // معالجة خصومات الدوام فقط إذا كان enabled
     if (includeAttendanceDeductions) {
@@ -946,7 +1000,38 @@ export class PayrollService {
 
         const attendanceDays = attendanceDaysByEmployee.get(employee.employeeId) || 0;
         const hoursWorked = attendanceDays * hoursPerDayEmp;
-        const absenceDaysFallback = Math.max(0, workDays - attendanceDays);
+
+        // absenceDaysFallback: compute as (workDays - attendanceDays) BUT exclude APPROVED paid leaves
+        const absenceDaysFallbackRaw = Math.max(0, workDays - attendanceDays);
+
+        // Count paid approved leave days inside period to avoid double-penalizing them as absence
+        // NOTE: For now we treat PAID leave type or isPaid=true as "paid".
+        // This logic is intentionally inclusive for overlap partials.
+        const paidApprovedLeaves = await this.prisma.leaveRequest.findMany({
+          where: {
+            employeeId: employee.employeeId,
+            status: 'APPROVED',
+            leaveType: { in: ['PAID', 'SICK', 'ADMIN', 'DEATH'] },
+            startDate: { lte: new Date(periodEnd) },
+            endDate: { gte: new Date(periodStart) },
+          },
+          select: { startDate: true, endDate: true, isPaid: true, leaveType: true },
+        });
+
+        const paidApprovedLeaveDaysInPeriod = paidApprovedLeaves.reduce((sum, l) => {
+          // inclusive overlap day count
+          const overlapStart = l.startDate > new Date(periodStart) ? l.startDate : new Date(periodStart);
+          const overlapEnd = l.endDate < new Date(periodEnd) ? l.endDate : new Date(periodEnd);
+          const ms = overlapEnd.getTime() - overlapStart.getTime();
+          const days = Math.floor(ms / 86_400_000) + 1;
+          return sum + (Number.isFinite(days) && days > 0 ? days : 0);
+        }, 0);
+
+        const absenceDaysFallback = Math.max(
+          0,
+          absenceDaysFallbackRaw - paidApprovedLeaveDaysInPeriod,
+        );
+
 
         const employeeBonuses = bonusesByEmployee.get(employee.employeeId);
         const bonusAmount = this.toDecimal(employeeBonuses?.bonus || 0);
@@ -986,12 +1071,30 @@ export class PayrollService {
         const unpaidLeaveDays = Number(input?.unpaidLeaveDays ?? 0);
         const deathLeaveDays = Number(input?.deathLeaveDays ?? 0);
         const unpaidHours = Number(input?.unpaidHours ?? 0);
-        const overtimeRegularMinutes = this.resolveAttendanceValue(
-          input?.overtimeRegularMinutes,
-          overtimeMinutesByEmployee.get(employee.employeeId) || 0,
-          includeAttendanceDeductions,
+        // overtimeRegularMinutes (computed from AttendanceRecord as hoursWorked - hoursPerDay)
+        const overtimeRegularMinutesComputed = overtimeMinutesByEmployee.get(employee.employeeId) || 0;
+        const overtimeRegularMinutes = includeAttendanceDeductions
+          ? Number(input?.overtimeRegularMinutes ?? overtimeRegularMinutesComputed)
+          : Number(input?.overtimeRegularMinutes ?? 0);
+
+        // overtimeWeekendMinutes/days:
+        // - Start by using PayrollInput override if present.
+        // - For automated classification (weekend overtime), we will use DailyAttendanceLog in a later step.
+        const overtimeWeekendMinutesComputed =
+          overtimeWeekendMinutesByEmployee.get(employee.employeeId) || 0;
+
+        // PayrollInput currently stores overtimeWeekendDays (Decimal) - keep existing field.
+        // We approximate computed weekend days by the classified weekend log days.
+        const overtimeWeekendDaysComputed =
+          overtimeWeekendDaysByEmployee.get(employee.employeeId) || 0;
+
+        const overtimeWeekendDays = Number(
+          input?.overtimeWeekendDays ?? overtimeWeekendDaysComputed,
         );
-        const overtimeWeekendDays = Number(input?.overtimeWeekendDays ?? 0);
+
+        // If in future PayrollInput adds overtimeWeekendMinutes, we can switch to minutes-based pay.
+
+
 
         const g3 = baseSalary
           .plus(livingAllowance)
@@ -1003,9 +1106,9 @@ export class PayrollService {
         const hourlyWage = dailyWage.div(STANDARD_HOURS_PER_DAY);
         const minuteWage = hourlyWage.div(MINUTES_PER_HOUR);
 
-        const latePenalty = minuteWage
-          .times(MULTIPLIER_OVERTIME)
-          .times(this.toDecimal(lateMinutes));
+        // Late penalty policy: minuteWage * lateMinutes (without overtime multiplier)
+        const latePenalty = minuteWage.times(this.toDecimal(lateMinutes));
+
         const earlyLeavePenalty = minuteWage.times(this.toDecimal(earlyLeaveMinutes));
         const absencePenalty = dailyWage.times(this.toDecimal(absenceDays));
         const sickLeavePenalty = dailyWage

@@ -40,6 +40,13 @@ export class CreateEmployeeDto {
   @MaxLength(30)
   mobile?: string;
 
+  @ApiPropertyOptional({ description: 'رقم الموظف القديم على جهاز البصمة', example: 785 })
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  @Type(() => Number)
+  biometricNumber?: number;
+
   @ApiPropertyOptional({ description: 'رقم الهوية الوطنية', example: '1234567890' })
   @IsOptional()
   @IsString()
