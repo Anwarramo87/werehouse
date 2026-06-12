@@ -29,6 +29,24 @@ import { AuditService } from '../common/services/audit.service';
 import { AuthenticatedUser } from '../common/types/authenticated-user.types';
 import { RequestWithCookies } from '../common/types/request-context.types';
 
+const reportDebug = (hypothesisId: string, msg: string, data?: Record<string, unknown>) => {
+  void fetch('http://127.0.0.1:7777/event', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      sessionId: 'login-500-error',
+      runId: 'pre-fix',
+      hypothesisId,
+      location: 'src/auth/auth.controller.ts',
+      msg: `[DEBUG] ${msg}`,
+      data,
+      ts: Date.now(),
+    }),
+  }).catch(() => {});
+};
+
 @ApiTags('auth')
 @Controller('auth')
 export class AuthController implements OnModuleInit {
@@ -55,6 +73,12 @@ export class AuthController implements OnModuleInit {
   @ApiResponse({ status: 401, description: 'بيانات الدخول غير صحيحة' })
   @ApiResponse({ status: 429, description: 'تجاوزت حد الطلبات المسموح' })
   async login(@Body() dto: LoginDto, @Res({ passthrough: true }) res: Response) {
+    // #region debug-point C:controller-entry
+    reportDebug('C', 'AuthController.login entered', {
+      usernameLength: dto.username?.length ?? 0,
+      hasPassword: Boolean(dto.password),
+    });
+    // #endregion
     const result = await this.authService.login(dto);
     this.setAuthCookie(res, result.token);
     res.setHeader('Cache-Control', 'no-store');
