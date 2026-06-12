@@ -207,24 +207,30 @@ export class BiometricService {
     const processed: ProcessedAttendanceLog[] = [];
 
     for (const log of rawLogs) {
-      const employeeId = this.formatEmployeeId(log.deviceUserId);
+      const fallbackEmployeeId = this.formatEmployeeId(log.deviceUserId);
 
-      // Check if employee exists
-      const employee = await this.prisma.employee.findUnique({
-        where: { employeeId },
-        select: { scheduledStart: true, scheduledEnd: true },
+      // Prefer the preserved biometric/device number when it exists, then
+      // fall back to the legacy EMP + device number convention.
+      const employee = await this.prisma.employee.findFirst({
+        where: {
+          OR: [
+            { biometricNumber: log.deviceUserId },
+            { employeeId: fallbackEmployeeId },
+          ],
+        },
+        select: { employeeId: true, scheduledStart: true, scheduledEnd: true },
       });
 
       if (!employee) {
         this.logger.warn(
-          `⚠️ Employee ${employeeId} (Device ID: ${log.deviceUserId}) not found in database. Skipping log.`,
+          `⚠️ Employee ${fallbackEmployeeId} (Device ID: ${log.deviceUserId}) not found in database. Skipping log.`,
         );
         continue;
       }
 
       const type = this.mapCheckType(log.checkType);
       const processedLog: ProcessedAttendanceLog = {
-        employeeId,
+        employeeId: employee.employeeId,
         timestamp: log.recordTime,
         type,
         deviceId: log.deviceId || 'ZK-SIM',

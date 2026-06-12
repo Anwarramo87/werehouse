@@ -338,15 +338,19 @@ export class DailyLogsService {
   async getAllEmployeesMonthlySummary(month: string) {
     const { startDate, endDate } = this.resolveMonthRange(month);
 
-    // جلب جميع الموظفين النشطين
+    // Policy unified with employees list:
+    // - default: exclude terminated/resigned only
+    // - do NOT force status=active, otherwise reports hide employees.
     const employees = await this.prisma.employee.findMany({
-      where: { status: 'active' },
+      where: { status: { notIn: ['terminated', 'resigned'] } },
       select: {
         employeeId: true,
         name: true,
         department: true,
       },
     });
+
+
 
     // جلب جميع السجلات اليومية للشهر
     const logs = await this.prisma.dailyAttendanceLog.findMany({

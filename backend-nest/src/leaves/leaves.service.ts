@@ -71,11 +71,14 @@ export class LeavesService {
   }
 
   private normalizeRange(startDate?: string, endDate?: string) {
+    // Backward compatible helper for other potential uses.
+    // NOTE: list() will use overlap logic directly.
     const range: Prisma.DateTimeFilter<'LeaveRequest'> = {} as Prisma.DateTimeFilter<'LeaveRequest'>;
     if (startDate) range.gte = this.parseDate(startDate, 'startDate');
     if (endDate) range.lte = this.parseDate(endDate, 'endDate');
     return range;
   }
+
 
   /**
    * تحضير بيانات Prisma لإنشاء طلب إجازة بعد تطبيق التحقق من صحة البيانات.
@@ -282,8 +285,30 @@ export class LeavesService {
     if (query.leaveType) where.leaveType = query.leaveType as LeaveRequestType;
     if (query.status) where.status = query.status as LeaveRequestStatus;
     if (query.startDate || query.endDate) {
-      where.AND = [{ startDate: this.normalizeRange(query.startDate, query.endDate) }];
+      if (!query.startDate || !query.endDate) {
+        // current LeavesListQueryDto expects both; keep backward compatible but avoid incorrect overlap.
+        throw new BadRequestException('startDate and endDate must be provided together');
+      }
+
+      const periodStart = this.parseDate(query.startDate, 'startDate');
+      const periodEnd = this.parseDate(query.endDate, 'endDate');
+
+      if (periodEnd < periodStart) {
+        throw new BadRequestException('endDate must be greater than or equal to startDate');
+      }
+
+      // Overlap logic (inclusive):
+      // leave.startDate <= periodEnd AND leave.endDate >= periodStart
+      // ensures partial overlaps are included.
+      where.AND = [
+        { startDate: { lte: periodEnd } },
+        { endDate: { gte: periodStart } },
+      ];
     }
+
+
+
+
 
     const [leaveRequests, total] = await Promise.all([
       this.prisma.leaveRequest.findMany({
