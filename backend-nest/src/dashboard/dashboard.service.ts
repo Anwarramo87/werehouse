@@ -1,7 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
-import { Prisma } from '@prisma/client';
 
 const GRACE_PERIOD_MINUTES = 15;
 const DEFAULT_SCHEDULED_START = '08:00';
