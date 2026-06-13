@@ -62,7 +62,7 @@ export class DiscountsService {
         kind: DiscountKind.ASSISTANCE,
       }));
 
-    return [...advanceRecords].sort(
+    return [...advanceRecords, ...bonusRecords].sort(
       (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime(),
     );
   }

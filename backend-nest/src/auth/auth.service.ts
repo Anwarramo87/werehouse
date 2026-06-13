@@ -38,24 +38,6 @@ interface BiometricChallengeRecord {
   pendingDeviceName?: string;
 }
 
-const reportDebug = (hypothesisId: string, msg: string, data?: Record<string, unknown>) => {
-  void fetch('http://127.0.0.1:7777/event', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      sessionId: 'login-500-error',
-      runId: 'pre-fix',
-      hypothesisId,
-      location: 'src/auth/auth.service.ts',
-      msg: `[DEBUG] ${msg}`,
-      data,
-      ts: Date.now(),
-    }),
-  }).catch(() => {});
-};
-
 @Injectable()
 export class AuthService {
   private readonly logger = new Logger(AuthService.name);
@@ -96,13 +78,6 @@ export class AuthService {
   async login(dto: LoginDto) {
     const normalizedUsername = dto.username.trim();
 
-    // #region debug-point D:service-entry
-    reportDebug('D', 'AuthService.login started', {
-      normalizedUsername,
-      usernameLength: normalizedUsername.length,
-    });
-    // #endregion
-
     let user = await this.prisma.user.findFirst({
       where: { username: normalizedUsername },
       include: { role: true },
@@ -115,25 +90,14 @@ export class AuthService {
       });
     }
 
-    // #region debug-point E:user-lookup
-    reportDebug('E', 'AuthService.login finished user lookup', {
-      userFound: Boolean(user),
-      matchedBy: user?.username === normalizedUsername ? 'username' : user?.email === normalizedUsername ? 'email' : null,
-      userStatus: user?.status ?? null,
-      hasRole: Boolean(user?.role),
-    });
-    // #endregion
+    // Check lockout BEFORE password comparison to prevent brute-force on locked accounts
+    if (user && this.isAccountLocked(user.lockoutUntil)) {
+      throw new UnauthorizedException('الحساب مقفل حالياً');
+    }
 
     const isPasswordCorrect = user
       ? await bcrypt.compare(dto.password, user.passwordHash)
       : await bcrypt.compare(dto.password, '$2a$10$n7.T/aVvE.R.v.v.v.v.v.v.v.v.v.v.v.v.v.v.v.v.v.v.v.v.');
-
-    // #region debug-point F:password-compare
-    reportDebug('F', 'AuthService.login compared password', {
-      userFound: Boolean(user),
-      isPasswordCorrect,
-    });
-    // #endregion
 
     if (!user || !isPasswordCorrect) {
       if (user) {
@@ -142,23 +106,12 @@ export class AuthService {
       throw new UnauthorizedException('بيانات الدخول غير صحيحة');
     }
 
-    if (this.isAccountLocked(user.lockoutUntil)) {
-      throw new UnauthorizedException('الحساب مقفل حالياً');
-    }
-
     await this.prisma.user.update({
       where: { id: user.id },
       data: { failedLoginAttempts: 0, lockoutUntil: null, lastLogin: new Date() },
     });
 
     const payload = this.buildAuthPayload(user);
-    // #region debug-point G:login-success
-    reportDebug('G', 'AuthService.login succeeded', {
-      userId: user.id,
-      roleName: user.role?.name ?? null,
-      permissionsCount: Array.isArray(user.role?.permissions) ? user.role.permissions.length : 0,
-    });
-    // #endregion
     return {
       token: await this.jwtService.signAsync(payload),
       user: this.toPublicAuthUser(user),
@@ -414,9 +367,7 @@ export class AuthService {
 
   private async handleAutoAttendance(user: any, dto: BiometricLoginFinishDto) {
     const employee = await this.prisma.employee.findFirst({
-      where: {
-        OR: [{ email: user.email }, { employeeId: user.username.toUpperCase() }],
-      },
+      where: { employeeId: user.username.toUpperCase() },
     });
 
     if (!employee) {

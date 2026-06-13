@@ -14,24 +14,6 @@ type ExceptionResponseShape = {
   message?: string | string[];
 };
 
-const reportDebug = (hypothesisId: string, msg: string, data?: Record<string, unknown>) => {
-  void fetch('http://127.0.0.1:7777/event', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      sessionId: 'login-500-error',
-      runId: 'pre-fix',
-      hypothesisId,
-      location: 'src/common/filters/global-exception.filter.ts',
-      msg: `[DEBUG] ${msg}`,
-      data,
-      ts: Date.now(),
-    }),
-  }).catch(() => {});
-};
-
 @Catch()
 export class GlobalExceptionFilter implements ExceptionFilter {
   private readonly logger = new Logger(GlobalExceptionFilter.name);
@@ -57,16 +39,6 @@ export class GlobalExceptionFilter implements ExceptionFilter {
       : this.extractMessage(exceptionResponse, exception);
 
     if (statusCode >= 500) {
-      // #region debug-point H:global-exception
-      reportDebug('H', 'Global exception filter captured server error', {
-        correlationId,
-        method: request.method,
-        path: request.originalUrl,
-        statusCode,
-        message,
-        exceptionName: exception instanceof Error ? exception.name : typeof exception,
-      });
-      // #endregion
       this.logger.error(
         JSON.stringify({
           correlationId,
