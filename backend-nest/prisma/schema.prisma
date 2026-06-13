@@ -484,7 +484,8 @@ model EmployeeInsurance {
 // ---------------------------------------------------------------------------
 model EmployeeBonus {
   id               String   @id @default(uuid()) @db.Uuid
-  employeeId       String
+  employeeId       String   @db.Uuid
+
   bonusAmount      Decimal  @default(0) @db.Decimal(14, 2)
   bonusReason      String?
   assistanceAmount Decimal  @default(0) @db.Decimal(14, 2)
@@ -504,7 +505,8 @@ model EmployeeBonus {
 // ---------------------------------------------------------------------------
 model EmployeePenalty {
   id         String   @id @default(uuid()) @db.Uuid
-  employeeId String
+  employeeId String   @db.Uuid
+
   category   String
   amount     Decimal  @db.Decimal(14, 2)
   reason     String?

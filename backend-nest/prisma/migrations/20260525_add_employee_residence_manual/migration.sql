@@ -1,1 +1,0 @@
--- Migration applied directly on database. Placeholder for history sync.
