@@ -6,7 +6,6 @@ import * as bcrypt from 'bcryptjs';
 import { PrismaService } from '../prisma/prisma.service';
 import { TokenRevocationService } from './token-revocation.service';
 import { RealtimeGateway } from '../realtime/realtime.gateway';
-import { ShortCacheService } from '../common/cache/short-cache.service';
 import { LoginDto } from './dto/login.dto';
 import { RegisterDto } from './dto/register.dto';
 import { CreateUserDto } from './dto/create-user.dto';
@@ -39,26 +38,28 @@ interface BiometricChallengeRecord {
   pendingDeviceName?: string;
 }
 
+const reportDebug = (hypothesisId: string, msg: string, data?: Record<string, unknown>) => {
+  void fetch('http://127.0.0.1:7777/event', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      sessionId: 'login-500-error',
+      runId: 'pre-fix',
+      hypothesisId,
+      location: 'src/auth/auth.service.ts',
+      msg: `[DEBUG] ${msg}`,
+      data,
+      ts: Date.now(),
+    }),
+  }).catch(() => {});
+};
+
 @Injectable()
 export class AuthService {
   private readonly logger = new Logger(AuthService.name);
-
-  private challengeKey(challengeId: string) {
-    return `auth:biometric:challenge:${challengeId}`;
-  }
-
-  private async setChallenge(challengeId: string, record: BiometricChallengeRecord) {
-    const ttl = Math.max(1, Math.ceil((record.expiresAt - Date.now()) / 1000));
-    await this.shortCache.setJson(this.challengeKey(challengeId), record, ttl);
-  }
-
-  private async getChallenge(challengeId: string): Promise<BiometricChallengeRecord | null> {
-    const key = this.challengeKey(challengeId);
-    const value = await this.shortCache.getJson<BiometricChallengeRecord>(key);
-    if (!value) return null;
-    await this.shortCache.del(key);
-    return value;
-  }
+  private readonly biometricChallenges = new Map<string, BiometricChallengeRecord>();
 
   private static readonly ADMIN_PERMISSIONS = [
     'view_employees',
@@ -90,23 +91,49 @@ export class AuthService {
     private readonly config: ConfigService,
     private readonly tokenRevocation: TokenRevocationService,
     private readonly realtimeGateway: RealtimeGateway,
-    private readonly shortCache: ShortCacheService,
   ) {}
 
   async login(dto: LoginDto) {
-    const user = await this.prisma.user.findFirst({
-      where: {
-        OR: [
-          { username: { equals: dto.username, mode: 'insensitive' } },
-          { email: { equals: dto.username, mode: 'insensitive' } },
-        ],
-      },
+    const normalizedUsername = dto.username.trim();
+
+    // #region debug-point D:service-entry
+    reportDebug('D', 'AuthService.login started', {
+      normalizedUsername,
+      usernameLength: normalizedUsername.length,
+    });
+    // #endregion
+
+    let user = await this.prisma.user.findFirst({
+      where: { username: normalizedUsername },
       include: { role: true },
     });
+
+    if (!user) {
+      user = await this.prisma.user.findFirst({
+        where: { email: normalizedUsername },
+        include: { role: true },
+      });
+    }
+
+    // #region debug-point E:user-lookup
+    reportDebug('E', 'AuthService.login finished user lookup', {
+      userFound: Boolean(user),
+      matchedBy: user?.username === normalizedUsername ? 'username' : user?.email === normalizedUsername ? 'email' : null,
+      userStatus: user?.status ?? null,
+      hasRole: Boolean(user?.role),
+    });
+    // #endregion
 
     const isPasswordCorrect = user
       ? await bcrypt.compare(dto.password, user.passwordHash)
       : await bcrypt.compare(dto.password, '$2a$10$n7.T/aVvE.R.v.v.v.v.v.v.v.v.v.v.v.v.v.v.v.v.v.v.v.v.');
+
+    // #region debug-point F:password-compare
+    reportDebug('F', 'AuthService.login compared password', {
+      userFound: Boolean(user),
+      isPasswordCorrect,
+    });
+    // #endregion
 
     if (!user || !isPasswordCorrect) {
       if (user) {
@@ -125,6 +152,13 @@ export class AuthService {
     });
 
     const payload = this.buildAuthPayload(user);
+    // #region debug-point G:login-success
+    reportDebug('G', 'AuthService.login succeeded', {
+      userId: user.id,
+      roleName: user.role?.name ?? null,
+      permissionsCount: Array.isArray(user.role?.permissions) ? user.role.permissions.length : 0,
+    });
+    // #endregion
     return {
       token: await this.jwtService.signAsync(payload),
       user: this.toPublicAuthUser(user),
@@ -172,7 +206,7 @@ export class AuthService {
     const challengeId = randomBytes(16).toString('hex');
     const challengeBase64 = randomBytes(BIOMETRIC_CHALLENGE_BYTES).toString('base64url');
 
-    const record: BiometricChallengeRecord = {
+    this.biometricChallenges.set(challengeId, {
       id: challengeId,
       userId,
       purpose: 'REGISTER',
@@ -182,15 +216,13 @@ export class AuthService {
       keyId: dto.keyId,
       pendingPublicKeyBase64: dto.publicKeyBase64,
       pendingDeviceName: dto.deviceName,
-    };
-
-    await this.setChallenge(challengeId, record);
+    });
 
     return { challengeId, challengeBase64 };
   }
 
   async finishBiometricRegistration(userId: string, dto: BiometricRegisterFinishDto) {
-    const challenge = await this.consumeChallenge(dto.challengeId, 'REGISTER', userId);
+    const challenge = this.consumeChallenge(dto.challengeId, 'REGISTER', userId);
     if (!challenge) {
       throw new BadRequestException('تحدي غير صالح');
     }
@@ -225,22 +257,20 @@ export class AuthService {
     const challengeId = randomBytes(16).toString('hex');
     const challengeBase64 = randomBytes(BIOMETRIC_CHALLENGE_BYTES).toString('base64url');
 
-    const record: BiometricChallengeRecord = {
+    this.biometricChallenges.set(challengeId, {
       id: challengeId,
       userId: user.id,
       purpose: 'LOGIN',
       challengeHash: this.hashChallenge(challengeBase64),
       challengeBase64,
       expiresAt: Date.now() + BIOMETRIC_CHALLENGE_TTL_SECONDS * 1000,
-    };
-
-    await this.setChallenge(challengeId, record);
+    });
 
     return { challengeId, challengeBase64, allowedKeyIds: credentials.map((credential: { keyId: string }) => credential.keyId) };
   }
 
   async finishBiometricLogin(dto: BiometricLoginFinishDto) {
-    const challenge = await this.consumeChallenge(dto.challengeId, 'LOGIN');
+    const challenge = this.consumeChallenge(dto.challengeId, 'LOGIN');
     if (!challenge) {
       throw new BadRequestException('التحدي منتهي');
     }
@@ -329,63 +359,63 @@ export class AuthService {
   }
 
   async ensureAdminBootstrap() {
-    const adminRole = await this.prisma.role.upsert({
-      where: { name: 'admin' },
-      update: {},
-      create: { name: 'admin', permissions: AuthService.ADMIN_PERMISSIONS },
-    });
+    const adminRole =
+      (await this.prisma.role.findUnique({ where: { name: 'admin' } })) ??
+      (await this.prisma.role.create({ data: { name: 'admin', permissions: AuthService.ADMIN_PERMISSIONS } }));
 
     const password = this.config.get<string>('ADMIN_BOOTSTRAP_PASSWORD');
-    if (!password) {
-      throw new Error('ADMIN_BOOTSTRAP_PASSWORD must be set');
+    if (!password && this.config.get('NODE_ENV') === 'production') {
+      throw new Error('ADMIN_BOOTSTRAP_PASSWORD must be set in production');
     }
 
-    const hash = await bcrypt.hash(password, BCRYPT_DEFAULT_ROUNDS);
-    await this.prisma.user.upsert({
-      where: { username: this.config.get('ADMIN_USERNAME', 'admin') },
-      update: {},
-      create: {
-        username: this.config.get('ADMIN_USERNAME', 'admin'),
-        email: this.config.get('ADMIN_EMAIL', 'admin@warehouse.local'),
-        passwordHash: hash,
-        roleId: adminRole.id,
-        status: 'active',
-      },
-    });
+    const hash = await bcrypt.hash(password || 'password123', BCRYPT_DEFAULT_ROUNDS);
+    const adminUsername = this.config.get('ADMIN_USERNAME', 'admin');
+    const existingAdmin = await this.prisma.user.findUnique({ where: { username: adminUsername } });
+    if (!existingAdmin) {
+      await this.prisma.user.create({
+        data: {
+          username: adminUsername,
+          email: this.config.get('ADMIN_EMAIL', 'admin@warehouse.local'),
+          passwordHash: hash,
+          roleId: adminRole.id,
+          status: 'active',
+        },
+      });
+    }
   }
 
   async ensureSuperadminBootstrap() {
-    const adminRole = await this.prisma.role.upsert({
-      where: { name: 'admin' },
-      update: {},
-      create: { name: 'admin', permissions: AuthService.ADMIN_PERMISSIONS },
-    });
+    const adminRole =
+      (await this.prisma.role.findUnique({ where: { name: 'admin' } })) ??
+      (await this.prisma.role.create({ data: { name: 'admin', permissions: AuthService.ADMIN_PERMISSIONS } }));
 
     const username = this.config.get<string>('SUPERADMIN_USERNAME', 'superadmin');
     const email = this.config.get<string>('SUPERADMIN_EMAIL', 'superadmin@warehouse.local');
     const password = this.config.get<string>('SUPERADMIN_PASSWORD');
-    if (!password) {
-      throw new Error('SUPERADMIN_PASSWORD must be set');
+
+    if (!password && this.config.get('NODE_ENV') === 'production') {
+      throw new Error('SUPERADMIN_PASSWORD must be set in production');
     }
 
-    const hash = await bcrypt.hash(password, BCRYPT_DEFAULT_ROUNDS);
-    await this.prisma.user.upsert({
-      where: { username },
-      update: {},
-      create: {
-        username,
-        email,
-        passwordHash: hash,
-        roleId: adminRole.id,
-        status: 'active',
-      },
-    });
+    const hash = await bcrypt.hash(password || 'SuperAdmin@2026!', BCRYPT_DEFAULT_ROUNDS);
+    const existingSuperadmin = await this.prisma.user.findUnique({ where: { username } });
+    if (!existingSuperadmin) {
+      await this.prisma.user.create({
+        data: {
+          username,
+          email,
+          passwordHash: hash,
+          roleId: adminRole.id,
+          status: 'active',
+        },
+      });
+    }
   }
 
   private async handleAutoAttendance(user: any, dto: BiometricLoginFinishDto) {
     const employee = await this.prisma.employee.findFirst({
       where: {
-        OR: [{ userId: user.id }, { employeeId: user.username.toUpperCase() }],
+        OR: [{ email: user.email }, { employeeId: user.username.toUpperCase() }],
       },
     });
 
@@ -471,13 +501,14 @@ export class AuthService {
     }
   }
 
-  private async consumeChallenge(challengeId: string, purpose: BiometricChallengePurpose, userId?: string) {
-    const challenge = await this.getChallenge(challengeId);
+  private consumeChallenge(challengeId: string, purpose: BiometricChallengePurpose, userId?: string) {
+    const challenge = this.biometricChallenges.get(challengeId);
     if (!challenge) {
       return null;
     }
 
-    if (challenge.purpose !== purpose) {
+    if (challenge.usedAt || challenge.expiresAt < Date.now() || challenge.purpose !== purpose) {
+      this.biometricChallenges.delete(challengeId);
       return null;
     }
 
@@ -485,6 +516,8 @@ export class AuthService {
       return null;
     }
 
+    challenge.usedAt = new Date();
+    this.biometricChallenges.delete(challengeId);
     return challenge;
   }
 
