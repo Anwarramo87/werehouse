@@ -991,6 +991,7 @@ export class AttendanceService {
     hoursPerDay?: number;
     employeeId?: string;
   }) {
+
     const {
       periodStart,
       periodEnd,
@@ -1041,6 +1042,7 @@ export class AttendanceService {
       hourlyRate: true,
       baseSalary: true,
       scheduledStart: true,
+      scheduledEnd: true,
       workDaysInPeriod: true,
       hoursPerDay: true,
       gracePeriodMinutes: true,
@@ -1073,6 +1075,7 @@ export class AttendanceService {
         type: true,
         timestamp: true,
         shiftPair: true,
+        // used for IN/OUT pairing to compute overtime
       },
     });
 
@@ -1128,18 +1131,27 @@ export class AttendanceService {
       const [schH, schM] = scheduledStart.split(':').map(Number);
       const scheduledMinutes = (schH || 8) * 60 + (schM || 0);
 
-      // أول IN لكل يوم
+      // أول IN وآخر OUT لكل يوم
       const firstInByDate = new Map<string, { timestamp: Date; shiftPairMinutesLate: number | null; date: string }>();
+      const lastOutByDate = new Map<string, Date>();
       for (const record of records) {
-        if (record.type.toUpperCase() !== 'IN') continue;
-        if (firstInByDate.has(record.date)) continue;
-        const sp = record.shiftPair as Record<string, unknown> | null;
-        const spLate = sp?.minutesLate != null ? Number(sp.minutesLate) : null;
-        firstInByDate.set(record.date, {
-          timestamp: record.timestamp,
-          date: record.date,
-          shiftPairMinutesLate: Number.isFinite(spLate) ? (spLate as number) : null,
-        });
+        const recType = record.type.toUpperCase();
+        if (recType === 'IN') {
+          if (firstInByDate.has(record.date)) continue;
+          const sp = record.shiftPair as Record<string, unknown> | null;
+          const spLate = sp?.minutesLate != null ? Number(sp.minutesLate) : null;
+          firstInByDate.set(record.date, {
+            timestamp: record.timestamp,
+            date: record.date,
+            shiftPairMinutesLate: Number.isFinite(spLate) ? (spLate as number) : null,
+          });
+        } else if (recType === 'OUT') {
+          // نحتفظ بآخر OUT في اليوم
+          const existing = lastOutByDate.get(record.date);
+          if (!existing || record.timestamp > existing) {
+            lastOutByDate.set(record.date, record.timestamp);
+          }
+        }
       }
 
       let totalDelayMinutes = 0;
@@ -1193,6 +1205,38 @@ export class AttendanceService {
         totalDelayMinutes += effectiveLate;
       }
 
+      // ── حساب الإضافي من checkOut vs scheduledEnd ──────────────────────────
+      const scheduledEnd = employee.scheduledEnd || '16:00';
+      const [seH, seM] = scheduledEnd.split(':').map(Number);
+      const scheduledEndMinutes = ((seH || 16) * 60) + (seM || 0);
+
+      let totalOvertimeMinutes = 0;
+      let overtimeWeekendDays = 0;
+      for (const [date, outTimestamp] of lastOutByDate.entries()) {
+        // نحسب يوم الأسبوع: الجمعة = 5
+        const dayOfWeek = new Date(`${date}T00:00:00Z`).getUTCDay();
+        const isFriday = dayOfWeek === 5;
+
+        // نحسب وقت الخروج المحلي بنفس منطق حساب وقت الدخول
+        const utcOutDate = outTimestamp.toISOString().slice(0, 10);
+        const localOutDateMs = new Date(`${date}T00:00:00Z`).getTime();
+        const utcOutDateMs = new Date(`${utcOutDate}T00:00:00Z`).getTime();
+        const outDateDiffMinutes = (localOutDateMs - utcOutDateMs) / 60000;
+        const utcOutMinutes = outTimestamp.getUTCHours() * 60 + outTimestamp.getUTCMinutes();
+        const localOutMinutes = ((( utcOutMinutes + outDateDiffMinutes) % 1440) + 1440) % 1440;
+
+        if (isFriday) {
+          // يوم الجمعة: نحتسب كإضافي عطلة (يوم كامل) إذا خرج بعد نهاية الدوام
+          if (localOutMinutes > scheduledEndMinutes) {
+            overtimeWeekendDays += 1;
+          }
+        } else {
+          // أيام العمل العادية: دقائق إضافي
+          const overtime = Math.max(0, localOutMinutes - scheduledEndMinutes);
+          totalOvertimeMinutes += overtime;
+        }
+      }
+
       // ── حساب الخصومات المالية ─────────────────────────────────────────────
       const hourlyRate = employee.hourlyRate ? Number(employee.hourlyRate) : 0;
       const baseSalary = employee.baseSalary ? Number(employee.baseSalary) : 0;
@@ -1214,7 +1258,9 @@ export class AttendanceService {
         delayMinutes: totalDelayMinutes,
         delayDeduction: Math.round(delayDeduction * 100) / 100,
         totalAttendanceDeduction: Math.round((absenceDeduction + delayDeduction) * 100) / 100,
-        elapsedWorkDays, // عدد أيام العمل التي مضت فعلاً في الفترة
+        overtimeMinutes: totalOvertimeMinutes, // ← دقائق الإضافي المحسوبة من checkOut
+        overtimeWeekendDays, // ← أيام إضافي الجمعة
+        elapsedWorkDays,
         periodStart,
         periodEnd,
       };
