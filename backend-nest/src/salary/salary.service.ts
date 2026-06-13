@@ -3,8 +3,6 @@ import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { UpsertSalaryDto } from './dto/upsert-salary.dto';
 import { CalculateAllowancesDto } from './dto/calculate-allowances.dto';
-import { promises as fs } from 'fs';
-import * as path from 'path';
 import {
   RESPONSIBILITY_ALLOWANCE_RATIO,
   EXTRA_EFFORT_ALLOWANCE_RATIO,
@@ -56,33 +54,6 @@ export class SalaryService {
     const isExact    = sum.equals(difference);
     const ratiosSum  = RESPONSIBILITY_RATIO.plus(EXTRA_EFFORT_RATIO).plus(PRODUCTION_RATIO);
 
-    // Write a debug entry to tmp/salary-calc-debug.log to help trace values
-    (async () => {
-      try {
-        const logDir = path.join(process.cwd(), 'tmp');
-        await fs.mkdir(logDir, { recursive: true });
-        const logFile = path.join(logDir, 'salary-calc-debug.log');
-        const entry = {
-          timestamp: new Date().toISOString(),
-          input: {
-            salary: salary.toFixed(),
-            lumpSumSalary: lumpSumSalary.toFixed(),
-            livingAllowance: livingAllowance.toFixed(),
-          },
-          computed: {
-            difference: difference.toFixed(4),
-            responsibilityAllowance: responsibilityAllowance.toFixed(4),
-            extraEffortAllowance: extraEffortAllowance.toFixed(4),
-            productionIncentives: productionIncentives.toFixed(4),
-          }
-        };
-        await fs.appendFile(logFile, JSON.stringify(entry) + '\n');
-      } catch (err) {
-        // don't let logging break the API
-        // console.warn('failed to write salary debug log', err);
-      }
-    })();
-
     return {
       // المدخلات
       salary:          salary.toFixed(4),
@@ -111,14 +82,31 @@ export class SalaryService {
     };
   }
 
+  /** Compute monthlySalary = baseSalary + livingAllowance + responsibilityAllowance + extraEffortAllowance + productionIncentive */
+  private withMonthlySalary<T extends {
+    baseSalary: Prisma.Decimal;
+    livingAllowance: Prisma.Decimal;
+    responsibilityAllowance: Prisma.Decimal;
+    extraEffortAllowance: Prisma.Decimal;
+    productionIncentive: Prisma.Decimal;
+  }>(record: T): T & { monthlySalary: number } {
+    const monthly = record.baseSalary
+      .plus(record.livingAllowance)
+      .plus(record.responsibilityAllowance)
+      .plus(record.extraEffortAllowance)
+      .plus(record.productionIncentive);
+    return { ...record, monthlySalary: Number(monthly.toFixed(2)) };
+  }
+
   async list() {
-    return this.prisma.employeeSalary.findMany({ orderBy: { employeeId: 'asc' } });
+    const records = await this.prisma.employeeSalary.findMany({ orderBy: { employeeId: 'asc' } });
+    return records.map((r) => this.withMonthlySalary(r));
   }
 
   async getByEmployee(employeeId: string) {
     const record = await this.prisma.employeeSalary.findUnique({ where: { employeeId } });
     if (!record) throw new NotFoundException(`No salary record for employee ${employeeId}`);
-    return record;
+    return this.withMonthlySalary(record);
   }
 
   async upsert(employeeId: string, dto: UpsertSalaryDto) {

@@ -104,8 +104,9 @@ model Employee {
 
   employeeSalary    EmployeeSalary?
   employeeInsurance EmployeeInsurance? @relation(fields: [employeeInsuranceId], references: [id])
-  employeeBonuses   EmployeeBonus[]
+  employeeBonuses  EmployeeBonus[]
   employeePenalties EmployeePenalty[]
+  payrollInputs     PayrollInput[]
 
   createdAt           DateTime @default(now())
   updatedAt           DateTime @updatedAt
@@ -371,6 +372,7 @@ model PayrollItem {
 model PayrollInput {
   id                         String   @id @default(uuid()) @db.Uuid
   employeeId                 String
+  employee                   Employee @relation(fields: [employeeId], references: [employeeId], onDelete: Cascade)
   periodStart                DateTime @db.Date
   periodEnd                  DateTime @db.Date
   lateMinutes                Int      @default(0)
@@ -484,7 +486,7 @@ model EmployeeInsurance {
 // ---------------------------------------------------------------------------
 model EmployeeBonus {
   id               String   @id @default(uuid()) @db.Uuid
-  employeeId       String   @db.Uuid
+  employeeId       String
 
   bonusAmount      Decimal  @default(0) @db.Decimal(14, 2)
   bonusReason      String?
@@ -505,7 +507,7 @@ model EmployeeBonus {
 // ---------------------------------------------------------------------------
 model EmployeePenalty {
   id         String   @id @default(uuid()) @db.Uuid
-  employeeId String   @db.Uuid
+  employeeId String
 
   category   String
   amount     Decimal  @db.Decimal(14, 2)

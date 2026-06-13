@@ -49,6 +49,11 @@ export class PayrollService {
     return new Prisma.Decimal(value ?? 0);
   }
 
+  /** Normalize any date string to YYYY-MM-DD (strip timezone offsets) */
+  private toDateOnly(value: string): Date {
+    return new Date(value.slice(0, 10) + 'T00:00:00.000Z');
+  }
+
   private roundUpToNearestThousand(value: Prisma.Decimal) {
     const numeric = value.toNumber();
     if (!Number.isFinite(numeric) || numeric === 0) {
@@ -175,8 +180,8 @@ export class PayrollService {
     const where: Prisma.PayrollInputWhereInput = {};
     if (query.employeeId) where.employeeId = query.employeeId;
     if (query.periodStart && query.periodEnd) {
-      where.periodStart = new Date(query.periodStart);
-      where.periodEnd = new Date(query.periodEnd);
+      where.periodStart = this.toDateOnly(query.periodStart);
+      where.periodEnd = this.toDateOnly(query.periodEnd);
     }
 
     const [records, total] = await Promise.all([
@@ -201,8 +206,8 @@ export class PayrollService {
 
     const data = {
       employeeId: dto.employeeId,
-      periodStart: new Date(periodStart),
-      periodEnd: new Date(periodEnd),
+      periodStart: this.toDateOnly(periodStart),
+      periodEnd: this.toDateOnly(periodEnd),
       lateMinutes: Number(dto.lateMinutes ?? 0),
       earlyLeaveMinutes: Number(dto.earlyLeaveMinutes ?? 0),
       absenceDays: Number(dto.absenceDays ?? 0),
@@ -232,8 +237,8 @@ export class PayrollService {
       where: {
         employeeId_periodStart_periodEnd: {
           employeeId: dto.employeeId,
-          periodStart: new Date(periodStart),
-          periodEnd: new Date(periodEnd),
+          periodStart: this.toDateOnly(periodStart),
+          periodEnd: this.toDateOnly(periodEnd),
         },
       },
       update: data,
@@ -336,8 +341,8 @@ export class PayrollService {
     const run = await this.prisma.payrollRun.create({
       data: {
         runId,
-        periodStart: new Date(dto.periodStart),
-        periodEnd: new Date(dto.periodEnd),
+        periodStart: this.toDateOnly(dto.periodStart),
+        periodEnd: this.toDateOnly(dto.periodEnd),
         runBy: userId,
         status: 'processing',
         approvalStatus: 'pending',
@@ -357,8 +362,8 @@ export class PayrollService {
     const run = await this.prisma.payrollRun.create({
       data: {
         runId,
-        periodStart: new Date(dto.periodStart),
-        periodEnd: new Date(dto.periodEnd),
+        periodStart: this.toDateOnly(dto.periodStart),
+        periodEnd: this.toDateOnly(dto.periodEnd),
         runBy: userId,
         status: 'queued',
         approvalStatus: 'pending',
@@ -451,7 +456,7 @@ export class PayrollService {
 
     const runs = await this.prisma.payrollRun.findMany({
       where: {
-        periodStart: { gte: new Date(period.periodStart), lte: new Date(period.periodEnd) },
+        periodStart: { gte: this.toDateOnly(period.periodStart), lte: this.toDateOnly(period.periodEnd) },
       },
     });
 
@@ -829,8 +834,8 @@ export class PayrollService {
       this.prisma.payrollInput.findMany({
         where: {
           employeeId: { in: employeeIds },
-          periodStart: new Date(periodStart),
-          periodEnd: new Date(periodEnd),
+          periodStart: this.toDateOnly(periodStart),
+          periodEnd: this.toDateOnly(periodEnd),
         },
       }),
       // DailyAttendanceLog: base automated overtime data
