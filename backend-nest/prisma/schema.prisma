@@ -491,7 +491,7 @@ model EmployeeBonus {
   period           String? // e.g. "2026-04"
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
-  employee         Employee @relation(fields: [employeeId], references: [id])
+  employee         Employee @relation(fields: [employeeId], references: [employeeId], onDelete: Cascade)
 
   @@index([employeeId])
   @@index([employeeId, period])
@@ -511,7 +511,7 @@ model EmployeePenalty {
   issueDate  DateTime @default(now())
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
-  employee   Employee @relation(fields: [employeeId], references: [id])
+  employee   Employee @relation(fields: [employeeId], references: [employeeId], onDelete: Cascade)
 
   @@index([employeeId])
   @@index([employeeId, issueDate])
