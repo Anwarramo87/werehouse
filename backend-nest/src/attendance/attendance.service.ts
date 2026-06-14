@@ -1093,7 +1093,11 @@ export class AttendanceService {
       absenceDeduction: number;
       delayMinutes: number;
       delayDeduction: number;
+      overtimeMinutes: number;
+      overtimeWeekendDays: number;
+      overtimePay: number;
       totalAttendanceDeduction: number;
+      totalOvertimePay: number;
       elapsedWorkDays: number;
       periodStart: string;
       periodEnd: string;
@@ -1159,53 +1163,20 @@ export class AttendanceService {
         }
       }
 
+      // timezone offset: Saudi Arabia UTC+3 = 180 minutes
+      const TIMEZONE_OFFSET_MINUTES = 180;
+
       let totalDelayMinutes = 0;
-      for (const { timestamp, shiftPairMinutesLate, date } of firstInByDate.values()) {
+      for (const { timestamp, shiftPairMinutesLate } of firstInByDate.values()) {
         let rawLate: number;
         if (shiftPairMinutesLate !== null && shiftPairMinutesLate > 0) {
-          // إذا حسب جهاز البصمة التأخير وخزّنه في shiftPair نستخدمه مباشرة
           rawLate = shiftPairMinutesLate;
         } else {
-          // الفرونت يُرسل: "2026-06-02T08:30:00+03:00"
-          // Prisma يخزّن: timestamp = 2026-06-02T05:30:00.000Z (UTC)
-          //              date = "2026-06-02" (التاريخ المحلي)
-          //
-          // لاستخراج الوقت المحلي الفعلي:
-          // بداية اليوم المحلي = date + "T00:00:00Z" = 2026-06-02T00:00:00Z
-          // فرق الـ timestamp عن بداية اليوم بالدقائق = دقائق منذ منتصف الليل المحلي
-          // مثال: 2026-06-02T05:30:00Z - 2026-06-02T00:00:00Z = 330 دقيقة
-          // لكن الوقت الفعلي 08:30 = 510 دقيقة
-          //
-          // المشكلة: date هو التاريخ المحلي لكن الـ timestamp UTC يحتوي الوقت المنقوص منه الـ offset
-          // إذن: دقائق الوقت المحلي = (timestamp_ms - date_start_UTC_ms) / 60000
-          // هذا يعطي الوقت المحلي فقط إذا كان date = localDate وليس UTC date
-          //
-          // الفرونت يُرسل timezone offset → الـ date المخزّن هو التاريخ المحلي
-          // مثال: 08:30+03:00 → UTC=05:30 → date="2026-06-02" (صحيح محلياً)
-          // date_start_UTC = "2026-06-02T00:00:00Z" = منتصف ليل UTC = 03:00 صباح محلي
-          // timestamp_UTC = 05:30 UTC
-          // الفرق = 5*60+30 - 0 = 330 دقيقة ≠ 510 (الوقت المحلي الفعلي)
-          //
-          // الحل الصحيح: نستخدم ISO string الأصلي للـ timestamp الذي يُمثّل UTC
-          // ونُضيف الـ offset المتوقع من خلال مقارنة date مع UTC date
-          // إذا date > utcDate → offset موجب
-          // minutesSinceMidnight_LOCAL = minutesSinceMidnight_UTC + offsetMinutes
-          const timestampMs = timestamp.getTime();
-          const utcDate = timestamp.toISOString().slice(0, 10); // YYYY-MM-DD بتوقيت UTC
-          // حساب الـ offset من فرق التاريخ المحلي (date) عن UTC date
-          // إذا date == utcDate → offset بين -12h و +12h في نفس اليوم
-          // إذا date > utcDate → timezone موجب (مثل +3، المستخدم في يوم تالٍ عن UTC)
-          // إذا date < utcDate → timezone سالب
-          const localDateMs = new Date(`${date}T00:00:00Z`).getTime();
-          const utcDateMs = new Date(`${utcDate}T00:00:00Z`).getTime();
-          const dateDiffMinutes = (localDateMs - utcDateMs) / 60000; // فرق الأيام بالدقائق (0 أو ±1440)
+          // timestamp stored in DB as UTC — add +3h to get local Saudi time
           const utcMinutes = timestamp.getUTCHours() * 60 + timestamp.getUTCMinutes();
-          const localMinutes = utcMinutes + dateDiffMinutes;
-          // نُضيف تعديل: إذا كان localMinutes خارج نطاق 0-1440 نُصحّح
-          const actualMinutes = ((localMinutes % 1440) + 1440) % 1440;
-          rawLate = Math.max(0, actualMinutes - scheduledMinutes);
+          const localMinutes = ((utcMinutes + TIMEZONE_OFFSET_MINUTES) % 1440 + 1440) % 1440;
+          rawLate = Math.max(0, localMinutes - scheduledMinutes);
         }
-        // طرح فترة السماح الخاصة بالموظف
         const effectiveLate = rawLate > empGracePeriod ? rawLate - empGracePeriod : 0;
         totalDelayMinutes += effectiveLate;
       }
@@ -1218,25 +1189,18 @@ export class AttendanceService {
       let totalOvertimeMinutes = 0;
       let overtimeWeekendDays = 0;
       for (const [date, outTimestamp] of lastOutByDate.entries()) {
-        // نحسب يوم الأسبوع: الجمعة = 5
         const dayOfWeek = new Date(`${date}T00:00:00Z`).getUTCDay();
         const isFriday = dayOfWeek === 5;
 
-        // نحسب وقت الخروج المحلي بنفس منطق حساب وقت الدخول
-        const utcOutDate = outTimestamp.toISOString().slice(0, 10);
-        const localOutDateMs = new Date(`${date}T00:00:00Z`).getTime();
-        const utcOutDateMs = new Date(`${utcOutDate}T00:00:00Z`).getTime();
-        const outDateDiffMinutes = (localOutDateMs - utcOutDateMs) / 60000;
+        // timestamp stored as UTC — add +3h to get local Saudi time
         const utcOutMinutes = outTimestamp.getUTCHours() * 60 + outTimestamp.getUTCMinutes();
-        const localOutMinutes = ((( utcOutMinutes + outDateDiffMinutes) % 1440) + 1440) % 1440;
+        const localOutMinutes = ((utcOutMinutes + TIMEZONE_OFFSET_MINUTES) % 1440 + 1440) % 1440;
 
         if (isFriday) {
-          // يوم الجمعة: نحتسب كإضافي عطلة (يوم كامل) إذا خرج بعد نهاية الدوام
           if (localOutMinutes > scheduledEndMinutes) {
             overtimeWeekendDays += 1;
           }
         } else {
-          // أيام العمل العادية: دقائق إضافي
           const overtime = Math.max(0, localOutMinutes - scheduledEndMinutes);
           totalOvertimeMinutes += overtime;
         }
@@ -1250,9 +1214,16 @@ export class AttendanceService {
         hourlyRate || (baseSalary > 0 ? baseSalary / (empWorkDays * empHoursPerDay) : 0);
       const dailyRate = effectiveHourlyRate * empHoursPerDay;
       const minuteRate = dailyRate / (empHoursPerDay * 60);
+      const OVERTIME_MULTIPLIER = 1.5; // معدل 1.5× للإضافي والتأخير
 
       const absenceDeduction = absentDays * dailyRate;
-      const delayDeduction = totalDelayMinutes * minuteRate;
+      const delayDeduction = totalDelayMinutes * minuteRate * OVERTIME_MULTIPLIER;
+
+      // الإضافي المالي: عادي + جمعة (كلهم 1.5×)
+      const overtimePay = totalOvertimeMinutes * minuteRate * OVERTIME_MULTIPLIER;
+      const weekendOvertimePay = overtimeWeekendDays * dailyRate * OVERTIME_MULTIPLIER;
+
+      const totalOvertimePayValue = overtimePay + weekendOvertimePay;
 
       const breakdown = {
         employeeId: employee.employeeId,
@@ -1263,8 +1234,11 @@ export class AttendanceService {
         delayMinutes: totalDelayMinutes,
         delayDeduction: Math.round(delayDeduction * 100) / 100,
         totalAttendanceDeduction: Math.round((absenceDeduction + delayDeduction) * 100) / 100,
-        overtimeMinutes: totalOvertimeMinutes, // ← دقائق الإضافي المحسوبة من checkOut
-        overtimeWeekendDays, // ← أيام إضافي الجمعة
+        overtimeMinutes: totalOvertimeMinutes,
+        overtimeWeekendDays,
+        overtimePay: Math.round(overtimePay * 100) / 100,
+        weekendOvertimePay: Math.round(weekendOvertimePay * 100) / 100,
+        totalOvertimePay: Math.round(totalOvertimePayValue * 100) / 100,
         elapsedWorkDays,
         periodStart,
         periodEnd,
@@ -1282,6 +1256,7 @@ export class AttendanceService {
         totalAbsenceDeduction: Math.round(totalAbsenceDeduction * 100) / 100,
         totalDelayDeduction: Math.round(totalDelayDeduction * 100) / 100,
         totalAttendanceDeduction: Math.round((totalAbsenceDeduction + totalDelayDeduction) * 100) / 100,
+        totalOvertimePay: Math.round(breakdowns.reduce((sum, b) => sum + b.totalOvertimePay, 0) * 100) / 100,
         elapsedWorkDays,
         effectivePeriodEnd,
       },
