@@ -1010,14 +1010,7 @@ export class AttendanceService {
       throw new BadRequestException('periodStart must be before or equal to periodEnd');
     }
 
-    // نحسب عدد أيام العمل الفعلية في الفترة المطلوبة
-    // (الأيام من periodStart حتى اليوم الحالي أو periodEnd أيهما أقل)
-    // هذا يحل مشكلة "الشهر لم ينته بعد" حيث لا يمكن محاسبة الموظف على أيام لم تحدث بعد
-    const today = new Date().toISOString().slice(0, 10);
-    const effectivePeriodEnd = periodEnd < today ? periodEnd : today;
-
-    // حساب عدد أيام العمل الفعلية في الفترة (استثناء الجمعة/السبت حسب الإعداد)
-    // مبدئياً نحسب الأيام التقويمية ونفترض 5 أيام عمل أسبوعياً
+    // حساب عدد أيام العمل في الفترة (استثناء الجمعة فقط — السبت يوم عمل)
     const calcWorkingDays = (start: string, end: string): number => {
       const startDate = new Date(`${start}T00:00:00Z`);
       const endDate = new Date(`${end}T00:00:00Z`);
@@ -1025,13 +1018,18 @@ export class AttendanceService {
       const cur = new Date(startDate);
       while (cur <= endDate) {
         const day = cur.getUTCDay(); // 0=Sunday, 5=Friday, 6=Saturday
-        if (day !== 5 && day !== 6) count++; // استثناء الجمعة والسبت
+        if (day !== 5) count++; // استثناء الجمعة فقط — السبت يوم عمل
         cur.setUTCDate(cur.getUTCDate() + 1);
       }
       return count;
     };
 
-    // عدد أيام العمل المتاحة فعلاً حتى اليوم في الفترة المطلوبة
+    // عدد أيام العمل في الفترة الكاملة (للحسابات المالية)
+    const totalWorkDaysInPeriod = calcWorkingDays(periodStart, periodEnd);
+
+    // عدد أيام العمل المنقضية فقط (لحساب الغياب — لا نخصم مستقبلاً)
+    const today = new Date().toISOString().slice(0, 10);
+    const effectivePeriodEnd = periodEnd < today ? periodEnd : today;
     const elapsedWorkDays = calcWorkingDays(periodStart, effectivePeriodEnd);
 
     // الحصول على جميع الموظفين النشطين أو موظف محدد
@@ -1066,7 +1064,7 @@ export class AttendanceService {
     const allRecords = await this.prisma.attendanceRecord.findMany({
       where: {
         ...(employeeId ? { employeeId } : {}),
-        date: { gte: periodStart, lte: effectivePeriodEnd },
+        date: { gte: periodStart, lte: periodEnd },
       },
       orderBy: [{ date: 'asc' }, { timestamp: 'asc' }],
       select: {
@@ -1115,15 +1113,22 @@ export class AttendanceService {
       const empGracePeriod: number = employee.gracePeriodMinutes ?? inputGracePeriod;
 
       // ── حساب أيام الحضور الفعلية ─────────────────────────────────────────
-      // نحسب الأيام الفريدة التي وُجد فيها سجل IN
+      // نحسب الأيام الفريدة التي وُجد فيها سجل IN (استثناء الجمعة فقط — السبت يوم عمل)
       const datesWithCheckIn = new Set(
-        records.filter((r) => r.type.toUpperCase() === 'IN').map((r) => r.date)
+        records
+          .filter((r) => r.type.toUpperCase() === 'IN')
+          .map((r) => r.date)
+          .filter((dateStr) => {
+            const day = new Date(`${dateStr}T00:00:00Z`).getUTCDay();
+            return day !== 5; // استثناء الجمعة فقط — السبت يوم عمل
+          })
       );
-      const presentDays = datesWithCheckIn.size;
+      // نضمن أن presentDays لا يتجاوز أيام العمل الكاملة في الفترة
+      const presentDays = Math.min(datesWithCheckIn.size, totalWorkDaysInPeriod);
 
       // أيام الغياب = أيام العمل المنقضية - أيام الحضور الفعلية
-      // نستخدم elapsedWorkDays بدلاً من workDaysInPeriod لأن الشهر قد لا يكون منتهياً
-      const absentDays = Math.max(0, elapsedWorkDays - presentDays);
+      // نستخدم elapsedWorkDays (حتى اليوم) حتى لا نخصم مستقبلاً
+      const absentDays = Math.max(0, elapsedWorkDays - Math.min(datesWithCheckIn.size, elapsedWorkDays));
 
       // ── حساب دقائق التأخير الشهرية ───────────────────────────────────────
       // نأخذ أول IN لكل يوم ونقارنه بـ scheduledStart الخاص بالموظف
