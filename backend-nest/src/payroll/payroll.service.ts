@@ -1016,9 +1016,8 @@ export class PayrollService {
         );
         const livingAllowance = this.toDecimal(salaryRecord?.livingAllowance ?? 0);
         const lumpSumSalary = this.toDecimal(salaryRecord?.lumpSumSalary ?? 0);
-        const responsibilityAllowance = this.toDecimal(salaryRecord?.responsibilityAllowance ?? 0);
-        const extraEffortAllowance = this.toDecimal(salaryRecord?.extraEffortAllowance ?? 0);
-        const productionIncentive = this.toDecimal(salaryRecord?.productionIncentive ?? 0);
+        // responsibilityAllowance, extraEffortAllowance, productionIncentive
+        // are no longer auto-computed and are excluded from g3.
         const transportAllowanceBase = this.toDecimal(
           input?.transportAllowanceOverride ?? salaryRecord?.transportAllowance ?? 0,
         );
@@ -1123,10 +1122,7 @@ export class PayrollService {
 
         const g3 = baseSalary
           .plus(livingAllowance)
-          .plus(lumpSumSalary)
-          .plus(responsibilityAllowance)
-          .plus(extraEffortAllowance)
-          .plus(productionIncentive);
+          .plus(lumpSumSalary);
         const dailyWage = g3.div(STANDARD_WORK_DAYS);
         const hourlyWage = dailyWage.div(STANDARD_HOURS_PER_DAY);
         const minuteWage = hourlyWage.div(MINUTES_PER_HOUR);
