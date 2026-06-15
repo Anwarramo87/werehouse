@@ -375,12 +375,14 @@ export class AuthService {
     }
 
     const now = new Date();
+    // نستخدم التاريخ المحلي بدلاً من UTC لتجنب انحراف التاريخ
+    const localDate = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
     const attendance = await this.prisma.attendanceRecord.create({
       data: {
         employeeId: employee.employeeId,
         type: dto.attendanceType || 'IN',
         timestamp: now,
-        date: now.toISOString().split('T')[0],
+        date: localDate,
         source: 'biometric',
       },
     });
