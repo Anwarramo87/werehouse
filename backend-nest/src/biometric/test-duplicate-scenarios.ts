@@ -151,7 +151,7 @@ async function runLiveTest() {
         status: 'active',
         workDaysInPeriod: 26,
         hoursPerDay: 8,
-        gracePeriodMinutes: 15,
+        gracePeriodMinutes: 5,
       },
     });
 
