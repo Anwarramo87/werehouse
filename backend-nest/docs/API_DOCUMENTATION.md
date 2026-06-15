@@ -88,7 +88,7 @@ Adds a new test employee to the system.
       "status": "active",
       "workDaysInPeriod": 26,
       "hoursPerDay": 8,
-      "gracePeriodMinutes": 15,
+      "gracePeriodMinutes": 5,
       "createdAt": "2024-06-01T12:00:00.000Z",
       "updatedAt": "2024-06-01T12:00:00.000Z"
     }
