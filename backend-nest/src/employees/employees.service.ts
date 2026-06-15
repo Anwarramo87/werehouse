@@ -357,7 +357,7 @@ export class EmployeesService {
           status: 'active',
           workDaysInPeriod: dto.workDaysInPeriod ?? DEFAULT_WORK_DAYS_IN_PERIOD,
           hoursPerDay: dto.hoursPerDay ?? DEFAULT_HOURS_PER_DAY,
-          gracePeriodMinutes: dto.gracePeriodMinutes ?? 15,
+          gracePeriodMinutes: dto.gracePeriodMinutes ?? 5,
         },
         include: this.employeeSelect(),
       });
