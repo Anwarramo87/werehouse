@@ -146,6 +146,24 @@ export class TransportationService {
 
   // ─── Passengers ───────────────────────────────────────────────────────────
 
+  /** Returns a map of employeeId → bus route for all active bus subscriptions */
+  async getActiveSubscribers() {
+    const activePassengers = await this.prisma.busPassenger.findMany({
+      where: { status: 'active' },
+      select: {
+        employeeId: true,
+        bus: { select: { route: true, plateNumber: true } },
+      },
+    });
+
+    // Build a map: employeeId → { route, plateNumber }
+    const map = new Map<string, { route: string; plateNumber: string }>();
+    for (const p of activePassengers) {
+      map.set(p.employeeId, { route: p.bus.route, plateNumber: p.bus.plateNumber });
+    }
+    return Object.fromEntries(map);
+  }
+
   async addPassenger(busId: string, dto: AddPassengerDto) {
     const bus = await this.prisma.bus.findFirst({
       where: { OR: [{ id: busId }, { busId }] },
@@ -169,6 +187,21 @@ export class TransportationService {
     });
     if (!employee) {
       throw new NotFoundException(`Employee not found: ${dto.employeeId}`);
+    }
+
+    // تحقق من أن الموظف غير مشترك بباص آخر نشط
+    const activeOnOtherBus = await this.prisma.busPassenger.findFirst({
+      where: {
+        employeeId: dto.employeeId,
+        status: 'active',
+        busId: { not: bus.id },
+      },
+      include: { bus: { select: { route: true, plateNumber: true } } },
+    });
+    if (activeOnOtherBus) {
+      throw new ConflictException(
+        `الموظف ${dto.employeeId} مشترك بالفعل بالباص "${activeOnOtherBus.bus.route}" (${activeOnOtherBus.bus.plateNumber}). يرجى إزالة اشتراكه من الباص الآخر أولاً.`,
+      );
     }
 
     // تحقق من عدم التكرار
@@ -444,6 +477,65 @@ export class TransportationService {
     const finalDeduction = (baseShare / 26) * activeWorkingDays;
 
     return Math.round(finalDeduction * 100) / 100;
+  }
+
+  /**
+   * Batch-calculate bus subscription deductions for multiple employees in a given month.
+   * Returns: Map<employeeId, deductionAmount>
+   */
+  async calculateBatchBusDeductions(employeeIds: string[], targetMonth: Date): Promise<Map<string, number>> {
+    const result = new Map<string, number>();
+    if (employeeIds.length === 0) return result;
+
+    // 1. Get all active buses
+    const activeBuses = await this.prisma.bus.findMany({ where: { status: 'active' } });
+    if (activeBuses.length === 0) return result;
+
+    // 2. Calculate fleet-wide company percentage
+    let totalFleetCost = 0;
+    let totalCompanyDeduction = 0;
+    for (const bus of activeBuses) {
+      const cost = Number(bus.totalCost);
+      const pct = Number(bus.companyDeductionPct);
+      totalFleetCost += cost;
+      totalCompanyDeduction += cost * (pct / 100);
+    }
+    const companyPercentage = totalFleetCost > 0 ? (totalCompanyDeduction / totalFleetCost) * 100 : 0;
+
+    // 3. Total subscribed employees (all, not just the batch)
+    const totalSubscribedEmployees = await this.prisma.busPassenger.count({
+      where: { status: 'active' },
+    });
+    if (totalSubscribedEmployees === 0) return result;
+
+    // 4. Net cost and base share
+    const netCost = totalFleetCost * (1 - companyPercentage / 100);
+    const baseShare = netCost / totalSubscribedEmployees;
+
+    // 5. Get all active subscriptions for the given employees
+    const passengers = await this.prisma.busPassenger.findMany({
+      where: { employeeId: { in: employeeIds }, status: 'active' },
+      orderBy: { subscriptionDate: 'desc' },
+    });
+
+    // Keep only the latest subscription per employee
+    const latestByEmployee = new Map<string, typeof passengers[0]>();
+    for (const p of passengers) {
+      if (!latestByEmployee.has(p.employeeId)) {
+        latestByEmployee.set(p.employeeId, p);
+      }
+    }
+
+    // 6. Calculate prorated deduction per employee
+    for (const [empId, passenger] of latestByEmployee) {
+      const activeWorkingDays = this.getActiveWorkingDays(passenger.subscriptionDate, targetMonth);
+      const finalDeduction = (baseShare / 26) * activeWorkingDays;
+      if (finalDeduction > 0) {
+        result.set(empId, Math.round(finalDeduction * 100) / 100);
+      }
+    }
+
+    return result;
   }
 
   async calculateDeductions(input: {

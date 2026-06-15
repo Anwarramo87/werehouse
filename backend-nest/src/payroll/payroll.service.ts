@@ -9,6 +9,7 @@ import { PayrollInputsQueryDto, UpsertPayrollInputDto } from './dto/payroll-inpu
 import { Queue } from 'bullmq';
 import { QUEUE_JOBS, QUEUE_NAMES } from '../queues/queue.constants';
 import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
+import { TransportationService } from '../transportation/transportation.service';
 import {
   PAYROLL_BATCH_SIZE,
   WORK_DAYS_PER_MONTH,
@@ -40,6 +41,7 @@ export class PayrollService {
   constructor(
     private readonly prisma: PrismaService,
     @Optional() @InjectQueue(QUEUE_NAMES.PAYROLL) private readonly payrollQueue?: Queue,
+    @Optional() private readonly transportationService?: TransportationService,
   ) {}
 
   private toDecimal(value: Prisma.Decimal | number | string | null | undefined) {
@@ -844,8 +846,8 @@ export class PayrollService {
           employeeId: { in: employeeIds },
           recordType: 'OVERTIME_MINUTES',
           date: {
-            gte: periodStart,
-            lte: periodEnd,
+            gte: new Date(`${periodStart}T00:00:00.000Z`),
+            lte: new Date(`${periodEnd}T23:59:59.999Z`),
           },
         },
         select: {
@@ -973,6 +975,24 @@ export class PayrollService {
 
     // Ensures idempotent retry for the same run id.
     await this.prisma.payrollItem.deleteMany({ where: { payrollRunId: runId } });
+
+    // ── Batch-calculate bus subscription deductions for all target employees ──
+    const busDeductionsByEmployee = new Map<string, number>();
+    if (includeTransportationDeductions && this.transportationService) {
+      try {
+        const targetMonth = new Date(periodEnd);
+        const allEmpIds = targetEmployees.map((e) => e.employeeId);
+        const batchResult = await this.transportationService.calculateBatchBusDeductions(allEmpIds, targetMonth);
+        for (const [empId, amount] of batchResult) {
+          busDeductionsByEmployee.set(empId, amount);
+        }
+        if (batchResult.size > 0) {
+          this.logger.log(`Bus subscription deductions calculated for ${batchResult.size} employees`);
+        }
+      } catch (err) {
+        this.logger.warn(`Failed to calculate bus subscription deductions: ${(err as Error)?.message || String(err)}`);
+      }
+    }
 
     let totalGross = new Prisma.Decimal(0);
     let totalDeductions = new Prisma.Decimal(0);
@@ -1141,6 +1161,10 @@ export class PayrollService {
           .plus(bonusAdjustment)
           .plus(transportAllowance);
         const penaltyTotal = penaltyAmount.plus(clothingDeduction);
+
+        // ── Bus subscription deduction ──
+        const busDeductionAmount = this.toDecimal(busDeductionsByEmployee.get(employee.employeeId) ?? 0);
+
         const employeeDeductions = latePenalty
           .plus(earlyLeavePenalty)
           .plus(absencePenalty)
@@ -1149,7 +1173,8 @@ export class PayrollService {
           .plus(unpaidHoursPenalty)
           .plus(penaltyTotal)
           .plus(advanceAmount)
-          .plus(insuranceAmount);
+          .plus(insuranceAmount)
+          .plus(busDeductionAmount);
         const netPay = grossPay.minus(employeeDeductions);
         const netPayRounded = this.roundUpToNearestThousand(netPay);
         const roundingDifference = netPayRounded.minus(netPay);
@@ -1179,6 +1204,9 @@ export class PayrollService {
         }
         if (transportAllowance.greaterThan(0)) {
           anomalies.push(`Transport allowance added: ${transportAllowance.toFixed(2)}`);
+        }
+        if (busDeductionAmount.greaterThan(0)) {
+          anomalies.push(`Bus subscription deducted: ${busDeductionAmount.toFixed(2)}`);
         }
         if (netPay.lessThan(0)) {
           anomalies.push('Net pay is negative after deductions');
