@@ -274,6 +274,49 @@ export class LeavesService {
     };
   }
 
+  /**
+   * يتحقق من عدم وجود تداخل بين إجازة جديدة والإجازات المعتمدة الحالية للموظف.
+   * يرفض الطلب إذا كان هناك أي إجازة معتمدة تغطي نفس اليوم (أو جزء منه).
+   */
+  private async assertNoOverlappingLeave(
+    tx: PrismaTx,
+    employeeId: string,
+    startDate: Date,
+    endDate: Date,
+    excludeLeaveId?: string,
+  ) {
+    // Overlap condition:
+    // existing.startDate <= new.endDate AND existing.endDate >= new.startDate
+    // AND status = 'APPROVED'
+    const whereClause: Prisma.LeaveRequestWhereInput = {
+      employeeId,
+      status: LeaveRequestStatus.APPROVED,
+      AND: [
+        { startDate: { lte: endDate } },
+        { endDate: { gte: startDate } },
+      ],
+    };
+
+    // عند التعديل: استبعد الإجازة الحالية من الفحص
+    if (excludeLeaveId) {
+      whereClause.id = { not: excludeLeaveId };
+    }
+
+    const overlapping = await tx.leaveRequest.findFirst({
+      where: whereClause,
+      select: { id: true, startDate: true, endDate: true, leaveType: true },
+    });
+
+    if (overlapping) {
+      const startStr = overlapping.startDate.toISOString().slice(0, 10);
+      const endStr = overlapping.endDate.toISOString().slice(0, 10);
+      throw new BadRequestException(
+        `يوجد تداخل مع إجازة موجودة للموظف (${overlapping.leaveType}) ` +
+        `من ${startStr} إلى ${endStr}.`,
+      );
+    }
+  }
+
   // ── Queries ────────────────────────────────────────────────────────────────
 
   async list(query: LeavesListQueryDto) {
@@ -341,6 +384,14 @@ export class LeavesService {
     const data = this.buildCreateData(dto);
 
     return this.prisma.$transaction(async (tx) => {
+      // تحقق من عدم وجود تداخل مع إجازات معتمدة أخرى
+      await this.assertNoOverlappingLeave(
+        tx,
+        dto.employeeId,
+        data.startDate as Date,
+        data.endDate as Date,
+      );
+
       const created = await tx.leaveRequest.create({
         data,
         include: EMPLOYEE_INCLUDE,
@@ -385,7 +436,15 @@ export class LeavesService {
     // 3) تنفيذ كل العمليات داخل transaction واحد لضمان atomicity + sync مع PayrollInput
     const created = await this.prisma.$transaction(async (tx) => {
       const records: Array<Awaited<ReturnType<typeof tx.leaveRequest.create>>> = [];
-      for (const { data } of buildItems) {
+      for (const { input, data } of buildItems) {
+        // تحقق من عدم وجود تداخل مع إجازات معتمدة أخرى
+        await this.assertNoOverlappingLeave(
+          tx,
+          input.employeeId,
+          data.startDate as Date,
+          data.endDate as Date,
+        );
+
         const record = await tx.leaveRequest.create({
           data,
           include: EMPLOYEE_INCLUDE,
@@ -448,6 +507,19 @@ export class LeavesService {
     }
 
     return this.prisma.$transaction(async (tx) => {
+      // تحقق من عدم وجود تداخل مع إجازات معتمدة أخرى (استبعد الإجازة الحالية)
+      const effectiveStart = (data.startDate as Date) ?? nextStart;
+      const effectiveEnd = (data.endDate as Date) ?? nextEnd;
+      const targetEmployeeId = dto.employeeId ?? current.employeeId;
+      
+      await this.assertNoOverlappingLeave(
+        tx,
+        targetEmployeeId,
+        effectiveStart,
+        effectiveEnd,
+        id, // استبعد الإجازة الحالية من الفحص
+      );
+
       const updated = await tx.leaveRequest.update({
         where: { id },
         data,
