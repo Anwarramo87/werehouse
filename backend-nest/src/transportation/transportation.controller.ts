@@ -46,6 +46,13 @@ export class TransportationController {
     return this.transportationService.createBus(dto);
   }
 
+  /** GET /api/transportation/active-subscribers — map of employeeId → { route, plateNumber } */
+  @Get('active-subscribers')
+  @Permissions('view_employees')
+  getActiveSubscribers() {
+    return this.transportationService.getActiveSubscribers();
+  }
+
   /** GET /api/transportation/buses/:busId */
   @Get('buses/:busId')
   @Permissions('view_employees')
