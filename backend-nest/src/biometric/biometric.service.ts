@@ -169,7 +169,7 @@ export class BiometricService {
     const diffMs = checkInTime.getTime() - scheduled.getTime();
     const diffMinutes = Math.floor(diffMs / (1000 * 60));
 
-    return diffMinutes > 15 ? diffMinutes - 15 : 0; // 15 min grace period
+    return diffMinutes > 5 ? diffMinutes - 5 : 0; // 5 min grace period
   }
 
   /**

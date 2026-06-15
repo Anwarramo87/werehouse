@@ -46,6 +46,13 @@ export class TransportationController {
     return this.transportationService.createBus(dto);
   }
 
+  /** GET /api/transportation/active-subscribers — map of employeeId → { route, plateNumber } */
+  @Get('active-subscribers')
+  @Permissions('view_employees')
+  getActiveSubscribers() {
+    return this.transportationService.getActiveSubscribers();
+  }
+
   /** GET /api/transportation/buses/:busId */
   @Get('buses/:busId')
   @Permissions('view_employees')
@@ -89,13 +96,6 @@ export class TransportationController {
     @Param('employeeId') employeeId: string,
   ) {
     return this.transportationService.removePassenger(busId, employeeId);
-  }
-
-  /** POST /api/transportation/buses/:busId/recalculate-discounts */
-  @Post('buses/:busId/recalculate-discounts')
-  @Permissions('edit_employees')
-  recalculateDiscounts(@Param('busId') busId: string) {
-    return this.transportationService.recalculateDiscounts(busId);
   }
 
   /** POST /api/transportation/calculate-deductions */

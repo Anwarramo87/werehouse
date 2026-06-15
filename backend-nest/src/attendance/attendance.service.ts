@@ -48,7 +48,7 @@ type AttendanceImportRow = {
 
 const ATTENDANCE_DELETION_ENTITY = 'attendance';
 const DEFAULT_ALERT_SCHEDULE_START = '08:00';
-const DEFAULT_LATE_THRESHOLD_MINUTES = 15;
+const DEFAULT_LATE_THRESHOLD_MINUTES = 5;
 const TIME_HH_MM_REGEX = /^([01]\d|2[0-3]):([0-5]\d)$/;
 const ATTENDANCE_MONTH_REGEX = /^\d{4}-(0[1-9]|1[0-2])$/;
 const ATTENDANCE_IMPORT_EXTENSIONS = new Set([
@@ -1132,7 +1132,7 @@ export class AttendanceService {
       periodStart,
       periodEnd,
       // القيم الافتراضية من الـ input — تُستخدم فقط إذا لم يوجد إعداد على الموظف نفسه
-      gracePeriodMinutes: inputGracePeriod = 15,
+      gracePeriodMinutes: inputGracePeriod = 5,
       workDaysInPeriod: inputWorkDays = 26,
       hoursPerDay: inputHoursPerDay = 8,
       employeeId,

@@ -93,7 +93,7 @@ model Employee {
   workDaysInPeriod          Int                   @default(26)
   hoursPerDay               Int                   @default(8)
   overtimeCalculation       Json?
-  gracePeriodMinutes        Int                   @default(15)
+  gracePeriodMinutes        Int                   @default(5)
   attendanceRecords         AttendanceRecord[]
   dailyAttendanceLogs       DailyAttendanceLog[]  @relation("DailyAttendanceLogs")
   advances                  EmployeeAdvance[]
@@ -104,13 +104,14 @@ model Employee {
 
   employeeSalary    EmployeeSalary?
   employeeInsurance EmployeeInsurance? @relation(fields: [employeeInsuranceId], references: [id])
-  employeeBonuses  EmployeeBonus[]
+  employeeBonuses   EmployeeBonus[]
   employeePenalties EmployeePenalty[]
   payrollInputs     PayrollInput[]
 
-  createdAt           DateTime @default(now())
-  updatedAt           DateTime @updatedAt
-  employeeInsuranceId String?  @db.Uuid
+  createdAt           DateTime       @default(now())
+  updatedAt           DateTime       @updatedAt
+  employeeInsuranceId String?        @db.Uuid
+  busPassengers       BusPassenger[]
 
   @@index([status])
   @@index([name])
@@ -488,8 +489,8 @@ model EmployeeInsurance {
 // Bonuses & Assistance — per-period bonus and assistance amounts
 // ---------------------------------------------------------------------------
 model EmployeeBonus {
-  id               String   @id @default(uuid()) @db.Uuid
-  employeeId       String
+  id         String @id @default(uuid()) @db.Uuid
+  employeeId String
 
   bonusAmount      Decimal  @default(0) @db.Decimal(14, 2)
   bonusReason      String?
@@ -511,7 +512,6 @@ model EmployeeBonus {
 model EmployeePenalty {
   id         String   @id @default(uuid()) @db.Uuid
   employeeId String
-
   category   String
   amount     Decimal  @db.Decimal(14, 2)
   reason     String?
@@ -621,18 +621,16 @@ model Bus {
 }
 
 model BusPassenger {
-  id         String    @id @default(uuid()) @db.Uuid
-  busId      String    @db.Uuid
-  bus        Bus       @relation(fields: [busId], references: [id], onDelete: Cascade)
-  employeeId String
-  name       String? // optional passenger name for display
-  paidAmount Decimal?  @db.Decimal(12, 2) // optional amount paid
-  isManual   Boolean   @default(false) // whether amount is manually set or calculated
-  joinDate   DateTime  @default(now()) @db.Date
-  leaveDate  DateTime? @db.Date
-  status     String    @default("active") // active | inactive
-  createdAt  DateTime  @default(now())
-  updatedAt  DateTime  @updatedAt
+  id               String   @id @default(uuid()) @db.Uuid
+  busId            String   @db.Uuid
+  bus              Bus      @relation(fields: [busId], references: [id], onDelete: Cascade)
+  employeeId       String
+  employee         Employee @relation(fields: [employeeId], references: [employeeId], onDelete: Cascade)
+  name             String? // optional passenger name for display
+  subscriptionDate DateTime @default(now()) @db.Date
+  status           String   @default("active") // active | inactive
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
 
   @@unique([busId, employeeId])
   @@index([employeeId])
