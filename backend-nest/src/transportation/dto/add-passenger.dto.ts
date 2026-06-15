@@ -1,5 +1,4 @@
-import { IsDateString, IsNotEmpty, IsOptional, IsString, IsNumber, IsBoolean } from 'class-validator';
-import { Type } from 'class-transformer';
+import { IsDateString, IsNotEmpty, IsOptional, IsString } from 'class-validator';
 
 export class AddPassengerDto {
   @IsString()
@@ -8,18 +7,9 @@ export class AddPassengerDto {
 
   @IsOptional()
   @IsDateString()
-  joinDate?: string;
+  subscriptionDate?: string;
 
   @IsOptional()
   @IsString()
   name?: string;
-
-  @IsOptional()
-  @Type(() => Number)
-  @IsNumber()
-  paidAmount?: number;
-
-  @IsOptional()
-  @IsBoolean()
-  isManual?: boolean;
 }
