@@ -24,9 +24,13 @@ export class AdvancesService {
 
   // --- Main Methods ---
 
-  async list(employeeId?: string) {
+  async list(query: { employeeId?: string; period?: string }) {
+    const where: any = {};
+    if (query.employeeId) where.employeeId = query.employeeId;
+    if (query.period) where.period = query.period;
+
     return this.prisma.employeeAdvance.findMany({
-      where: employeeId ? { employeeId } : {},
+      where,
       orderBy: { issueDate: 'desc' },
     });
   }
@@ -47,6 +51,8 @@ export class AdvancesService {
       throw new BadRequestException('Invalid issueDate');
     }
 
+    const period = dto.period ?? `${issueDate.getFullYear()}-${String(issueDate.getMonth() + 1).padStart(2, '0')}`;
+
     return this.prisma.employeeAdvance.create({
       data: {
         employeeId: dto.employeeId,
@@ -56,6 +62,7 @@ export class AdvancesService {
         remainingAmount: totalAmount,
         notes: dto.notes ?? null,
         issueDate,
+        period,
       },
     });
   }
@@ -75,7 +82,7 @@ export class AdvancesService {
       },
     });
 
-    const advances = await this.list(employeeId);
+    const advances = await this.list({ employeeId });
 
     return {
       employeeId,

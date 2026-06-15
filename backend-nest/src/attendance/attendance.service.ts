@@ -959,6 +959,142 @@ export class AttendanceService {
     return { employeeId, date, records, recordCount: records.length };
   }
 
+  async dailyView(date?: string) {
+    const targetDate = date || this.toDateKey();
+    const TIMEZONE_OFFSET_MINUTES = 180;
+
+    const [activeEmployees, records] = await Promise.all([
+      this.prisma.employee.findMany({
+        where: { status: 'active' },
+        select: {
+          employeeId: true,
+          name: true,
+          department: true,
+          scheduledStart: true,
+          scheduledEnd: true,
+          gracePeriodMinutes: true,
+        },
+      }),
+      this.prisma.attendanceRecord.findMany({
+        where: { date: targetDate },
+        orderBy: { timestamp: 'asc' },
+        select: {
+          employeeId: true,
+          type: true,
+          timestamp: true,
+          shiftPair: true,
+        },
+      }),
+    ]);
+
+    const byEmployee = new Map<string, {
+      firstIn: Date | null;
+      lastOut: Date | null;
+      maxMinutesLate: number | null;
+    }>();
+
+    for (const record of records) {
+      const entry = byEmployee.get(record.employeeId) || {
+        firstIn: null,
+        lastOut: null,
+        maxMinutesLate: null,
+      };
+
+      const sp = record.shiftPair as ShiftPair | null;
+      if (typeof sp?.minutesLate === 'number' && Number.isFinite(sp.minutesLate)) {
+        entry.maxMinutesLate = Math.max(entry.maxMinutesLate ?? 0, Math.max(0, Math.floor(sp.minutesLate)));
+      }
+
+      const recType = record.type.toUpperCase();
+      if (recType === 'IN' && !entry.firstIn) {
+        entry.firstIn = record.timestamp;
+      }
+      if (recType === 'OUT') {
+        entry.lastOut = record.timestamp;
+      }
+
+      byEmployee.set(record.employeeId, entry);
+    }
+
+    const toLocalHHMM = (ts: Date | null): string | null => {
+      if (!ts) return null;
+      const utcMin = ts.getUTCHours() * 60 + ts.getUTCMinutes();
+      const localMin = ((utcMin + TIMEZONE_OFFSET_MINUTES) % 1440 + 1440) % 1440;
+      const h = Math.floor(localMin / 60);
+      const m = localMin % 60;
+      return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+    };
+
+    const result = activeEmployees.map((emp) => {
+      const entry = byEmployee.get(emp.employeeId);
+      const scheduledStart = emp.scheduledStart || '08:00';
+      const scheduledEnd = emp.scheduledEnd || '16:00';
+      const grace = emp.gracePeriodMinutes ?? 15;
+
+      const checkInTime = toLocalHHMM(entry?.firstIn ?? null);
+      const checkOutTime = toLocalHHMM(entry?.lastOut ?? null);
+
+      let status: string;
+      let notes: string | null = null;
+
+      if (!entry?.firstIn) {
+        status = 'absent';
+      } else {
+        const [schH, schM] = scheduledStart.split(':').map(Number);
+        const scheduledMinutes = (schH || 8) * 60 + (schM || 0);
+        const utcMin = entry.firstIn.getUTCHours() * 60 + entry.firstIn.getUTCMinutes();
+        const localMin = ((utcMin + TIMEZONE_OFFSET_MINUTES) % 1440) % 1440;
+        const rawLate = Math.max(0, localMin - scheduledMinutes);
+
+        if (entry.maxMinutesLate != null && entry.maxMinutesLate > 0) {
+          status = 'late';
+          notes = `متأخر ${entry.maxMinutesLate} دقيقة`;
+        } else if (rawLate > grace) {
+          status = 'late';
+          notes = `متأخر ${rawLate - grace} دقيقة`;
+        } else {
+          status = 'present';
+        }
+
+        if (entry.lastOut) {
+          const [seH, seM] = scheduledEnd.split(':').map(Number);
+          const scheduledEndMin = (seH || 16) * 60 + (seM || 0);
+          const outUtcMin = entry.lastOut.getUTCHours() * 60 + entry.lastOut.getUTCMinutes();
+          const outLocalMin = ((outUtcMin + TIMEZONE_OFFSET_MINUTES) % 1440) % 1440;
+          const overtime = Math.max(0, outLocalMin - scheduledEndMin);
+          if (overtime > 0) {
+            notes = notes ? `${notes} + إضافي ${overtime} دقيقة` : `إضافي ${overtime} دقيقة`;
+          }
+        }
+      }
+
+      return {
+        employeeId: emp.employeeId,
+        name: emp.name,
+        department: emp.department,
+        date: targetDate,
+        scheduledStart,
+        scheduledEnd,
+        checkIn: checkInTime,
+        checkOut: checkOutTime,
+        status,
+        notes,
+        source: entry?.firstIn ? 'biometric' : null,
+      };
+    });
+
+    return {
+      date: targetDate,
+      employees: result,
+      summary: {
+        total: result.length,
+        present: result.filter((e) => e.status === 'present').length,
+        late: result.filter((e) => e.status === 'late').length,
+        absent: result.filter((e) => e.status === 'absent').length,
+      },
+    };
+  }
+
   async employeePeriod(employeeId: string, startDate: string, endDate: string) {
     if (!startDate || !endDate) {
       throw new BadRequestException('Start and end dates are required');
@@ -1093,7 +1229,11 @@ export class AttendanceService {
       absenceDeduction: number;
       delayMinutes: number;
       delayDeduction: number;
+      overtimeMinutes: number;
+      overtimeWeekendDays: number;
+      overtimePay: number;
       totalAttendanceDeduction: number;
+      totalOvertimePay: number;
       elapsedWorkDays: number;
       periodStart: string;
       periodEnd: string;
@@ -1159,53 +1299,20 @@ export class AttendanceService {
         }
       }
 
+      // timezone offset: Saudi Arabia UTC+3 = 180 minutes
+      const TIMEZONE_OFFSET_MINUTES = 180;
+
       let totalDelayMinutes = 0;
-      for (const { timestamp, shiftPairMinutesLate, date } of firstInByDate.values()) {
+      for (const { timestamp, shiftPairMinutesLate } of firstInByDate.values()) {
         let rawLate: number;
         if (shiftPairMinutesLate !== null && shiftPairMinutesLate > 0) {
-          // إذا حسب جهاز البصمة التأخير وخزّنه في shiftPair نستخدمه مباشرة
           rawLate = shiftPairMinutesLate;
         } else {
-          // الفرونت يُرسل: "2026-06-02T08:30:00+03:00"
-          // Prisma يخزّن: timestamp = 2026-06-02T05:30:00.000Z (UTC)
-          //              date = "2026-06-02" (التاريخ المحلي)
-          //
-          // لاستخراج الوقت المحلي الفعلي:
-          // بداية اليوم المحلي = date + "T00:00:00Z" = 2026-06-02T00:00:00Z
-          // فرق الـ timestamp عن بداية اليوم بالدقائق = دقائق منذ منتصف الليل المحلي
-          // مثال: 2026-06-02T05:30:00Z - 2026-06-02T00:00:00Z = 330 دقيقة
-          // لكن الوقت الفعلي 08:30 = 510 دقيقة
-          //
-          // المشكلة: date هو التاريخ المحلي لكن الـ timestamp UTC يحتوي الوقت المنقوص منه الـ offset
-          // إذن: دقائق الوقت المحلي = (timestamp_ms - date_start_UTC_ms) / 60000
-          // هذا يعطي الوقت المحلي فقط إذا كان date = localDate وليس UTC date
-          //
-          // الفرونت يُرسل timezone offset → الـ date المخزّن هو التاريخ المحلي
-          // مثال: 08:30+03:00 → UTC=05:30 → date="2026-06-02" (صحيح محلياً)
-          // date_start_UTC = "2026-06-02T00:00:00Z" = منتصف ليل UTC = 03:00 صباح محلي
-          // timestamp_UTC = 05:30 UTC
-          // الفرق = 5*60+30 - 0 = 330 دقيقة ≠ 510 (الوقت المحلي الفعلي)
-          //
-          // الحل الصحيح: نستخدم ISO string الأصلي للـ timestamp الذي يُمثّل UTC
-          // ونُضيف الـ offset المتوقع من خلال مقارنة date مع UTC date
-          // إذا date > utcDate → offset موجب
-          // minutesSinceMidnight_LOCAL = minutesSinceMidnight_UTC + offsetMinutes
-          const timestampMs = timestamp.getTime();
-          const utcDate = timestamp.toISOString().slice(0, 10); // YYYY-MM-DD بتوقيت UTC
-          // حساب الـ offset من فرق التاريخ المحلي (date) عن UTC date
-          // إذا date == utcDate → offset بين -12h و +12h في نفس اليوم
-          // إذا date > utcDate → timezone موجب (مثل +3، المستخدم في يوم تالٍ عن UTC)
-          // إذا date < utcDate → timezone سالب
-          const localDateMs = new Date(`${date}T00:00:00Z`).getTime();
-          const utcDateMs = new Date(`${utcDate}T00:00:00Z`).getTime();
-          const dateDiffMinutes = (localDateMs - utcDateMs) / 60000; // فرق الأيام بالدقائق (0 أو ±1440)
+          // timestamp stored in DB as UTC — add +3h to get local Saudi time
           const utcMinutes = timestamp.getUTCHours() * 60 + timestamp.getUTCMinutes();
-          const localMinutes = utcMinutes + dateDiffMinutes;
-          // نُضيف تعديل: إذا كان localMinutes خارج نطاق 0-1440 نُصحّح
-          const actualMinutes = ((localMinutes % 1440) + 1440) % 1440;
-          rawLate = Math.max(0, actualMinutes - scheduledMinutes);
+          const localMinutes = ((utcMinutes + TIMEZONE_OFFSET_MINUTES) % 1440 + 1440) % 1440;
+          rawLate = Math.max(0, localMinutes - scheduledMinutes);
         }
-        // طرح فترة السماح الخاصة بالموظف
         const effectiveLate = rawLate > empGracePeriod ? rawLate - empGracePeriod : 0;
         totalDelayMinutes += effectiveLate;
       }
@@ -1218,25 +1325,18 @@ export class AttendanceService {
       let totalOvertimeMinutes = 0;
       let overtimeWeekendDays = 0;
       for (const [date, outTimestamp] of lastOutByDate.entries()) {
-        // نحسب يوم الأسبوع: الجمعة = 5
         const dayOfWeek = new Date(`${date}T00:00:00Z`).getUTCDay();
         const isFriday = dayOfWeek === 5;
 
-        // نحسب وقت الخروج المحلي بنفس منطق حساب وقت الدخول
-        const utcOutDate = outTimestamp.toISOString().slice(0, 10);
-        const localOutDateMs = new Date(`${date}T00:00:00Z`).getTime();
-        const utcOutDateMs = new Date(`${utcOutDate}T00:00:00Z`).getTime();
-        const outDateDiffMinutes = (localOutDateMs - utcOutDateMs) / 60000;
+        // timestamp stored as UTC — add +3h to get local Saudi time
         const utcOutMinutes = outTimestamp.getUTCHours() * 60 + outTimestamp.getUTCMinutes();
-        const localOutMinutes = ((( utcOutMinutes + outDateDiffMinutes) % 1440) + 1440) % 1440;
+        const localOutMinutes = ((utcOutMinutes + TIMEZONE_OFFSET_MINUTES) % 1440 + 1440) % 1440;
 
         if (isFriday) {
-          // يوم الجمعة: نحتسب كإضافي عطلة (يوم كامل) إذا خرج بعد نهاية الدوام
           if (localOutMinutes > scheduledEndMinutes) {
             overtimeWeekendDays += 1;
           }
         } else {
-          // أيام العمل العادية: دقائق إضافي
           const overtime = Math.max(0, localOutMinutes - scheduledEndMinutes);
           totalOvertimeMinutes += overtime;
         }
@@ -1250,9 +1350,16 @@ export class AttendanceService {
         hourlyRate || (baseSalary > 0 ? baseSalary / (empWorkDays * empHoursPerDay) : 0);
       const dailyRate = effectiveHourlyRate * empHoursPerDay;
       const minuteRate = dailyRate / (empHoursPerDay * 60);
+      const OVERTIME_MULTIPLIER = 1.5; // معدل 1.5× للإضافي والتأخير
 
       const absenceDeduction = absentDays * dailyRate;
-      const delayDeduction = totalDelayMinutes * minuteRate;
+      const delayDeduction = totalDelayMinutes * minuteRate * OVERTIME_MULTIPLIER;
+
+      // الإضافي المالي: عادي + جمعة (كلهم 1.5×)
+      const overtimePay = totalOvertimeMinutes * minuteRate * OVERTIME_MULTIPLIER;
+      const weekendOvertimePay = overtimeWeekendDays * dailyRate * OVERTIME_MULTIPLIER;
+
+      const totalOvertimePayValue = overtimePay + weekendOvertimePay;
 
       const breakdown = {
         employeeId: employee.employeeId,
@@ -1263,8 +1370,11 @@ export class AttendanceService {
         delayMinutes: totalDelayMinutes,
         delayDeduction: Math.round(delayDeduction * 100) / 100,
         totalAttendanceDeduction: Math.round((absenceDeduction + delayDeduction) * 100) / 100,
-        overtimeMinutes: totalOvertimeMinutes, // ← دقائق الإضافي المحسوبة من checkOut
-        overtimeWeekendDays, // ← أيام إضافي الجمعة
+        overtimeMinutes: totalOvertimeMinutes,
+        overtimeWeekendDays,
+        overtimePay: Math.round(overtimePay * 100) / 100,
+        weekendOvertimePay: Math.round(weekendOvertimePay * 100) / 100,
+        totalOvertimePay: Math.round(totalOvertimePayValue * 100) / 100,
         elapsedWorkDays,
         periodStart,
         periodEnd,
@@ -1282,6 +1392,7 @@ export class AttendanceService {
         totalAbsenceDeduction: Math.round(totalAbsenceDeduction * 100) / 100,
         totalDelayDeduction: Math.round(totalDelayDeduction * 100) / 100,
         totalAttendanceDeduction: Math.round((totalAbsenceDeduction + totalDelayDeduction) * 100) / 100,
+        totalOvertimePay: Math.round(breakdowns.reduce((sum, b) => sum + b.totalOvertimePay, 0) * 100) / 100,
         elapsedWorkDays,
         effectivePeriodEnd,
       },

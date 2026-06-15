@@ -9,12 +9,15 @@ import {
   Patch,
   Query,
   UseGuards,
+  ParseUUIDPipe,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiCookieAuth, ApiParam, ApiResponse } from '@nestjs/swagger';
 import { EmployeesService } from './employees.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { PermissionsGuard } from '../common/guards/permissions.guard';
 import { Permissions } from '../common/decorators/permissions.decorator';
+import { CurrentUser } from '../common/decorators/current-user.decorator';
+import { AuthenticatedUser } from '../common/types/authenticated-user.types';
 import { CreateEmployeeDto } from './dto/create-employee.dto';
 import { UpdateEmployeeDto } from './dto/update-employee.dto';
 import { EmployeesListQueryDto } from './dto/employees-list-query.dto';
@@ -25,8 +28,6 @@ import { BulkTerminateDepartmentDto } from './dto/bulk-terminate-department.dto'
 import { RehireEmployeeDto } from './dto/rehire-employee.dto';
 import { FinancialSettlementDto } from './dto/financial-settlement.dto';
 import { ResignedEmployeesQueryDto } from './dto/resigned-employees-query.dto';
-import { CurrentUser } from '../common/decorators/current-user.decorator';
-import { AuthenticatedUser } from '../common/types/authenticated-user.types';
 
 @ApiTags('employees')
 @ApiCookieAuth()
@@ -160,11 +161,26 @@ export class EmployeesController {
     return this.employeesService.bulkTerminateDepartment(dto, user);
   }
 
+  @Get('deleted/history')
+  @Permissions('delete_employees')
+  listDeletedHistory() {
+    return this.employeesService.listDeletedEmployees();
+  }
+
+  @Post('restore/:historyId')
+  @Permissions('delete_employees')
+  restore(
+    @Param('historyId', ParseUUIDPipe) historyId: string,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.employeesService.restoreEmployee(historyId, user?.userId);
+  }
+
   @Delete(':employeeId')
   @Permissions('delete_employees')
   @ApiOperation({ summary: 'حذف الموظف' })
   @ApiParam({ name: 'employeeId', description: 'رقم الموظف' })
-  remove(@Param('employeeId') employeeId: string) {
-    return this.employeesService.remove(employeeId);
+  remove(@Param('employeeId') employeeId: string, @CurrentUser() user: AuthenticatedUser) {
+    return this.employeesService.remove(employeeId, user?.userId);
   }
 }

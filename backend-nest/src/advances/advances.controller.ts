@@ -20,7 +20,7 @@ export class AdvancesController {
   @Get()
   @Permissions('manage_advances')
   async list(@Query() query: AdvancesListQueryDto) {
-    return this.advancesService.list(query.employeeId);
+    return this.advancesService.list(query);
   }
 
   @Get('summary/:employeeId')
