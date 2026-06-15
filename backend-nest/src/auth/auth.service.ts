@@ -65,6 +65,8 @@ export class AuthService {
     'manage_insurance',
     'manage_bonuses',
     'manage_penalties',
+    'manage_trash',
+    'manage_backups',
   ];
 
   constructor(

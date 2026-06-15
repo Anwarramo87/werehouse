@@ -434,18 +434,21 @@ model EmployeeAdvance {
   id                String   @id @default(uuid()) @db.Uuid
   employeeId        String
   employee          Employee @relation(fields: [employeeId], references: [employeeId], onDelete: Cascade)
-  advanceType       String   @default("salary") // salary | clothing | other
+  advanceType       String   @default("salary")
   totalAmount       Decimal  @db.Decimal(14, 2)
   installmentAmount Decimal  @default(0) @db.Decimal(14, 2)
   remainingAmount   Decimal  @db.Decimal(14, 2)
   notes             String?
   issueDate         DateTime @default(now())
+  period            String?  // "YYYY-MM" — auto-filled from issueDate
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
 
   @@index([employeeId])
   @@index([employeeId, issueDate])
   @@index([employeeId, remainingAmount])
+  @@index([employeeId, period])
+  @@index([period, createdAt])
   @@map("employee_advances")
 }
 
@@ -513,12 +516,15 @@ model EmployeePenalty {
   amount     Decimal  @db.Decimal(14, 2)
   reason     String?
   issueDate  DateTime @default(now())
+  period     String?  // "YYYY-MM" — auto-filled from issueDate
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
   employee   Employee @relation(fields: [employeeId], references: [employeeId], onDelete: Cascade)
 
   @@index([employeeId])
   @@index([employeeId, issueDate])
+  @@index([employeeId, period])
+  @@index([period, createdAt])
   @@map("employee_penalties")
 }
 

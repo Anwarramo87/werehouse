@@ -6,6 +6,8 @@ import { BulkCreateLeaveRequestDto, CreateLeaveRequestDto } from './dto/create-l
 import { UpdateLeaveRequestDto } from './dto/update-leave-request.dto';
 import { LeavesListQueryDto } from './dto/leaves-list-query.dto';
 
+const LEAVE_DELETION_ENTITY = 'leave_request';
+
 const EMPLOYEE_INCLUDE = {
   employee: {
     select: {
@@ -113,6 +115,10 @@ export class LeavesService {
       reason: dto.reason ?? null,
       notes: dto.notes ?? null,
     };
+  }
+
+  private toHistoryPayload(value: unknown): Prisma.InputJsonValue {
+    return JSON.parse(JSON.stringify(value)) as Prisma.InputJsonValue;
   }
 
   // ── Payroll sync helpers ───────────────────────────────────────────────────
@@ -284,9 +290,18 @@ export class LeavesService {
     if (query.employeeId) where.employeeId = query.employeeId;
     if (query.leaveType) where.leaveType = query.leaveType as LeaveRequestType;
     if (query.status) where.status = query.status as LeaveRequestStatus;
-    if (query.startDate || query.endDate) {
+
+    // Support period filtering (YYYY-MM) by converting to date range
+    if (query.period && !query.startDate && !query.endDate) {
+      const [year, month] = query.period.split('-').map(Number);
+      const periodStart = new Date(Date.UTC(year, month - 1, 1));
+      const periodEnd = new Date(Date.UTC(year, month, 0));
+      where.AND = [
+        { startDate: { lte: periodEnd } },
+        { endDate: { gte: periodStart } },
+      ];
+    } else if (query.startDate || query.endDate) {
       if (!query.startDate || !query.endDate) {
-        // current LeavesListQueryDto expects both; keep backward compatible but avoid incorrect overlap.
         throw new BadRequestException('startDate and endDate must be provided together');
       }
 
@@ -297,9 +312,6 @@ export class LeavesService {
         throw new BadRequestException('endDate must be greater than or equal to startDate');
       }
 
-      // Overlap logic (inclusive):
-      // leave.startDate <= periodEnd AND leave.endDate >= periodStart
-      // ensures partial overlaps are included.
       where.AND = [
         { startDate: { lte: periodEnd } },
         { endDate: { gte: periodStart } },
@@ -463,17 +475,78 @@ export class LeavesService {
     });
   }
 
-  async remove(id: string) {
+  async remove(id: string, deletedBy?: string) {
     const current = await this.prisma.leaveRequest.findUnique({ where: { id } });
     if (!current) throw new NotFoundException('Leave request not found');
 
     return this.prisma.$transaction(async (tx) => {
+      await tx.deletedRecordHistory.create({
+        data: {
+          entityType: LEAVE_DELETION_ENTITY,
+          recordId: current.id,
+          payload: this.toHistoryPayload(current),
+          deletedBy: deletedBy || null,
+        },
+      });
+
       await tx.leaveRequest.delete({ where: { id } });
+
       await this.syncLeaveOnDelete(tx, {
         ...this.toSnapshot(current),
         employeeId: current.employeeId,
       });
-      return { message: 'Leave request deleted successfully' };
+
+      return { message: 'Leave request deleted and archived successfully' };
+    });
+  }
+
+  async restore(historyId: string, restoredBy?: string) {
+    const history = await this.prisma.deletedRecordHistory.findFirst({
+      where: { id: historyId, entityType: LEAVE_DELETION_ENTITY, restoredAt: null },
+    });
+
+    if (!history) throw new NotFoundException('History record not found or already restored');
+
+    const payload = history.payload as any;
+
+    return this.prisma.$transaction(async (tx) => {
+      const restored = await tx.leaveRequest.create({
+        data: {
+          id: payload.id,
+          employeeId: payload.employeeId,
+          leaveType: payload.leaveType,
+          status: payload.status,
+          isPaid: payload.isPaid,
+          startDate: new Date(payload.startDate),
+          endDate: new Date(payload.endDate),
+          isHourly: payload.isHourly ?? false,
+          startTime: payload.startTime ?? null,
+          endTime: payload.endTime ?? null,
+          reason: payload.reason ?? null,
+          notes: payload.notes ?? null,
+        },
+        include: EMPLOYEE_INCLUDE,
+      });
+
+      await tx.deletedRecordHistory.update({
+        where: { id: historyId },
+        data: { restoredAt: new Date(), restoredBy: restoredBy || null },
+      });
+
+      // Sync restored leave to PayrollInput
+      await this.syncLeaveOnCreate(tx, {
+        ...this.toSnapshot(restored),
+        employeeId: restored.employeeId,
+      });
+
+      return restored;
+    });
+  }
+
+  async listDeletedHistory() {
+    return this.prisma.deletedRecordHistory.findMany({
+      where: { entityType: LEAVE_DELETION_ENTITY, restoredAt: null },
+      orderBy: { deletedAt: 'desc' },
     });
   }
 }

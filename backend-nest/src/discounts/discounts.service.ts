@@ -34,10 +34,10 @@ export class DiscountsService {
     return DiscountKind.ASSISTANCE;
   }
 
-  async list(employeeId?: string): Promise<DiscountRecord[]> {
+  async list(employeeId?: string, period?: string): Promise<DiscountRecord[]> {
     const [advances, bonuses] = await Promise.all([
-      this.advancesService.list(employeeId),
-      this.bonusesService.list(employeeId ? { employeeId } : {}),
+      this.advancesService.list({ employeeId, period }),
+      this.bonusesService.list({ employeeId, period } as any),
     ]);
 
     const advanceRecords: DiscountRecord[] = advances.map((advance) => ({
