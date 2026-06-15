@@ -93,7 +93,7 @@ model Employee {
   workDaysInPeriod          Int                   @default(26)
   hoursPerDay               Int                   @default(8)
   overtimeCalculation       Json?
-  gracePeriodMinutes        Int                   @default(15)
+  gracePeriodMinutes        Int                   @default(5)
   attendanceRecords         AttendanceRecord[]
   dailyAttendanceLogs       DailyAttendanceLog[]  @relation("DailyAttendanceLogs")
   advances                  EmployeeAdvance[]
