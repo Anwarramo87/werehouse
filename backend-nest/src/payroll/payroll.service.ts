@@ -766,7 +766,7 @@ export class PayrollService {
     const periodStart = dto.periodStart.slice(0, 10);
     const periodEnd = dto.periodEnd.slice(0, 10);
     const periodTag = periodStart.slice(0, 7);
-    const defaultGracePeriodMinutes = Math.max(0, Number(dto.gracePeriodMinutes ?? 15));
+    const defaultGracePeriodMinutes = Math.max(0, Number(dto.gracePeriodMinutes ?? 5));
     const defaultWorkDaysInPeriod = Math.max(1, Number(dto.workDaysInPeriod ?? 26));
     const defaultHoursPerDay = Math.max(1, Number(dto.hoursPerDay ?? 8));
 
@@ -1127,8 +1127,8 @@ export class PayrollService {
         const hourlyWage = dailyWage.div(STANDARD_HOURS_PER_DAY);
         const minuteWage = hourlyWage.div(MINUTES_PER_HOUR);
 
-        // Late penalty policy: minuteWage * lateMinutes (without overtime multiplier)
-        const latePenalty = minuteWage.times(this.toDecimal(lateMinutes));
+        // Late penalty policy: minuteWage * lateMinutes * 1.5 (overtime multiplier)
+        const latePenalty = minuteWage.times(this.toDecimal(lateMinutes)).times(1.5);
 
         const earlyLeavePenalty = minuteWage.times(this.toDecimal(earlyLeaveMinutes));
         const absencePenalty = dailyWage.times(this.toDecimal(absenceDays));

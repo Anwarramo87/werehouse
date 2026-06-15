@@ -47,8 +47,8 @@ function getMinuteWage(grossSalary: number): number {
 }
 
 function calcLateDeduction(grossSalary: number, minutesLate: number): number {
-  // Updated policy: latePenalty = minuteWage * lateMinutes (no overtime multiplier)
-  return getMinuteWage(grossSalary) * minutesLate;
+  // Updated policy: latePenalty = minuteWage * lateMinutes * 1.5 (with overtime multiplier)
+  return getMinuteWage(grossSalary) * minutesLate * 1.5;
 }
 
 
