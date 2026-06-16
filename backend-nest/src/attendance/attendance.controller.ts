@@ -93,6 +93,12 @@ export class AttendanceController {
     return this.attendanceService.alerts(query.date, query.lateThresholdMinutes);
   }
 
+  @Get('daily-view')
+  @Permissions('view_attendance')
+  dailyView(@Query('date') date?: string) {
+    return this.attendanceService.dailyView(date);
+  }
+
   @Get('deleted/history')
   @Permissions('edit_attendance')
   listDeletedHistory(@Query() query: { page?: number; limit?: number }) {

@@ -167,6 +167,8 @@ async function bootstrap() {
       .addTag('finances', 'الملخص المالي')
       .addTag('imports', 'استيراد البيانات بالجملة')
       .addTag('files', 'إدارة الملفات')
+      .addTag('trash', 'سلة المحذوفات')
+      .addTag('backup', 'النسخ الاحتياطي')
       .addTag('health', 'فحص صحة السيرفر')
       .addCookieAuth('warehouse_access_token', {
         type: 'apiKey',

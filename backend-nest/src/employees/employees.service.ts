@@ -31,6 +31,8 @@ import {
 const DEFAULT_PROFILE_RANGE_DAYS = 30;
 const DEFAULT_PROFILE_LIMIT = 200;
 
+const EMPLOYEE_DELETION_ENTITY = 'employee';
+
 @Injectable()
 export class EmployeesService {
   constructor(
@@ -1157,21 +1159,71 @@ async bulkTerminateDepartment(dto: BulkTerminateDepartmentDto, user: Authenticat
     };
   }
 
-  async remove(employeeId: string) {
+  async remove(employeeId: string, deletedBy?: string) {
     const employee = await this.prisma.employee.findUnique({ where: { employeeId } });
 
     if (!employee) throw new NotFoundException('Employee not found');
 
-    await this.prisma.employee.update({
-      where: { employeeId },
-      data: {
-        status: 'terminated',
-        terminationDate: employee.terminationDate || new Date(),
-      },
+    await this.prisma.$transaction(async (tx) => {
+      await tx.deletedRecordHistory.create({
+        data: {
+          entityType: EMPLOYEE_DELETION_ENTITY,
+          recordId: employee.id,
+          payload: JSON.parse(JSON.stringify(employee)) as Prisma.InputJsonValue,
+          deletedBy: deletedBy || null,
+        },
+      });
+
+      await tx.employee.update({
+        where: { employeeId },
+        data: {
+          status: 'terminated',
+          terminationDate: employee.terminationDate || new Date(),
+        },
+      });
     });
 
     await this.shortCache.invalidatePrefix('employees:stats');
 
-    return { message: 'Employee terminated successfully' };
+    return { message: 'Employee terminated and archived successfully' };
+  }
+
+  async restoreEmployee(historyId: string, restoredBy?: string) {
+    const history = await this.prisma.deletedRecordHistory.findFirst({
+      where: { id: historyId, entityType: EMPLOYEE_DELETION_ENTITY, restoredAt: null },
+    });
+
+    if (!history) throw new NotFoundException('History record not found or already restored');
+
+    const payload = history.payload as any;
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.employee.update({
+        where: { employeeId: payload.employeeId },
+        data: {
+          status: 'active',
+          terminationDate: null,
+          terminationType: null,
+          terminationReason: null,
+          terminationNotes: null,
+        },
+      });
+
+      await tx.deletedRecordHistory.update({
+        where: { id: historyId },
+        data: { restoredAt: new Date(), restoredBy: restoredBy || null },
+      });
+    });
+
+    await this.shortCache.invalidatePrefix('employees:stats');
+
+    return this.getByEmployeeId(payload.employeeId);
+  }
+
+  async listDeletedEmployees() {
+    return this.prisma.deletedRecordHistory.findMany({
+      where: { entityType: EMPLOYEE_DELETION_ENTITY, restoredAt: null },
+      orderBy: { deletedAt: 'desc' },
+    });
   }
 }
