@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, Logger } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { parse as parseCsv } from 'csv-parse/sync';
 import { extname } from 'path';
@@ -10,6 +10,7 @@ import { UpdateAttendanceDto } from './dto/update-attendance.dto';
 import { AttendanceListQueryDto } from './dto/attendance-list-query.dto';
 import { ShortCacheService } from '../common/cache/short-cache.service';
 import { RealtimeGateway } from '../realtime/realtime.gateway';
+import { AttendanceAggregationService } from './attendance-aggregation.service';
 
 type ShiftPair = {
   inRecordId?: string;
@@ -65,10 +66,13 @@ const ATTENDANCE_IMPORT_EXTENSIONS = new Set([
 
 @Injectable()
 export class AttendanceService {
+  private readonly logger = new Logger(AttendanceService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly shortCache: ShortCacheService,
     private readonly realtimeGateway: RealtimeGateway,
+    private readonly aggregationService: AttendanceAggregationService,
   ) {}
 
   private async invalidateAttendanceDashboardCaches() {
@@ -456,6 +460,15 @@ export class AttendanceService {
     await this.invalidateAttendanceDashboardCaches();
     await this.emitAttendanceRealtime(record, 'created');
 
+    // ── Real-time aggregation: recalculate missing minutes immediately ──
+    this.aggregationService
+      .aggregateEmployeeDay(dto.employeeId, date)
+      .catch((err) =>
+        this.logger.error(
+          `⚠️ Real-time aggregation failed (manual create) for ${dto.employeeId}: ${err.message}`,
+        ),
+      );
+
     return { message: 'Attendance record created successfully', record };
   }
 
@@ -590,6 +603,10 @@ export class AttendanceService {
       await this.assertEmployeeExists(dto.employeeId);
     }
 
+    // ── Capture original state for edge-case: admin changes date or employeeId ──
+    const originalEmployeeId = existing.employeeId;
+    const originalDate = existing.date;
+
     const payload: Prisma.AttendanceRecordUncheckedUpdateInput = {};
 
     if (dto.employeeId !== undefined) payload.employeeId = dto.employeeId;
@@ -616,6 +633,28 @@ export class AttendanceService {
 
     await this.invalidateAttendanceDashboardCaches();
     await this.emitAttendanceRealtime(updated, 'updated');
+
+    // ── Real-time aggregation: recalculate missing minutes for the NEW state ──
+    // Fire-and-forget so the update response is not blocked.
+    this.aggregationService
+      .aggregateEmployeeDay(updated.employeeId, updated.date)
+      .catch((err) =>
+        this.logger.error(
+          `⚠️ Real-time aggregation failed (update/new) for ${updated.employeeId} on ${updated.date}: ${err.message}`,
+        ),
+      );
+
+    // ── Edge case: if admin changed date or employeeId, also recalculate the OLD day ──
+    // This cleans up stale penalty calculations from the original employee/date combination.
+    if (updated.employeeId !== originalEmployeeId || updated.date !== originalDate) {
+      this.aggregationService
+        .aggregateEmployeeDay(originalEmployeeId, originalDate)
+        .catch((err) =>
+          this.logger.error(
+            `⚠️ Real-time aggregation failed (update/old) for ${originalEmployeeId} on ${originalDate}: ${err.message}`,
+          ),
+        );
+    }
 
     return { message: 'Attendance record updated successfully', record: updated };
   }
@@ -1077,6 +1116,26 @@ export class AttendanceService {
       },
     });
 
+    // ── Aggregate EARLY_LEAVE_MINUTES from DailyAttendanceLog for the period ──
+    // This picks up real-time calculated penalties written by the aggregation engine.
+    const earlyLeaveLogs = await this.prisma.dailyAttendanceLog.findMany({
+      where: {
+        ...(employeeId ? { employeeId } : {}),
+        date: { gte: new Date(`${periodStart}T00:00:00.000Z`), lte: new Date(`${periodEnd}T23:59:59.999Z`) },
+        recordType: 'EARLY_LEAVE_MINUTES',
+      },
+      select: { employeeId: true, value: true },
+    });
+    const earlyLeaveMinutesByEmployee = new Map<string, number>();
+    for (const log of earlyLeaveLogs) {
+      const minutes = Number(log.value ?? 0);
+      if (!Number.isFinite(minutes) || minutes <= 0) continue;
+      earlyLeaveMinutesByEmployee.set(
+        log.employeeId,
+        (earlyLeaveMinutesByEmployee.get(log.employeeId) || 0) + minutes,
+      );
+    }
+
     // تجميع السجلات حسب الموظف
     const recordsByEmployee = new Map<string, typeof allRecords>();
     for (const record of allRecords) {
@@ -1093,6 +1152,7 @@ export class AttendanceService {
       absenceDeduction: number;
       delayMinutes: number;
       delayDeduction: number;
+      earlyLeaveMinutes: number;
       overtimeMinutes: number;
       overtimeWeekendDays: number;
       overtimePay: number;
@@ -1233,6 +1293,7 @@ export class AttendanceService {
         absenceDeduction: Math.round(absenceDeduction * 100) / 100,
         delayMinutes: totalDelayMinutes,
         delayDeduction: Math.round(delayDeduction * 100) / 100,
+        earlyLeaveMinutes: earlyLeaveMinutesByEmployee.get(employee.employeeId) || 0,
         totalAttendanceDeduction: Math.round((absenceDeduction + delayDeduction) * 100) / 100,
         overtimeMinutes: totalOvertimeMinutes,
         overtimeWeekendDays,

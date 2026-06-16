@@ -3,9 +3,10 @@ import { BiometricService } from './biometric.service';
 import { BiometricController } from './biometric.controller';
 import { DuplicateHandlingService } from './duplicate-handling.service';
 import { PrismaModule } from '../prisma/prisma.module';
+import { AttendanceModule } from '../attendance/attendance.module';
 
 @Module({
-  imports: [PrismaModule],
+  imports: [PrismaModule, AttendanceModule],
   controllers: [BiometricController],
   providers: [BiometricService, DuplicateHandlingService],
   exports: [BiometricService],
