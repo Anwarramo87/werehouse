@@ -10,6 +10,7 @@ import { Queue } from 'bullmq';
 import { QUEUE_JOBS, QUEUE_NAMES } from '../queues/queue.constants';
 import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
 import { TransportationService } from '../transportation/transportation.service';
+import { AttendanceAggregationService } from '../attendance/attendance-aggregation.service';
 import {
   PAYROLL_BATCH_SIZE,
   WORK_DAYS_PER_MONTH,
@@ -42,6 +43,7 @@ export class PayrollService {
     private readonly prisma: PrismaService,
     @Optional() @InjectQueue(QUEUE_NAMES.PAYROLL) private readonly payrollQueue?: Queue,
     @Optional() private readonly transportationService?: TransportationService,
+    @Optional() private readonly aggregationService?: AttendanceAggregationService,
   ) {}
 
   private toDecimal(value: Prisma.Decimal | number | string | null | undefined) {
@@ -782,6 +784,7 @@ export class PayrollService {
       attendanceInRecords,
       payrollInputs,
       dailyOvertimeLogs,
+      dailyEarlyLeaveLogs,
     ] = await Promise.all([
 
 
@@ -856,6 +859,21 @@ export class PayrollService {
           value: true,
         },
       }),
+      // DailyAttendanceLog: aggregated EARLY_LEAVE_MINUTES from missing-minutes engine
+      this.prisma.dailyAttendanceLog.findMany({
+        where: {
+          employeeId: { in: employeeIds },
+          recordType: 'EARLY_LEAVE_MINUTES',
+          date: {
+            gte: new Date(`${periodStart}T00:00:00.000Z`),
+            lte: new Date(`${periodEnd}T23:59:59.999Z`),
+          },
+        },
+        select: {
+          employeeId: true,
+          value: true,
+        },
+      }),
     ]);
 
 
@@ -890,6 +908,18 @@ export class PayrollService {
       overtimeWeekendDaysByEmployee.set(
         log.employeeId,
         (overtimeWeekendDaysByEmployee.get(log.employeeId) || 0) + 1,
+      );
+    }
+
+    // ── Aggregate EARLY_LEAVE_MINUTES from DailyAttendanceLog (missing-minutes engine) ──
+    // This provides the automated penalty computed by AttendanceAggregationService.
+    const earlyLeaveMinutesByEmployee = new Map<string, number>();
+    for (const log of dailyEarlyLeaveLogs) {
+      const minutes = Number(log.value ?? 0);
+      if (!Number.isFinite(minutes) || minutes <= 0) continue;
+      earlyLeaveMinutesByEmployee.set(
+        log.employeeId,
+        (earlyLeaveMinutesByEmployee.get(log.employeeId) || 0) + minutes,
       );
     }
 
@@ -1084,7 +1114,13 @@ export class PayrollService {
           lateMinutesByEmployee.get(employee.employeeId) || 0,
           includeAttendanceDeductions,
         );
-        const earlyLeaveMinutes = Number(input?.earlyLeaveMinutes ?? 0);
+        // EARLY_LEAVE_MINUTES: Prefer PayrollInput override, fallback to DailyAttendanceLog aggregation
+        const earlyLeaveMinutesComputed = earlyLeaveMinutesByEmployee.get(employee.employeeId) || 0;
+        const earlyLeaveMinutes = this.resolveAttendanceValue(
+          input?.earlyLeaveMinutes,
+          earlyLeaveMinutesComputed,
+          includeAttendanceDeductions,
+        );
         const absenceDays = this.resolveAttendanceValue(
           input?.absenceDays,
           absenceDaysFallback,
@@ -1192,6 +1228,9 @@ export class PayrollService {
         if (latePenalty.greaterThan(0)) {
           anomalies.push(`Late penalty applied: ${latePenalty.toFixed(2)}`);
         }
+        if (earlyLeavePenalty.greaterThan(0)) {
+          anomalies.push(`Early leave / missing minutes penalty: ${earlyLeavePenalty.toFixed(2)} (${earlyLeaveMinutes}min)`);
+        }
         if (penaltyTotal.greaterThan(0)) {
           anomalies.push(`Penalties applied: ${penaltyTotal.toFixed(2)}`);
         }
@@ -1226,6 +1265,8 @@ export class PayrollService {
           netPayRounded,
           roundingDifference,
           netPayWithAdvance,
+          earlyLeaveMinutes: earlyLeaveMinutes,
+          earlyLeaveDeduction: earlyLeavePenalty,
           anomalies,
         });
       }
