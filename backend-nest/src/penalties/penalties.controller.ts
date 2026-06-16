@@ -1,8 +1,10 @@
-import { Body, Controller, Delete, Get, Param, Post, Put, Query, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Post, Put, Query, UseGuards, ParseUUIDPipe } from '@nestjs/common';
 import { ApiTags, ApiCookieAuth } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { PermissionsGuard } from '../common/guards/permissions.guard';
 import { Permissions } from '../common/decorators/permissions.decorator';
+import { CurrentUser } from '../common/decorators/current-user.decorator';
+import { AuthenticatedUser } from '../common/types/authenticated-user.types';
 import { PenaltiesService } from './penalties.service';
 import { CreatePenaltyDto } from './dto/create-penalty.dto';
 import { UpdatePenaltyDto } from './dto/update-penalty.dto';
@@ -21,6 +23,12 @@ export class PenaltiesController {
     return this.penaltiesService.list(query);
   }
 
+  @Get('deleted/history')
+  @Permissions('manage_penalties')
+  listDeletedHistory() {
+    return this.penaltiesService.listDeletedHistory();
+  }
+
   @Get(':id')
   @Permissions('manage_penalties')
   getOne(@Param('id') id: string) {
@@ -33,6 +41,15 @@ export class PenaltiesController {
     return this.penaltiesService.create(dto);
   }
 
+  @Post('restore/:historyId')
+  @Permissions('manage_penalties')
+  restore(
+    @Param('historyId', ParseUUIDPipe) historyId: string,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.penaltiesService.restore(historyId, user?.userId);
+  }
+
   @Put(':id')
   @Permissions('manage_penalties')
   update(@Param('id') id: string, @Body() dto: UpdatePenaltyDto) {
@@ -41,7 +58,7 @@ export class PenaltiesController {
 
   @Delete(':id')
   @Permissions('manage_penalties')
-  remove(@Param('id') id: string) {
-    return this.penaltiesService.remove(id);
+  remove(@Param('id') id: string, @CurrentUser() user: AuthenticatedUser) {
+    return this.penaltiesService.remove(id, user?.userId);
   }
 }

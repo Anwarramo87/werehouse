@@ -30,7 +30,7 @@ export class DiscountsController {
   @Get()
   @Permissions('manage_advances', 'manage_bonuses')
   list(@Query() query: DiscountsListQueryDto) {
-    return this.discountsService.list(query.employeeId);
+    return this.discountsService.list(query.employeeId, query.period);
   }
 
   @Post()

@@ -998,6 +998,142 @@ export class AttendanceService {
     return { employeeId, date, records, recordCount: records.length };
   }
 
+  async dailyView(date?: string) {
+    const targetDate = date || this.toDateKey();
+    const TIMEZONE_OFFSET_MINUTES = 180;
+
+    const [activeEmployees, records] = await Promise.all([
+      this.prisma.employee.findMany({
+        where: { status: 'active' },
+        select: {
+          employeeId: true,
+          name: true,
+          department: true,
+          scheduledStart: true,
+          scheduledEnd: true,
+          gracePeriodMinutes: true,
+        },
+      }),
+      this.prisma.attendanceRecord.findMany({
+        where: { date: targetDate },
+        orderBy: { timestamp: 'asc' },
+        select: {
+          employeeId: true,
+          type: true,
+          timestamp: true,
+          shiftPair: true,
+        },
+      }),
+    ]);
+
+    const byEmployee = new Map<string, {
+      firstIn: Date | null;
+      lastOut: Date | null;
+      maxMinutesLate: number | null;
+    }>();
+
+    for (const record of records) {
+      const entry = byEmployee.get(record.employeeId) || {
+        firstIn: null,
+        lastOut: null,
+        maxMinutesLate: null,
+      };
+
+      const sp = record.shiftPair as ShiftPair | null;
+      if (typeof sp?.minutesLate === 'number' && Number.isFinite(sp.minutesLate)) {
+        entry.maxMinutesLate = Math.max(entry.maxMinutesLate ?? 0, Math.max(0, Math.floor(sp.minutesLate)));
+      }
+
+      const recType = record.type.toUpperCase();
+      if (recType === 'IN' && !entry.firstIn) {
+        entry.firstIn = record.timestamp;
+      }
+      if (recType === 'OUT') {
+        entry.lastOut = record.timestamp;
+      }
+
+      byEmployee.set(record.employeeId, entry);
+    }
+
+    const toLocalHHMM = (ts: Date | null): string | null => {
+      if (!ts) return null;
+      const utcMin = ts.getUTCHours() * 60 + ts.getUTCMinutes();
+      const localMin = ((utcMin + TIMEZONE_OFFSET_MINUTES) % 1440 + 1440) % 1440;
+      const h = Math.floor(localMin / 60);
+      const m = localMin % 60;
+      return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+    };
+
+    const result = activeEmployees.map((emp) => {
+      const entry = byEmployee.get(emp.employeeId);
+      const scheduledStart = emp.scheduledStart || '08:00';
+      const scheduledEnd = emp.scheduledEnd || '16:00';
+      const grace = emp.gracePeriodMinutes ?? 15;
+
+      const checkInTime = toLocalHHMM(entry?.firstIn ?? null);
+      const checkOutTime = toLocalHHMM(entry?.lastOut ?? null);
+
+      let status: string;
+      let notes: string | null = null;
+
+      if (!entry?.firstIn) {
+        status = 'absent';
+      } else {
+        const [schH, schM] = scheduledStart.split(':').map(Number);
+        const scheduledMinutes = (schH || 8) * 60 + (schM || 0);
+        const utcMin = entry.firstIn.getUTCHours() * 60 + entry.firstIn.getUTCMinutes();
+        const localMin = ((utcMin + TIMEZONE_OFFSET_MINUTES) % 1440) % 1440;
+        const rawLate = Math.max(0, localMin - scheduledMinutes);
+
+        if (entry.maxMinutesLate != null && entry.maxMinutesLate > 0) {
+          status = 'late';
+          notes = `متأخر ${entry.maxMinutesLate} دقيقة`;
+        } else if (rawLate > grace) {
+          status = 'late';
+          notes = `متأخر ${rawLate - grace} دقيقة`;
+        } else {
+          status = 'present';
+        }
+
+        if (entry.lastOut) {
+          const [seH, seM] = scheduledEnd.split(':').map(Number);
+          const scheduledEndMin = (seH || 16) * 60 + (seM || 0);
+          const outUtcMin = entry.lastOut.getUTCHours() * 60 + entry.lastOut.getUTCMinutes();
+          const outLocalMin = ((outUtcMin + TIMEZONE_OFFSET_MINUTES) % 1440) % 1440;
+          const overtime = Math.max(0, outLocalMin - scheduledEndMin);
+          if (overtime > 0) {
+            notes = notes ? `${notes} + إضافي ${overtime} دقيقة` : `إضافي ${overtime} دقيقة`;
+          }
+        }
+      }
+
+      return {
+        employeeId: emp.employeeId,
+        name: emp.name,
+        department: emp.department,
+        date: targetDate,
+        scheduledStart,
+        scheduledEnd,
+        checkIn: checkInTime,
+        checkOut: checkOutTime,
+        status,
+        notes,
+        source: entry?.firstIn ? 'biometric' : null,
+      };
+    });
+
+    return {
+      date: targetDate,
+      employees: result,
+      summary: {
+        total: result.length,
+        present: result.filter((e) => e.status === 'present').length,
+        late: result.filter((e) => e.status === 'late').length,
+        absent: result.filter((e) => e.status === 'absent').length,
+      },
+    };
+  }
+
   async employeePeriod(employeeId: string, startDate: string, endDate: string) {
     if (!startDate || !endDate) {
       throw new BadRequestException('Start and end dates are required');
