@@ -10,6 +10,8 @@ import { ApiTags, ApiOperation } from '@nestjs/swagger';
 import { AttendanceService } from './attendance.service';
 import { PrismaService } from '../prisma/prisma.service';
 
+const TIMEZONE_OFFSET_MS = 3 * 60 * 60 * 1000; // UTC+3 Saudi Arabia
+
 @ApiTags('attendance')
 @Controller('attendance/public')
 export class PublicAttendanceController {
@@ -17,6 +19,22 @@ export class PublicAttendanceController {
     private readonly attendanceService: AttendanceService,
     private readonly prisma: PrismaService,
   ) {}
+
+  private getLocalNow(): Date {
+    return new Date(Date.now() + TIMEZONE_OFFSET_MS);
+  }
+
+  private getLocalDateKey(): string {
+    const local = this.getLocalNow();
+    const y = local.getUTCFullYear();
+    const m = String(local.getUTCMonth() + 1).padStart(2, '0');
+    const d = String(local.getUTCDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+  }
+
+  private getLocalTimestamp(): Date {
+    return new Date(Date.now());
+  }
 
   @Post('check-in')
   @ApiOperation({ summary: 'Check-in an employee' })
@@ -27,8 +45,8 @@ export class PublicAttendanceController {
       throw new BadRequestException('employeeId is required');
     }
 
-    const now = new Date();
-    const dateKey = now.toISOString().slice(0, 10);
+    const dateKey = this.getLocalDateKey();
+    const now = this.getLocalTimestamp();
 
     const existingIn = await this.prisma.attendanceRecord.findFirst({
       where: {
@@ -57,6 +75,7 @@ export class PublicAttendanceController {
       message: 'Check-in successful',
       employeeId,
       timestamp: record.timestamp,
+      date: dateKey,
     };
   }
 
@@ -69,8 +88,8 @@ export class PublicAttendanceController {
       throw new BadRequestException('employeeId is required');
     }
 
-    const now = new Date();
-    const dateKey = now.toISOString().slice(0, 10);
+    const dateKey = this.getLocalDateKey();
+    const now = this.getLocalTimestamp();
 
     const existingOut = await this.prisma.attendanceRecord.findFirst({
       where: {
@@ -133,6 +152,7 @@ export class PublicAttendanceController {
       message: 'Check-out successful',
       employeeId,
       timestamp: record.timestamp,
+      date: dateKey,
       hoursWorked: Math.round(hoursWorked * 100) / 100,
     };
   }
@@ -140,13 +160,13 @@ export class PublicAttendanceController {
   @Get('employee/:employeeId/today')
   @ApiOperation({ summary: 'Get today\'s attendance for an employee' })
   async getTodayAttendance(@Param('employeeId') employeeId: string) {
-    const today = new Date().toISOString().slice(0, 10);
+    const dateKey = this.getLocalDateKey();
 
     const records = await this.prisma.attendanceRecord.findMany({
-      where: { employeeId, date: today },
+      where: { employeeId, date: dateKey },
       orderBy: { timestamp: 'asc' },
     });
 
-    return { employeeId, date: today, records };
+    return { employeeId, date: dateKey, records };
   }
 }
