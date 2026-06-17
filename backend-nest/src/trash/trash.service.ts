@@ -5,6 +5,7 @@ import { PenaltiesService } from '../penalties/penalties.service';
 import { BonusesService } from '../bonuses/bonuses.service';
 import { LeavesService } from '../leaves/leaves.service';
 import { EmployeesService } from '../employees/employees.service';
+import { AttendanceService } from '../attendance/attendance.service';
 
 @Injectable()
 export class TrashService {
@@ -15,6 +16,7 @@ export class TrashService {
     private readonly bonusesService: BonusesService,
     private readonly leavesService: LeavesService,
     private readonly employeesService: EmployeesService,
+    private readonly attendanceService: AttendanceService,
   ) {}
 
   async list(query: {
@@ -93,6 +95,8 @@ export class TrashService {
         return this.leavesService.restore(historyId, restoredBy);
       case 'employee':
         return this.employeesService.restoreEmployee(historyId, restoredBy);
+      case 'attendance':
+        return this.attendanceService.restore(historyId, restoredBy);
       default:
         throw new NotFoundException(`Unknown entity type: ${history.entityType}`);
     }

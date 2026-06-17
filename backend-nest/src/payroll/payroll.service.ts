@@ -300,21 +300,21 @@ export class PayrollService {
       return sum.plus(this.toDecimal(p.amount));
     }, new Prisma.Decimal(0));
 
-    // For simplicity, we'll aggregate all other deductions as 'otherDeductions'
-    // In a real scenario, you'd fetch and calculate other deductions like insurance, etc.
-    const otherDeductions = this.toDecimal(employeeSalary?.insuranceAmount); // Example
+    const otherDeductions = this.toDecimal(employeeSalary?.insuranceAmount);
 
     const totalDeductions = totalAdvances.plus(totalPenalties).plus(otherDeductions);
 
-    // 4. Calculate earned salary up to termination date
-    // This is a simplified calculation. A full implementation would consider attendance, leaves, etc.
+    // 4. Calculate earned salary using the same g3 formula as processPayrollRun
     let earnedSalary = new Prisma.Decimal(0);
-    if (employee.baseSalary) {
-      const baseSalaryPerDay = this.toDecimal(employee.baseSalary).div(STANDARD_WORK_DAYS);
+    if (employee.baseSalary || employeeSalary) {
+      const baseSalary = this.toDecimal(employeeSalary?.baseSalary ?? employee.baseSalary ?? 0);
+      const livingAllowance = this.toDecimal(employeeSalary?.livingAllowance ?? 0);
+      const lumpSumSalary = this.toDecimal(employeeSalary?.lumpSumSalary ?? 0);
+      const g3 = baseSalary.plus(livingAllowance).plus(lumpSumSalary);
+      const dailyWage = g3.div(STANDARD_WORK_DAYS);
       const daysWorkedInTerminationMonth = new Prisma.Decimal(terminationDate.getDate());
-      earnedSalary = baseSalaryPerDay.mul(daysWorkedInTerminationMonth);
+      earnedSalary = dailyWage.mul(daysWorkedInTerminationMonth);
     } else if (employee.hourlyRate) {
-      // Fallback to hourly rate if base salary is not defined
       const hourlyRate = this.toDecimal(employee.hourlyRate);
       const hoursPerDay = this.toDecimal(employee.hoursPerDay ?? WORK_HOURS_PER_DAY);
       const daysWorkedInTerminationMonth = new Prisma.Decimal(terminationDate.getDate());
