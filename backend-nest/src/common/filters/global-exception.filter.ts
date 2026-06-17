@@ -50,6 +50,11 @@ export class GlobalExceptionFilter implements ExceptionFilter {
       );
     }
 
+    // Hint the frontend not to retry on client errors (4xx)
+    if (statusCode >= 400 && statusCode < 500) {
+      response.setHeader('X-Should-Retry', 'false');
+    }
+
     response.status(statusCode).json({
       success: false,
       error: {

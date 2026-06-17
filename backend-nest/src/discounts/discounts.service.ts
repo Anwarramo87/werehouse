@@ -2,6 +2,7 @@ import { BadRequestException, Injectable } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { AdvancesService } from '../advances/advances.service';
 import { BonusesService } from '../bonuses/bonuses.service';
+import { ShortCacheService } from '../common/cache/short-cache.service';
 import { CreateDiscountDto, DiscountKind } from './dto/create-discount.dto';
 import { AdvanceType } from '../advances/dto/create-advance.dto';
 
@@ -20,6 +21,7 @@ export class DiscountsService {
   constructor(
     private readonly advancesService: AdvancesService,
     private readonly bonusesService: BonusesService,
+    private readonly shortCache: ShortCacheService,
   ) {}
 
   private toNumber(value: Prisma.Decimal | number | string | null | undefined) {
@@ -71,7 +73,7 @@ export class DiscountsService {
     const resolvedKind = kind ?? this.resolveKind(dto);
 
     if (resolvedKind === DiscountKind.ADVANCE) {
-      const record = await this.advancesService.create({
+      const result = await this.advancesService.create({
         employeeId: dto.employeeId,
         advanceType: dto.advanceType ?? AdvanceType.SALARY,
         totalAmount: dto.amount,
@@ -80,13 +82,15 @@ export class DiscountsService {
         issueDate: dto.date,
       });
 
+      await this.shortCache.invalidatePrefix('employees:stats');
+
       return {
-        id: record.id,
-        employeeId: record.employeeId,
+        id: result.id,
+        employeeId: result.employeeId,
         type: 'سلفة',
-        amount: this.toNumber(this.toNumber(record.installmentAmount) > 0 ? record.installmentAmount : record.remainingAmount ?? record.totalAmount),
-        date: record.issueDate.toISOString(),
-        notes: record.notes ?? null,
+        amount: this.toNumber(this.toNumber(result.installmentAmount) > 0 ? result.installmentAmount : result.remainingAmount ?? result.totalAmount),
+        date: result.issueDate.toISOString(),
+        notes: result.notes ?? null,
         kind: DiscountKind.ADVANCE,
       };
     }
@@ -94,20 +98,22 @@ export class DiscountsService {
     // Create assistance/discount record through bonuses endpoint
     const period = dto.date ? dto.date.slice(0, 7) : new Date().toISOString().slice(0, 7);
     
-    const record = await this.bonusesService.create({
+    const result = await this.bonusesService.create({
       employeeId: dto.employeeId,
       bonusReason: dto.notes || 'خصم',
       assistanceAmount: dto.amount,
       period,
     });
 
+    await this.shortCache.invalidatePrefix('employees:stats');
+
     return {
-      id: record.id,
-      employeeId: record.employeeId,
-      type: record.bonusReason || 'خصم متنوع',
-      amount: this.toNumber(record.assistanceAmount),
-      date: record.createdAt.toISOString(),
-      notes: record.bonusReason ?? null,
+      id: result.id,
+      employeeId: result.employeeId,
+      type: result.bonusReason || 'خصم متنوع',
+      amount: this.toNumber(result.assistanceAmount),
+      date: result.createdAt.toISOString(),
+      notes: result.bonusReason ?? null,
       kind: DiscountKind.ASSISTANCE,
     };
   }
@@ -134,7 +140,9 @@ export class DiscountsService {
     }
     
     if (kind === DiscountKind.ASSISTANCE) {
-      return this.bonusesService.remove(id, deletedBy);
+      const result = await this.bonusesService.remove(id, deletedBy);
+      await this.shortCache.invalidatePrefix('employees:stats');
+      return result;
     }
 
     throw new BadRequestException('Invalid kind for discounts endpoint');

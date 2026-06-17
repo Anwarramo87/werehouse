@@ -1,6 +1,7 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { ShortCacheService } from '../common/cache/short-cache.service';
 import { CreatePenaltyDto } from './dto/create-penalty.dto';
 import { UpdatePenaltyDto } from './dto/update-penalty.dto';
 import { PenaltiesListQueryDto } from './dto/penalties-list-query.dto';
@@ -9,7 +10,10 @@ const PENALTY_DELETION_ENTITY = 'penalty';
 
 @Injectable()
 export class PenaltiesService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly shortCache: ShortCacheService,
+  ) {}
 
   private async assertEmployeeExists(employeeId: string) {
     const employee = await this.prisma.employee.findUnique({ where: { employeeId } });
@@ -75,7 +79,7 @@ export class PenaltiesService {
       throw new BadRequestException('Invalid issueDate');
     }
 
-    return this.prisma.employeePenalty.create({
+    const result = await this.prisma.employeePenalty.create({
       data: {
         employeeId: dto.employeeId,
         category: dto.category,
@@ -84,6 +88,9 @@ export class PenaltiesService {
         issueDate,
       },
     });
+
+    await this.shortCache.invalidatePrefix('employees:stats');
+    return result;
   }
 
   async update(id: string, dto: UpdatePenaltyDto) {
@@ -101,7 +108,10 @@ export class PenaltiesService {
       data.issueDate = issueDate;
     }
 
-    return this.prisma.employeePenalty.update({ where: { id }, data });
+    const result = await this.prisma.employeePenalty.update({ where: { id }, data });
+
+    await this.shortCache.invalidatePrefix('employees:stats');
+    return result;
   }
 
   async remove(id: string, deletedBy?: string) {
@@ -120,6 +130,7 @@ export class PenaltiesService {
       await tx.employeePenalty.delete({ where: { id: record.id } });
     });
 
+    await this.shortCache.invalidatePrefix('employees:stats');
     return { message: 'Penalty deleted and archived successfully' };
   }
 

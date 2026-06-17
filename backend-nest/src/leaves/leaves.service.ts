@@ -1,6 +1,7 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma, LeaveRequestStatus, LeaveRequestType } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { ShortCacheService } from '../common/cache/short-cache.service';
 import { paginatedResponse, resolvePagination } from '../common/utils/pagination.util';
 import { BulkCreateLeaveRequestDto, CreateLeaveRequestDto } from './dto/create-leave-request.dto';
 import { UpdateLeaveRequestDto } from './dto/update-leave-request.dto';
@@ -53,7 +54,10 @@ type PayrollDelta = {
 
 @Injectable()
 export class LeavesService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly shortCache: ShortCacheService,
+  ) {}
 
   // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -395,7 +399,7 @@ export class LeavesService {
     await this.assertEmployeeExists(dto.employeeId);
     const data = this.buildCreateData(dto);
 
-    return this.prisma.$transaction(async (tx) => {
+    const result = await this.prisma.$transaction(async (tx) => {
       // تحقق من عدم وجود تداخل مع إجازات معتمدة أخرى
       await this.assertNoOverlappingLeave(
         tx,
@@ -416,6 +420,9 @@ export class LeavesService {
 
       return created;
     });
+
+    await this.shortCache.invalidatePrefix('employees:stats');
+    return result;
   }
 
   /**
@@ -518,7 +525,7 @@ export class LeavesService {
       throw new BadRequestException('endDate must be greater than or equal to startDate');
     }
 
-    return this.prisma.$transaction(async (tx) => {
+    const result = await this.prisma.$transaction(async (tx) => {
       // تحقق من عدم وجود تداخل مع إجازات معتمدة أخرى (استبعد الإجازة الحالية)
       const effectiveStart = (data.startDate as Date) ?? nextStart;
       const effectiveEnd = (data.endDate as Date) ?? nextEnd;
@@ -545,6 +552,9 @@ export class LeavesService {
 
       return updated;
     });
+
+    await this.shortCache.invalidatePrefix('employees:stats');
+    return result;
   }
 
   async remove(id: string, deletedBy?: string) {

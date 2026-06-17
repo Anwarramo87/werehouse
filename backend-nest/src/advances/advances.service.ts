@@ -1,6 +1,7 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { ShortCacheService } from '../common/cache/short-cache.service';
 import { CreateAdvanceDto } from './dto/create-advance.dto';
 import { UpdateAdvanceDto } from './dto/update-advance.dto';
 
@@ -8,7 +9,10 @@ const ADVANCE_DELETION_ENTITY = 'advance';
 
 @Injectable()
 export class AdvancesService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly shortCache: ShortCacheService,
+  ) {}
 
   // --- Helpers ---
   private async assertEmployeeExists(employeeId: string) {
@@ -63,7 +67,7 @@ export class AdvancesService {
       throw new BadRequestException('Invalid issueDate');
     }
 
-    return this.prisma.employeeAdvance.create({
+    const result = await this.prisma.employeeAdvance.create({
       data: {
         employeeId: dto.employeeId,
         advanceType: dto.advanceType ?? 'salary',
@@ -74,6 +78,9 @@ export class AdvancesService {
         issueDate,
       },
     });
+
+    await this.shortCache.invalidatePrefix('employees:stats');
+    return result;
   }
 
   /**
@@ -120,6 +127,7 @@ export class AdvancesService {
       await tx.employeeAdvance.delete({ where: { id: record.id } });
     });
 
+    await this.shortCache.invalidatePrefix('employees:stats');
     return { message: 'Advance deleted and archived successfully' };
   }
 
@@ -164,7 +172,7 @@ export class AdvancesService {
 
   async update(id: string, dto: UpdateAdvanceDto) {
     await this.getById(id);
-    return this.prisma.employeeAdvance.update({
+    const result = await this.prisma.employeeAdvance.update({
       where: { id },
       data: {
         ...(dto.remainingAmount !== undefined && { remainingAmount: new Prisma.Decimal(dto.remainingAmount) }),
@@ -172,5 +180,8 @@ export class AdvancesService {
         ...(dto.notes !== undefined && { notes: dto.notes }),
       },
     });
+
+    await this.shortCache.invalidatePrefix('employees:stats');
+    return result;
   }
 }
