@@ -1263,8 +1263,8 @@ export class AttendanceService {
             return day !== 5; // استثناء الجمعة فقط — السبت يوم عمل
           })
       );
-      // نضمن أن presentDays لا يتجاوز أيام العمل الكاملة في الفترة
-      const presentDays = Math.min(datesWithCheckIn.size, totalWorkDaysInPeriod);
+      // أيام الحضور الفعلية = عدد الأيام الفريدة التي تم فيها تسجيل حضور
+      const presentDays = datesWithCheckIn.size;
 
       // أيام الغياب = أيام العمل المنقضية - أيام الحضور الفعلية
       // نستخدم elapsedWorkDays (حتى اليوم) حتى لا نخصم مستقبلاً

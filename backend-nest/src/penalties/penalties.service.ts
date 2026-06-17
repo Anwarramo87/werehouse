@@ -25,7 +25,19 @@ export class PenaltiesService {
   async list(query: PenaltiesListQueryDto) {
     const where: Prisma.EmployeePenaltyWhereInput = {};
     if (query.employeeId) where.employeeId = query.employeeId;
-    if (query.period) where.period = query.period;
+    
+    // Filter by period using issueDate instead of period column
+    if (query.period) {
+      const [year, month] = query.period.split('-').map(Number);
+      if (year && month) {
+        const startDate = new Date(Date.UTC(year, month - 1, 1));
+        const endDate = new Date(Date.UTC(year, month, 0, 23, 59, 59, 999));
+        where.issueDate = {
+          gte: startDate,
+          lte: endDate,
+        };
+      }
+    }
 
     if (query.startDate || query.endDate) {
       const startDate = query.startDate ? new Date(query.startDate) : undefined;
@@ -63,8 +75,6 @@ export class PenaltiesService {
       throw new BadRequestException('Invalid issueDate');
     }
 
-    const period = dto.period ?? `${issueDate.getFullYear()}-${String(issueDate.getMonth() + 1).padStart(2, '0')}`;
-
     return this.prisma.employeePenalty.create({
       data: {
         employeeId: dto.employeeId,
@@ -72,7 +82,6 @@ export class PenaltiesService {
         amount: new Prisma.Decimal(dto.amount),
         reason: dto.reason ?? null,
         issueDate,
-        period,
       },
     });
   }
@@ -132,7 +141,6 @@ export class PenaltiesService {
           amount: new Prisma.Decimal(payload.amount),
           reason: payload.reason,
           issueDate: new Date(payload.issueDate),
-          period: payload.period ?? null,
         },
       });
 

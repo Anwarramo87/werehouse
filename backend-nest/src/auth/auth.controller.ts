@@ -2,6 +2,7 @@ import {
   Body,
   Controller,
   Get,
+  Logger,
   OnModuleInit,
   Post,
   Req,
@@ -32,6 +33,8 @@ import { RequestWithCookies } from '../common/types/request-context.types';
 @ApiTags('auth')
 @Controller('auth')
 export class AuthController implements OnModuleInit {
+  private readonly logger = new Logger(AuthController.name);
+
   constructor(
     private readonly authService: AuthService,
     private readonly config: ConfigService,
@@ -44,7 +47,7 @@ export class AuthController implements OnModuleInit {
       await this.authService.ensureSuperadminBootstrap();
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      console.error(`[AuthController] Admin bootstrap failed: ${message}`);
+      this.logger.warn(`Admin bootstrap skipped: ${message}`);
     }
   }
 

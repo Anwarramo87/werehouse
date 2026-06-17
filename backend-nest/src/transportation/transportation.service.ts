@@ -2,6 +2,7 @@ import {
   BadRequestException,
   ConflictException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
@@ -15,6 +16,8 @@ import { DiscountKind } from '../discounts/dto/create-discount.dto';
 
 @Injectable()
 export class TransportationService {
+  private readonly logger = new Logger(TransportationService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly discountsService: DiscountsService,
@@ -261,7 +264,7 @@ export class TransportationService {
         // تحديد نص السبب للبحث
         const transportReason = `بدل مواصلات - ${bus.route} (${bus.plateNumber})`;
 
-        console.log(`[Transportation] Processing ${allPassengers.length} passengers, cost per employee: ${costPerEmployee}`);
+        this.logger.log(`Processing ${allPassengers.length} passengers, cost per employee: ${costPerEmployee}`);
 
         for (const p of allPassengers) {
           // البحث عن خصم موجود لهذا الموظف لهذا الباص
@@ -277,7 +280,7 @@ export class TransportationService {
             // تحديث الخصم الموجود
             const discountId = existingDiscounts[0].id;
             const oldAmount = existingDiscounts[0].assistanceAmount;
-            console.log(`[Transportation] Updating discount for ${p.employeeId}: ${oldAmount} → ${costPerEmployee}`);
+            this.logger.debug(`Updating discount for ${p.employeeId}: ${oldAmount} → ${costPerEmployee}`);
             
             await this.prisma.employeeBonus.update({
               where: { id: discountId },
@@ -287,7 +290,7 @@ export class TransportationService {
             });
           } else {
             // إضافة خصم جديد
-            console.log(`[Transportation] Creating new discount for ${p.employeeId}: ${costPerEmployee}`);
+            this.logger.debug(`Creating new discount for ${p.employeeId}: ${costPerEmployee}`);
             
             await this.discountsService.create(
               {
@@ -303,10 +306,10 @@ export class TransportationService {
           }
         }
         
-        console.log(`[Transportation] Successfully processed all discounts`);
+        this.logger.log(`Successfully processed all discounts`);
       } catch (error) {
         // في حال فشل إضافة الخصم، نسجل الخطأ لكن لا نلغي العملية
-        console.error('[Transportation] Failed to create/update transportation discounts:', error);
+        this.logger.error(`Failed to create/update transportation discounts`, error instanceof Error ? error.stack : String(error));
       }
     }
 

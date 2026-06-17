@@ -6,6 +6,7 @@ import { PenaltiesModule } from '../penalties/penalties.module';
 import { BonusesModule } from '../bonuses/bonuses.module';
 import { LeavesModule } from '../leaves/leaves.module';
 import { EmployeesModule } from '../employees/employees.module';
+import { AttendanceModule } from '../attendance/attendance.module';
 
 @Module({
   imports: [
@@ -14,6 +15,7 @@ import { EmployeesModule } from '../employees/employees.module';
     BonusesModule,
     LeavesModule,
     EmployeesModule,
+    AttendanceModule,
   ],
   controllers: [TrashController],
   providers: [TrashService],

@@ -1,4 +1,4 @@
-import { Controller, Get, Logger, Query, Res, UseGuards } from '@nestjs/common';
+import { Controller, Get, InternalServerErrorException, Logger, Query, Res, UseGuards } from '@nestjs/common';
 import { Response } from 'express';
 import { ApiTags, ApiCookieAuth, ApiOperation } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
@@ -30,9 +30,10 @@ export class BackupController {
       });
 
       return buffer;
-    } catch (err) {
-      this.logger.error('Full backup export failed', err);
-      throw err;
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Export failed';
+      this.logger.error('Full backup export failed', err instanceof Error ? err.stack : String(err));
+      throw new InternalServerErrorException(`فشل التصدير: ${message}`);
     }
   }
 
@@ -59,9 +60,10 @@ export class BackupController {
       });
 
       return buffer;
-    } catch (err) {
-      this.logger.error(`Month backup export failed for ${period}`, err);
-      throw err;
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Export failed';
+      this.logger.error(`Month backup export failed for ${period}`, err instanceof Error ? err.stack : String(err));
+      throw new InternalServerErrorException(`فشل التصدير: ${message}`);
     }
   }
 }

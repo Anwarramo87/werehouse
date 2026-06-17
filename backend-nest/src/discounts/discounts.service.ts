@@ -44,7 +44,7 @@ export class DiscountsService {
       id: advance.id,
       employeeId: advance.employeeId,
       type: 'سلفة',
-      amount: this.toNumber(advance.remainingAmount ?? advance.totalAmount),
+      amount: this.toNumber(this.toNumber(advance.installmentAmount) > 0 ? advance.installmentAmount : advance.remainingAmount ?? advance.totalAmount),
       date: advance.issueDate.toISOString(),
       notes: advance.notes ?? null,
       kind: DiscountKind.ADVANCE,
@@ -84,31 +84,57 @@ export class DiscountsService {
         id: record.id,
         employeeId: record.employeeId,
         type: 'سلفة',
-        amount: this.toNumber(record.remainingAmount ?? record.totalAmount),
+        amount: this.toNumber(this.toNumber(record.installmentAmount) > 0 ? record.installmentAmount : record.remainingAmount ?? record.totalAmount),
         date: record.issueDate.toISOString(),
         notes: record.notes ?? null,
         kind: DiscountKind.ADVANCE,
       };
     }
 
-    const period = dto.date ? dto.date.slice(0, 7) : undefined;
+    // Create assistance/discount record through bonuses endpoint
+    const period = dto.date ? dto.date.slice(0, 7) : new Date().toISOString().slice(0, 7);
     
-    // لم نعد نستخدم assistanceAmount في discounts
-    // assistanceAmount الآن تُستخدم فقط في bonuses (مكافآت)
-    throw new BadRequestException('Use bonuses endpoint to create assistance records');
+    const record = await this.bonusesService.create({
+      employeeId: dto.employeeId,
+      bonusReason: dto.notes || 'خصم',
+      assistanceAmount: dto.amount,
+      period,
+    });
+
+    return {
+      id: record.id,
+      employeeId: record.employeeId,
+      type: record.bonusReason || 'خصم متنوع',
+      amount: this.toNumber(record.assistanceAmount),
+      date: record.createdAt.toISOString(),
+      notes: record.bonusReason ?? null,
+      kind: DiscountKind.ASSISTANCE,
+    };
   }
 
   async remove(id: string, kind?: DiscountKind, deletedBy?: string) {
     if (!kind) {
+      // Try advance first
       const advance = await this.advancesService.getById(id).catch(() => null);
       if (advance) {
         return this.advancesService.remove(id, deletedBy);
       }
+      
+      // Try bonus (assistance) next
+      const bonus = await this.bonusesService.getById(id).catch(() => null);
+      if (bonus) {
+        return this.bonusesService.remove(id, deletedBy);
+      }
+      
       throw new BadRequestException('Record not found');
     }
 
     if (kind === DiscountKind.ADVANCE) {
       return this.advancesService.remove(id, deletedBy);
+    }
+    
+    if (kind === DiscountKind.ASSISTANCE) {
+      return this.bonusesService.remove(id, deletedBy);
     }
 
     throw new BadRequestException('Invalid kind for discounts endpoint');
