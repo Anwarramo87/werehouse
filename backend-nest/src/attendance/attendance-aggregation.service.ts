@@ -1,0 +1,701 @@
+import { Injectable, Logger, BadRequestException } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import { Prisma, DailyRecordType } from '@prisma/client';
+import { PrismaService } from '../prisma/prisma.service';
+
+// ─── Constants ────────────────────────────────────────────────────────────────
+
+/** Saudi Arabia UTC+3 = 180 minutes (default) */
+const DEFAULT_TIMEZONE_OFFSET_MINUTES = 180;
+const HH_MM_REGEX = /^([01]\d|2[0-3]):([0-5]\d)$/;
+const MINUTES_IN_DAY = 1440;
+
+// ─── Types ────────────────────────────────────────────────────────────────────
+
+type ShiftPairJson = {
+  inRecordId?: string;
+  outRecordId?: string;
+  hoursWorked?: number;
+  minutesLate?: number;
+  gracePeriodApplied?: number;
+};
+
+type DailyPunchRecord = {
+  id: string;
+  type: string;
+  timestamp: Date;
+  shiftPair: Prisma.JsonValue | null;
+};
+
+type HourlyLeaveRecord = {
+  id: string;
+  startTime: string | null;
+  endTime: string | null;
+  isPaid: boolean;
+};
+
+type AggregationResult = {
+  employeeId: string;
+  date: string;
+  requiredMinutes: number;
+  actualWorkedMinutes: number;
+  calculatedDelayMinutes: number;
+  delayMinutesSubtracted: number;
+  grossMissingMinutes: number;
+  approvedLeaveMinutes: number;
+  finalMissingMinutes: number;
+  logsCreated: string[];
+};
+
+// ─── Service ──────────────────────────────────────────────────────────────────
+
+@Injectable()
+export class AttendanceAggregationService {
+  private readonly logger = new Logger(AttendanceAggregationService.name);
+  private readonly timezoneOffsetMinutes: number;
+
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly config: ConfigService,
+  ) {
+    this.timezoneOffsetMinutes =
+      this.config.get<number>('TIMEZONE_OFFSET_MINUTES') ??
+      DEFAULT_TIMEZONE_OFFSET_MINUTES;
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // Private Helpers
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  /**
+   * Parse "HH:mm" → total minutes since midnight.
+   * Returns null if the string is malformed.
+   */
+  private parseHHmmToMinutes(value: string | null | undefined): number | null {
+    if (!value) return null;
+    const match = HH_MM_REGEX.exec(value.slice(0, 5));
+    if (!match) return null;
+    return Number(match[1]) * 60 + Number(match[2]);
+  }
+
+  /**
+   * Convert a UTC timestamp to local minutes-since-midnight,
+   * applying the configured timezone offset.
+   */
+  private utcTimestampToLocalMinutes(utc: Date): number {
+    const utcMinutes = utc.getUTCHours() * 60 + utc.getUTCMinutes();
+    return ((utcMinutes + this.timezoneOffsetMinutes) % MINUTES_IN_DAY + MINUTES_IN_DAY) % MINUTES_IN_DAY;
+  }
+
+  /**
+   * Build the date-key (YYYY-MM-DD) from a Date, using UTC to stay
+   * consistent with how `AttendanceRecord.date` is stored.
+   */
+  private toDateKey(date: Date): string {
+    const y = date.getUTCFullYear();
+    const m = String(date.getUTCMonth() + 1).padStart(2, '0');
+    const d = String(date.getUTCDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+  }
+
+  /**
+   * Parse a date string (YYYY-MM-DD) into a UTC midnight Date (for Prisma @db.Date).
+   */
+  private toDateOnly(value: string): Date {
+    return new Date(`${value.slice(0, 10)}T00:00:00.000Z`);
+  }
+
+  /**
+   * Extract `minutesLate` from a shiftPair JSON blob.
+   * Returns 0 when absent or invalid.
+   */
+  private extractMinutesLate(shiftPair: Prisma.JsonValue | null): number {
+    if (!shiftPair || typeof shiftPair !== 'object' || Array.isArray(shiftPair)) return 0;
+    const raw = (shiftPair as Record<string, unknown>).minutesLate;
+    const parsed = Number(raw ?? 0);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+  }
+
+  /**
+   * Extract `hoursWorked` from a shiftPair JSON blob.
+   * Returns 0 when absent or invalid.
+   */
+  private extractHoursWorked(shiftPair: Prisma.JsonValue | null): number {
+    if (!shiftPair || typeof shiftPair !== 'object' || Array.isArray(shiftPair)) return 0;
+    const raw = (shiftPair as Record<string, unknown>).hoursWorked;
+    if (raw === null || raw === undefined) return 0;
+    if (typeof raw === 'number') return Number.isFinite(raw) ? raw : 0;
+    const parsed = Number(raw);
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
+
+  /**
+   * Calculate actual worked minutes from raw IN/OUT punch pairs for a single day.
+   *
+   * Strategy:
+   *  1. Sort all punches chronologically.
+   *  2. Walk through punches pairing IN → next OUT.
+   *  3. Sum the duration of each pair in minutes.
+   *
+   * Falls back to shiftPair.hoursWorked data when punch pairing yields 0
+   * and shiftPair data is available.
+   */
+  private calculateActualWorkedMinutes(punches: DailyPunchRecord[]): number {
+    if (punches.length === 0) return 0;
+
+    // Sort chronologically
+    const sorted = [...punches].sort(
+      (a, b) => a.timestamp.getTime() - b.timestamp.getTime(),
+    );
+
+    let workedMs = 0;
+    let pendingIn: Date | null = null;
+
+    for (const punch of sorted) {
+      const type = punch.type.toUpperCase();
+      if (type === 'IN') {
+        pendingIn = punch.timestamp;
+      } else if (type === 'OUT' && pendingIn) {
+        workedMs += punch.timestamp.getTime() - pendingIn.getTime();
+        pendingIn = null;
+      }
+    }
+
+    let workedMinutes = Math.round(workedMs / 60_000);
+
+    // Fallback: if pairing yields 0 but shiftPair has hoursWorked, use that
+    if (workedMinutes <= 0) {
+      let totalFromShiftPair = 0;
+      for (const punch of sorted) {
+        const hw = this.extractHoursWorked(punch.shiftPair);
+        if (hw > totalFromShiftPair) {
+          totalFromShiftPair = hw;
+        }
+      }
+      if (totalFromShiftPair > 0) {
+        workedMinutes = Math.round(totalFromShiftPair * 60);
+      }
+    }
+
+    return Math.max(0, workedMinutes);
+  }
+
+  /**
+   * Calculate the total DELAY_MINUTES already logged for this employee+date,
+   * to avoid double-penalizing the morning late arrival as "missing minutes".
+   */
+  private async getLoggedDelayMinutes(
+    employeeId: string,
+    date: Date,
+    tx: Prisma.TransactionClient,
+  ): Promise<number> {
+    const logs = await tx.dailyAttendanceLog.findMany({
+      where: {
+        employeeId,
+        date,
+        recordType: DailyRecordType.DELAY_MINUTES,
+      },
+      select: { value: true },
+    });
+
+    return logs.reduce((sum, log) => sum + Number(log.value || 0), 0);
+  }
+
+  /**
+   * Fetch approved hourly leave requests that overlap with the given date.
+   */
+  private async getApprovedHourlyLeaves(
+    employeeId: string,
+    date: Date,
+  ): Promise<HourlyLeaveRecord[]> {
+    return this.prisma.leaveRequest.findMany({
+      where: {
+        employeeId,
+        status: 'APPROVED',
+        isHourly: true,
+        startDate: { lte: date },
+        endDate: { gte: date },
+      },
+      select: {
+        id: true,
+        startTime: true,
+        endTime: true,
+        isPaid: true,
+      },
+    });
+  }
+
+  /**
+   * Calculate total approved leave minutes from hourly leave records.
+   */
+  private calculateApprovedLeaveMinutes(leaves: HourlyLeaveRecord[]): number {
+    let total = 0;
+    for (const leave of leaves) {
+      const startMin = this.parseHHmmToMinutes(leave.startTime);
+      const endMin = this.parseHHmmToMinutes(leave.endTime);
+      if (startMin === null || endMin === null) continue;
+      const duration = endMin - startMin;
+      if (duration > 0) total += duration;
+    }
+    return total;
+  }
+
+  /**
+   * Calculate morning delay minutes from the first IN punch of the day.
+   *
+   * Strategy:
+   *  1. Use shiftPair.minutesLate if available on the first IN punch.
+   *  2. Otherwise compute from UTC timestamp → local time − scheduledStart.
+   *  3. Apply grace period: if delay ≤ grace, effective delay = 0.
+   */
+  private calculateDelayFromPunches(
+    punches: DailyPunchRecord[],
+    scheduledStartMin: number,
+    gracePeriodMinutes: number,
+  ): number {
+    const sorted = [...punches].sort(
+      (a, b) => a.timestamp.getTime() - b.timestamp.getTime(),
+    );
+
+    const firstIn = sorted.find((p) => p.type.toUpperCase() === 'IN');
+    if (!firstIn) return 0;
+
+    // Prefer pre-calculated minutesLate from biometric shiftPair
+    const shiftPairMinutes = this.extractMinutesLate(firstIn.shiftPair);
+    if (shiftPairMinutes > 0) {
+      return Math.max(0, shiftPairMinutes - gracePeriodMinutes);
+    }
+
+    // Compute from UTC timestamp → local time
+    const localArrivalMin = this.utcTimestampToLocalMinutes(firstIn.timestamp);
+    const rawDelay = Math.max(0, localArrivalMin - scheduledStartMin);
+    return rawDelay > gracePeriodMinutes ? rawDelay - gracePeriodMinutes : 0;
+  }
+
+  /**
+   * Calculate early leave minutes from the last OUT punch of the day.
+   *
+   * This is computed INDEPENDENTLY from the delay calculation to avoid
+   * misattributing grace-period delay as early leave.
+   *
+   * Example: schedule 08:00–16:00, IN at 08:10, OUT at 15:55
+   *   → delay = (08:10 − 08:00) − grace = 5 min
+   *   → earlyLeave = 16:00 − 15:55 = 5 min  (NOT 10 min!)
+   */
+  private calculateEarlyLeaveFromPunches(
+    punches: DailyPunchRecord[],
+    scheduledEndMin: number,
+  ): number {
+    const sorted = [...punches].sort(
+      (a, b) => a.timestamp.getTime() - b.timestamp.getTime(),
+    );
+
+    // Walk backwards to find the last OUT punch
+    for (let i = sorted.length - 1; i >= 0; i--) {
+      if (sorted[i].type.toUpperCase() === 'OUT') {
+        const localDepartureMin = this.utcTimestampToLocalMinutes(sorted[i].timestamp);
+        return Math.max(0, scheduledEndMin - localDepartureMin);
+      }
+    }
+
+    // No OUT punch at all — entire shift is missing (handled as absence)
+    return 0;
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // Core: Single Employee + Single Date Aggregation
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  /**
+   * Calculate and persist the "missing minutes" breakdown for ONE employee
+   * on ONE specific date.
+   *
+   * Mathematical Flow:
+   *   Required Minutes     = scheduledEnd − scheduledStart
+   *   Actual Worked Minutes = sum of IN→OUT paired durations
+   *   Gross Missing Minutes = Required − Actual Worked
+   *   Net Unexcused Gap     = max(0, Gross Missing − Delay Already Penalized)
+   *   Final Missing Minutes = max(0, Net Unexcused Gap − Approved Leave Minutes)
+   */
+  async aggregateEmployeeDay(
+    employeeId: string,
+    dateStr: string,
+  ): Promise<AggregationResult | null> {
+    const dateOnly = this.toDateOnly(dateStr);
+
+    // ── Step 1: Fetch employee schedule ──────────────────────────────────────
+    const employee = await this.prisma.employee.findUnique({
+      where: { employeeId },
+      select: {
+        employeeId: true,
+        scheduledStart: true,
+        scheduledEnd: true,
+        gracePeriodMinutes: true,
+        status: true,
+      },
+    });
+
+    if (!employee) {
+      throw new BadRequestException(`Employee not found: ${employeeId}`);
+    }
+
+    const scheduledStartMin = this.parseHHmmToMinutes(employee.scheduledStart);
+    const scheduledEndMin = this.parseHHmmToMinutes(employee.scheduledEnd);
+
+    // Guard: skip if schedule is misconfigured
+    if (scheduledStartMin === null || scheduledEndMin === null) {
+      this.logger.debug(
+        `Skipping ${employeeId} on ${dateStr}: missing scheduledStart or scheduledEnd`,
+      );
+      return null;
+    }
+
+    // Required work duration for the day
+    const requiredMinutes = Math.max(0, scheduledEndMin - scheduledStartMin);
+    if (requiredMinutes <= 0) {
+      this.logger.debug(
+        `Skipping ${employeeId} on ${dateStr}: requiredMinutes is 0 (start=${employee.scheduledStart}, end=${employee.scheduledEnd})`,
+      );
+      return null;
+    }
+
+    // ── Step 2: Fetch raw attendance punches for the day ─────────────────────
+    const punches = await this.prisma.attendanceRecord.findMany({
+      where: { employeeId, date: dateStr },
+      orderBy: { timestamp: 'asc' },
+      select: {
+        id: true,
+        type: true,
+        timestamp: true,
+        shiftPair: true,
+      },
+    });
+
+    // If no punches at all, the employee is absent — skip missing-minutes calc.
+    // (Absence is handled by separate absence logic in payroll.)
+    if (punches.length === 0) {
+      return null;
+    }
+
+    // ── Step 3: Calculate actual worked minutes from IN/OUT pairs ─────────────
+    const actualWorkedMinutes = this.calculateActualWorkedMinutes(punches);
+
+    // ── Step 4: Calculate morning delay from first IN punch ──────────────────
+    const empGracePeriod = Number(employee.gracePeriodMinutes ?? 0);
+    const calculatedDelayMinutes = this.calculateDelayFromPunches(
+      punches,
+      scheduledStartMin,
+      empGracePeriod,
+    );
+
+    // ── Step 4b: Calculate early leave from last OUT punch (independent) ────
+    // This avoids misattributing grace-period delay as early leave.
+    const rawEarlyLeaveMinutes = this.calculateEarlyLeaveFromPunches(
+      punches,
+      scheduledEndMin,
+    );
+
+    // ── Step 5: Fetch approved hourly leaves ────────────────────────────────
+    const hourlyLeaves = await this.getApprovedHourlyLeaves(employeeId, dateOnly);
+    const approvedLeaveMinutes = this.calculateApprovedLeaveMinutes(hourlyLeaves);
+
+    // ── Step 6: Write to DailyAttendanceLog inside a $transaction ─────────────
+    const result = await this.prisma.$transaction(async (tx) => {
+      // ── Step A: Gross missing minutes ────────────────────────────────────
+      const grossMissingMinutes = Math.max(0, requiredMinutes - actualWorkedMinutes);
+
+      // ── Step B: Independent delay & early leave attribution ──────────────
+      // Delay = time arrived late (after grace), from first IN punch
+      // EarlyLeave = time left early, from last OUT punch
+      // Both are independently measured — no subtraction from each other.
+      const delayMinutesSubtracted = calculatedDelayMinutes;
+
+      // ── Step C: Cap early leave so delay+early ≤ grossMissing ────────────
+      // Edge case: rounding or edge scenarios could make the sum exceed gross.
+      const maxEarlyLeave = Math.max(0, grossMissingMinutes - calculatedDelayMinutes);
+      const cappedEarlyLeave = Math.min(rawEarlyLeaveMinutes, maxEarlyLeave);
+
+      // ── Step D: Offset by approved hourly leaves → Final Missing Minutes ─
+      const finalMissingMinutes = Math.max(0, cappedEarlyLeave - approvedLeaveMinutes);
+
+      // ── Step D: Clean existing calculated logs for this date ─────────────
+      // Delete previously calculated logs (idempotent re-run support).
+      // Only delete 'calculated' source logs to preserve manual entries.
+      await tx.dailyAttendanceLog.deleteMany({
+        where: {
+          employeeId,
+          date: dateOnly,
+          source: 'calculated',
+          recordType: {
+            in: [
+              DailyRecordType.DELAY_MINUTES,
+              DailyRecordType.EARLY_LEAVE_MINUTES,
+              DailyRecordType.PAID_LEAVE,
+              DailyRecordType.UNPAID_LEAVE,
+            ],
+          },
+        },
+      });
+
+      const logsCreated: string[] = [];
+
+      // ── Step E: Log DELAY_MINUTES (morning late arrival penalty) ─────────
+      if (calculatedDelayMinutes > 0) {
+        await tx.dailyAttendanceLog.create({
+          data: {
+            employeeId,
+            date: dateOnly,
+            recordType: DailyRecordType.DELAY_MINUTES,
+            value: new Prisma.Decimal(calculatedDelayMinutes),
+            source: 'calculated',
+            notes: `Auto-calculated delay: first IN local=${this.utcTimestampToLocalMinutes(punches.find((p) => p.type.toUpperCase() === 'IN')!.timestamp)}min, scheduled=${scheduledStartMin}min, grace=${empGracePeriod}min → delay=${calculatedDelayMinutes}min`,
+          },
+        });
+        logsCreated.push(`DELAY_MINUTES=${calculatedDelayMinutes}`);
+      }
+
+      // ── Step F: Log EARLY_LEAVE_MINUTES (remaining penalty after delay) ──
+      if (finalMissingMinutes > 0) {
+        await tx.dailyAttendanceLog.create({
+          data: {
+            employeeId,
+            date: dateOnly,
+            recordType: DailyRecordType.EARLY_LEAVE_MINUTES,
+            value: new Prisma.Decimal(finalMissingMinutes),
+            source: 'calculated',
+            notes: `Auto-calculated: required=${requiredMinutes}min, worked=${actualWorkedMinutes}min, raw_early=${rawEarlyLeaveMinutes}min, leave_offset=${approvedLeaveMinutes}min → early_leave_penalty=${finalMissingMinutes}min`,
+          },
+        });
+        logsCreated.push(`EARLY_LEAVE_MINUTES=${finalMissingMinutes}`);
+      }
+
+      // ── Step G: Log approved hourly leave breakdown ──────────────────────
+      if (approvedLeaveMinutes > 0) {
+        // Group leaves by paid/unpaid to log correctly
+        const paidLeaveMinutes = hourlyLeaves
+          .filter((l) => l.isPaid)
+          .reduce((sum, l) => {
+            const s = this.parseHHmmToMinutes(l.startTime);
+            const e = this.parseHHmmToMinutes(l.endTime);
+            return sum + (s !== null && e !== null ? Math.max(0, e - s) : 0);
+          }, 0);
+
+        const unpaidLeaveMinutes = hourlyLeaves
+          .filter((l) => !l.isPaid)
+          .reduce((sum, l) => {
+            const s = this.parseHHmmToMinutes(l.startTime);
+            const e = this.parseHHmmToMinutes(l.endTime);
+            return sum + (s !== null && e !== null ? Math.max(0, e - s) : 0);
+          }, 0);
+
+        if (paidLeaveMinutes > 0) {
+          await tx.dailyAttendanceLog.create({
+            data: {
+              employeeId,
+              date: dateOnly,
+              recordType: DailyRecordType.PAID_LEAVE,
+              value: new Prisma.Decimal(paidLeaveMinutes),
+              source: 'calculated',
+              notes: `Approved paid hourly leave: ${paidLeaveMinutes} minutes`,
+            },
+          });
+          logsCreated.push(`PAID_LEAVE=${paidLeaveMinutes}`);
+        }
+
+        if (unpaidLeaveMinutes > 0) {
+          await tx.dailyAttendanceLog.create({
+            data: {
+              employeeId,
+              date: dateOnly,
+              recordType: DailyRecordType.UNPAID_LEAVE,
+              value: new Prisma.Decimal(unpaidLeaveMinutes),
+              source: 'calculated',
+              notes: `Approved unpaid hourly leave: ${unpaidLeaveMinutes} minutes`,
+            },
+          });
+          logsCreated.push(`UNPAID_LEAVE=${unpaidLeaveMinutes}`);
+        }
+      }
+
+      return {
+        employeeId,
+        date: dateStr,
+        requiredMinutes,
+        actualWorkedMinutes,
+        calculatedDelayMinutes,
+        delayMinutesSubtracted,
+        grossMissingMinutes,
+        approvedLeaveMinutes,
+        finalMissingMinutes,
+        logsCreated,
+      } satisfies AggregationResult;
+    });
+
+    this.logger.log(
+      `[${employeeId}] ${dateStr}: delay=${result.calculatedDelayMinutes}min, ` +
+        `missing=${result.finalMissingMinutes}min ` +
+        `(required=${requiredMinutes}, worked=${actualWorkedMinutes}, ` +
+        `gross_missing=${result.grossMissingMinutes}, leave=${approvedLeaveMinutes})`,
+    );
+
+    return result;
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // Bulk: All employees for a single date
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  /**
+   * Run the missing-minutes aggregation for ALL active employees on a given date.
+   * Called by the End-of-Day cron or manually triggered.
+   */
+  async aggregateAllForDate(dateStr: string): Promise<{
+    date: string;
+    processedCount: number;
+    skippedCount: number;
+    results: AggregationResult[];
+  }> {
+    const employees = await this.prisma.employee.findMany({
+      where: { status: 'active' },
+      select: { employeeId: true },
+    });
+
+    const results: AggregationResult[] = [];
+    let skippedCount = 0;
+
+    for (const emp of employees) {
+      try {
+        const result = await this.aggregateEmployeeDay(emp.employeeId, dateStr);
+        if (result) {
+          results.push(result);
+        } else {
+          skippedCount++;
+        }
+      } catch (err) {
+        this.logger.error(
+          `Failed to aggregate ${emp.employeeId} for ${dateStr}: ${
+            (err as Error).message
+          }`,
+        );
+        skippedCount++;
+      }
+    }
+
+    this.logger.log(
+      `Daily aggregation complete for ${dateStr}: ` +
+        `${results.length} processed, ${skippedCount} skipped`,
+    );
+
+    return {
+      date: dateStr,
+      processedCount: results.length,
+      skippedCount,
+      results,
+    };
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // Bulk: Date range
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  /**
+   * Run the aggregation for all active employees across a date range.
+   * Iterates day-by-day to ensure clean per-day processing.
+   */
+  async aggregateRange(
+    startDateStr: string,
+    endDateStr: string,
+  ): Promise<{
+    startDate: string;
+    endDate: string;
+    totalProcessed: number;
+    totalSkipped: number;
+    dailySummaries: Array<{
+      date: string;
+      processedCount: number;
+      skippedCount: number;
+    }>;
+  }> {
+    if (startDateStr > endDateStr) {
+      throw new BadRequestException('startDate must be before or equal to endDate');
+    }
+
+    const dailySummaries: Array<{
+      date: string;
+      processedCount: number;
+      skippedCount: number;
+    }> = [];
+    let totalProcessed = 0;
+    let totalSkipped = 0;
+
+    // Iterate day-by-day
+    const cursor = new Date(`${startDateStr}T00:00:00.000Z`);
+    const end = new Date(`${endDateStr}T00:00:00.000Z`);
+
+    while (cursor <= end) {
+      const dayStr = this.toDateKey(cursor);
+      const dayResult = await this.aggregateAllForDate(dayStr);
+      totalProcessed += dayResult.processedCount;
+      totalSkipped += dayResult.skippedCount;
+      dailySummaries.push({
+        date: dayStr,
+        processedCount: dayResult.processedCount,
+        skippedCount: dayResult.skippedCount,
+      });
+
+      // Advance to next day
+      cursor.setUTCDate(cursor.getUTCDate() + 1);
+    }
+
+    return {
+      startDate: startDateStr,
+      endDate: endDateStr,
+      totalProcessed,
+      totalSkipped,
+      dailySummaries,
+    };
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // Read: Sum EARLY_LEAVE_MINUTES from DailyAttendanceLog for payroll
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  /**
+   * Sum all EARLY_LEAVE_MINUTES logs for a set of employees within a date period.
+   * Used by PayrollRunService to compute financial deductions.
+   *
+   * Returns a Map<employeeId, totalEarlyLeaveMinutes>.
+   */
+  async sumEarlyLeaveMinutesForPeriod(
+    employeeIds: string[],
+    periodStart: string,
+    periodEnd: string,
+  ): Promise<Map<string, number>> {
+    const logs = await this.prisma.dailyAttendanceLog.findMany({
+      where: {
+        employeeId: { in: employeeIds },
+        recordType: DailyRecordType.EARLY_LEAVE_MINUTES,
+        date: {
+          gte: this.toDateOnly(periodStart),
+          lte: this.toDateOnly(periodEnd),
+        },
+      },
+      select: {
+        employeeId: true,
+        value: true,
+      },
+    });
+
+    const result = new Map<string, number>();
+    for (const log of logs) {
+      const minutes = Number(log.value || 0);
+      if (!Number.isFinite(minutes) || minutes <= 0) continue;
+      result.set(
+        log.employeeId,
+        (result.get(log.employeeId) || 0) + minutes,
+      );
+    }
+
+    return result;
+  }
+}

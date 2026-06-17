@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { DuplicateHandlingService, DuplicateStrategy } from './duplicate-handling.service';
+import { AttendanceAggregationService } from '../attendance/attendance-aggregation.service';
 import ZKLib from 'zklib';
 
 interface RawBiometricLog {
@@ -32,6 +33,7 @@ export class BiometricService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly duplicateHandler: DuplicateHandlingService,
+    private readonly aggregationService: AttendanceAggregationService,
   ) {
     this.useSimulator = process.env.USE_BIOMETRIC_SIMULATOR === 'true';
     this.deviceIp = process.env.BIOMETRIC_DEVICE_IP || '192.168.1.201';
@@ -298,6 +300,10 @@ export class BiometricService {
       let errors = 0;
       const results = [];
 
+      // Track unique (employeeId, date) pairs that were touched by this sync.
+      // Used to trigger real-time aggregation after the sync loop.
+      const touchedEmployeeDates = new Set<string>();
+
       // Insert with smart duplicate handling
       for (const log of processedLogs) {
         try {
@@ -354,6 +360,9 @@ export class BiometricService {
               duplicateReason: duplicateCheck.reason,
             });
 
+            // Mark this (employeeId, date) for post-sync aggregation
+            touchedEmployeeDates.add(`${log.employeeId}|${dateStr}`);
+
             this.logger.log(
               `🔄 Updated: ${log.employeeId} - ${log.type} at ${log.timestamp.toLocaleTimeString()}`,
             );
@@ -387,6 +396,9 @@ export class BiometricService {
             },
           });
 
+          // Mark this (employeeId, date) for post-sync aggregation
+          touchedEmployeeDates.add(`${log.employeeId}|${dateStr}`);
+
           this.logger.log(
             `✅ Synced: ${log.employeeId} - ${log.type} at ${log.timestamp.toLocaleTimeString()}`,
           );
@@ -400,6 +412,24 @@ export class BiometricService {
       this.logger.log(
         `🎉 Sync complete: ${synced} new, ${updated} updated, ${skipped} skipped, ${errors} errors`,
       );
+
+      // ── Real-time Aggregation: recalculate missing minutes for every touched day ──
+      // Fire-and-forget: runs asynchronously so it doesn't block the sync response.
+      if (touchedEmployeeDates.size > 0) {
+        this.logger.log(
+          `⚡ Triggering real-time aggregation for ${touchedEmployeeDates.size} employee-day(s)`,
+        );
+        for (const key of touchedEmployeeDates) {
+          const [employeeId, dateStr] = key.split('|');
+          this.aggregationService
+            .aggregateEmployeeDay(employeeId, dateStr)
+            .catch((err) =>
+              this.logger.error(
+                `⚠️ Real-time aggregation failed for ${employeeId} on ${dateStr}: ${err.message}`,
+              ),
+            );
+        }
+      }
 
       return {
         success: true,

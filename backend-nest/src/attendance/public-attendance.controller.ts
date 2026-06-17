@@ -4,10 +4,12 @@ import {
   Post,
   Get,
   Param,
+  Logger,
   BadRequestException,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation } from '@nestjs/swagger';
 import { AttendanceService } from './attendance.service';
+import { AttendanceAggregationService } from './attendance-aggregation.service';
 import { PrismaService } from '../prisma/prisma.service';
 
 const TIMEZONE_OFFSET_MS = 3 * 60 * 60 * 1000; // UTC+3 Saudi Arabia
@@ -15,9 +17,12 @@ const TIMEZONE_OFFSET_MS = 3 * 60 * 60 * 1000; // UTC+3 Saudi Arabia
 @ApiTags('attendance')
 @Controller('attendance/public')
 export class PublicAttendanceController {
+  private readonly logger = new Logger(PublicAttendanceController.name);
+
   constructor(
     private readonly attendanceService: AttendanceService,
     private readonly prisma: PrismaService,
+    private readonly aggregationService: AttendanceAggregationService,
   ) {}
 
   private getLocalNow(): Date {
@@ -70,6 +75,16 @@ export class PublicAttendanceController {
         verified: true,
       },
     });
+
+    // ── Real-time aggregation: re-calculate missing minutes immediately ──
+    // Fire-and-forget so the check-in response is not blocked.
+    this.aggregationService
+      .aggregateEmployeeDay(employeeId, dateKey)
+      .catch((err) =>
+        this.logger.error(
+          `⚠️ Real-time aggregation failed (check-in) for ${employeeId}: ${err.message}`,
+        ),
+      );
 
     return {
       message: 'Check-in successful',
@@ -147,6 +162,16 @@ export class PublicAttendanceController {
 
       return outRecord;
     });
+
+    // ── Real-time aggregation: re-calculate missing minutes immediately ──
+    // Fires AFTER the transaction commits, ensuring the OUT punch is visible.
+    this.aggregationService
+      .aggregateEmployeeDay(employeeId, dateKey)
+      .catch((err) =>
+        this.logger.error(
+          `⚠️ Real-time aggregation failed (check-out) for ${employeeId}: ${err.message}`,
+        ),
+      );
 
     return {
       message: 'Check-out successful',
