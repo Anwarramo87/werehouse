@@ -355,6 +355,8 @@ model PayrollItem {
   netPayRounded      Decimal  @default(0) @db.Decimal(14, 2)
   roundingDifference Decimal  @default(0) @db.Decimal(14, 2)
   netPayWithAdvance  Decimal  @default(0) @db.Decimal(14, 2)
+  earlyLeaveMinutes  Int      @default(0)
+  earlyLeaveDeduction Decimal @default(0) @db.Decimal(14, 2)
   anomalies          String[] @default([])
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt
