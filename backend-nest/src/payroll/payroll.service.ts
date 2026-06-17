@@ -263,35 +263,34 @@ export class PayrollService {
       throw new NotFoundException(`Employee with ID ${employeeId} not found.`);
     }
 
-    // 2. Fetch bonuses up to termination date
-    const bonuses = await this.prisma.employeeBonus.findMany({
-      where: {
-        employeeId,
-        period: month,
-      },
-    });
+    // 2. Fetch bonuses, advances, and penalties in parallel
+    const [bonuses, advances, penalties] = await Promise.all([
+      this.prisma.employeeBonus.findMany({
+        where: {
+          employeeId,
+          period: month,
+        },
+      }),
+      this.prisma.employeeAdvance.findMany({
+        where: {
+          employeeId,
+          issueDate: { lte: terminationDate },
+          remainingAmount: { gt: 0 },
+        },
+      }),
+      this.prisma.employeePenalty.findMany({
+        where: {
+          employeeId,
+          issueDate: { lte: terminationDate },
+        },
+      }),
+    ]);
+
     const totalBonuses = bonuses.reduce((sum, b) => {
       return sum.plus(this.toDecimal(b.bonusAmount)).plus(this.toDecimal(b.assistanceAmount));
     }, new Prisma.Decimal(0));
 
-    // 3. Fetch deductions (advances and penalties) up to termination date
-    const advances = await this.prisma.employeeAdvance.findMany({
-      where: {
-        employeeId,
-        issueDate: { lte: terminationDate },
-        remainingAmount: { gt: 0 },
-      },
-    });
-
-    const penalties = await this.prisma.employeePenalty.findMany({
-      where: {
-        employeeId,
-        issueDate: { lte: terminationDate },
-      },
-    });
-    
     const totalAdvances = advances.reduce((sum, a) => {
-      // Deduct only the installment amount, or remaining amount if less
       const installment = this.toDecimal(a.installmentAmount).toNumber();
       const remaining = this.toDecimal(a.remainingAmount).toNumber();
       const deductible = Math.min(installment, remaining);

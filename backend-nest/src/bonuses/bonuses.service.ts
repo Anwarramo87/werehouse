@@ -2,6 +2,7 @@ import { BadRequestException, Injectable, NotFoundException } from '@nestjs/comm
 import { Prisma } from '@prisma/client';
 import { paginatedResponse, resolvePagination } from '../common/utils/pagination.util';
 import { PrismaService } from '../prisma/prisma.service';
+import { ShortCacheService } from '../common/cache/short-cache.service';
 import { CreateBonusDto } from './dto/create-bonus.dto';
 import { UpdateBonusDto } from './dto/update-bonus.dto';
 import { BonusesListQueryDto } from './dto/bonuses-list-query.dto';
@@ -10,7 +11,10 @@ const BONUS_DELETION_ENTITY = 'bonus';
 
 @Injectable()
 export class BonusesService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly shortCache: ShortCacheService,
+  ) {}
 
   private toHistoryPayload(value: unknown): Prisma.InputJsonValue {
     return JSON.parse(JSON.stringify(value)) as Prisma.InputJsonValue;
@@ -75,7 +79,7 @@ export class BonusesService {
     const now = new Date();
     const period = dto.period ?? `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
 
-    return this.prisma.employeeBonus.create({
+    const result = await this.prisma.employeeBonus.create({
       data: {
         employeeId:      dto.employeeId,
         bonusAmount:     new Prisma.Decimal(dto.bonusAmount     ?? 0),
@@ -84,11 +88,14 @@ export class BonusesService {
         period,
       },
     });
+
+    await this.shortCache.invalidatePrefix('employees:stats');
+    return result;
   }
 
   async update(id: string, dto: UpdateBonusDto) {
     await this.getById(id);
-    return this.prisma.employeeBonus.update({
+    const result = await this.prisma.employeeBonus.update({
       where: { id },
       data: {
         ...(dto.bonusAmount      !== undefined && { bonusAmount:      new Prisma.Decimal(dto.bonusAmount) }),
@@ -97,6 +104,9 @@ export class BonusesService {
         ...(dto.period           !== undefined && { period:           dto.period }),
       },
     });
+
+    await this.shortCache.invalidatePrefix('employees:stats');
+    return result;
   }
 
   async remove(id: string, deletedBy?: string) {
@@ -115,6 +125,7 @@ export class BonusesService {
       await tx.employeeBonus.delete({ where: { id: record.id } });
     });
 
+    await this.shortCache.invalidatePrefix('employees:stats');
     return { message: 'Reward deleted and archived successfully' };
   }
 

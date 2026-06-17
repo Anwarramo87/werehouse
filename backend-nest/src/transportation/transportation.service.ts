@@ -11,8 +11,6 @@ import { CreateBusDto } from './dto/create-bus.dto';
 import { UpdateBusDto } from './dto/update-bus.dto';
 import { AddPassengerDto } from './dto/add-passenger.dto';
 import { randomBytes } from 'crypto';
-import { DiscountsService } from '../discounts/discounts.service';
-import { DiscountKind } from '../discounts/dto/create-discount.dto';
 
 @Injectable()
 export class TransportationService {
@@ -20,7 +18,6 @@ export class TransportationService {
 
   constructor(
     private readonly prisma: PrismaService,
-    private readonly discountsService: DiscountsService,
   ) {}
 
   private generateBusId(): string {
@@ -266,44 +263,54 @@ export class TransportationService {
 
         this.logger.log(`Processing ${allPassengers.length} passengers, cost per employee: ${costPerEmployee}`);
 
-        for (const p of allPassengers) {
-          // البحث عن خصم موجود لهذا الموظف لهذا الباص
-          const existingDiscounts = await this.prisma.$queryRaw<any[]>`
-            SELECT eb.id, eb."employeeId", eb."bonusReason", eb."assistanceAmount"
-            FROM "EmployeeBonus" eb
-            WHERE eb."employeeId" = ${p.employeeId}
-            AND eb."bonusReason" LIKE ${`%${bus.plateNumber}%`}
-            AND eb."deletedAt" IS NULL
-          `;
+        // 1) قراءة جميع الخصومات الموجودة بالتوازي
+        const existingDiscountsPerPassenger = await Promise.all(
+          allPassengers.map(p =>
+            this.prisma.$queryRaw<any[]>`
+              SELECT eb.id, eb."employeeId", eb."bonusReason", eb."assistanceAmount"
+              FROM "EmployeeBonus" eb
+              WHERE eb."employeeId" = ${p.employeeId}
+              AND eb."bonusReason" LIKE ${`%${bus.plateNumber}%`}
+              AND eb."deletedAt" IS NULL
+            `,
+          ),
+        );
 
-          if (existingDiscounts.length > 0) {
-            // تحديث الخصم الموجود
-            const discountId = existingDiscounts[0].id;
-            const oldAmount = existingDiscounts[0].assistanceAmount;
-            this.logger.debug(`Updating discount for ${p.employeeId}: ${oldAmount} → ${costPerEmployee}`);
-            
-            await this.prisma.employeeBonus.update({
-              where: { id: discountId },
-              data: {
-                assistanceAmount: new Prisma.Decimal(costPerEmployee.toString()),
-              },
-            });
+        // 2) بناء عمليات الكتابة: تحديث أو إنشاء
+        const writeOps: Prisma.PrismaPromise<any>[] = [];
+
+        for (let i = 0; i < allPassengers.length; i++) {
+          const p = allPassengers[i];
+          const existing = existingDiscountsPerPassenger[i];
+
+          if (existing.length > 0) {
+            this.logger.debug(`Updating discount for ${p.employeeId}: ${existing[0].assistanceAmount} → ${costPerEmployee}`);
+            writeOps.push(
+              this.prisma.employeeBonus.update({
+                where: { id: existing[0].id },
+                data: { assistanceAmount: new Prisma.Decimal(costPerEmployee.toString()) },
+              }),
+            );
           } else {
-            // إضافة خصم جديد
             this.logger.debug(`Creating new discount for ${p.employeeId}: ${costPerEmployee}`);
-            
-            await this.discountsService.create(
-              {
-                employeeId: p.employeeId,
-                type: transportReason, // نستخدم type لأن bonusReason يُخزّن من type
-                kind: DiscountKind.ASSISTANCE,
-                amount: costPerEmployee,
-                date: new Date().toISOString().split('T')[0],
-                notes: transportReason,
-              },
-              DiscountKind.ASSISTANCE,
+            const period = new Date().toISOString().slice(0, 7);
+            writeOps.push(
+              this.prisma.employeeBonus.create({
+                data: {
+                  employeeId: p.employeeId,
+                  bonusAmount: new Prisma.Decimal(0),
+                  bonusReason: transportReason,
+                  assistanceAmount: new Prisma.Decimal(costPerEmployee.toString()),
+                  period,
+                },
+              }),
             );
           }
+        }
+
+        // 3) تنفيذ جميع العمليات في transaction واحد
+        if (writeOps.length > 0) {
+          await this.prisma.$transaction(writeOps);
         }
         
         this.logger.log(`Successfully processed all discounts`);

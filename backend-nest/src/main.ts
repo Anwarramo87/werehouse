@@ -8,6 +8,7 @@ import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { ZodValidationPipe } from 'nestjs-zod';
 import helmet from 'helmet';
 import compression from 'compression';
+import responseTime from 'response-time';
 import cookieParser from 'cookie-parser';
 
 import { AppModule } from './app.module';
@@ -123,6 +124,14 @@ async function bootstrap() {
 
   app.use(compression());
   app.use(cookieParser());
+
+  // --- Response-Time Monitoring ---
+  app.use(responseTime((req, res, time) => {
+    res.setHeader('X-Response-Time', `${time.toFixed(2)}ms`);
+    if (time > 500) {
+      logger.warn(`Slow request: ${req.method} ${req.url} took ${time.toFixed(0)}ms`);
+    }
+  }));
 
   // --- Global Filters & Pipes ---
   app.useGlobalFilters(new GlobalExceptionFilter());
