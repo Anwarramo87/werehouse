@@ -74,29 +74,7 @@ export class PayrollService {
     return enabled ? fallback : 0;
   }
 
-  private extractMinutesLate(shiftPair: Prisma.JsonValue | null): number {
-    if (!shiftPair || typeof shiftPair !== 'object' || Array.isArray(shiftPair)) {
-      return 0;
-    }
 
-    const raw = (shiftPair as Record<string, unknown>).minutesLate;
-    const parsed = Number(raw ?? 0);
-    if (!Number.isFinite(parsed) || parsed <= 0) {
-      return 0;
-    }
-
-    return parsed;
-  }
-  
-  private extractHoursWorked(shiftPair: Prisma.JsonValue | null): number {
-    if (!shiftPair || typeof shiftPair !== 'object') return 0;
-    
-    const raw = (shiftPair as Record<string, unknown>).hoursWorked;
-    if (raw === null || raw === undefined) return 0;
-    if (typeof raw === 'number') return Number.isFinite(raw) ? raw : 0;
-    const parsed = Number(raw);
-    return Number.isFinite(parsed) ? parsed : 0;
-  }
 
   private resolvePeriod(periodStart?: string, periodEnd?: string) {
     if (periodStart && periodEnd) {
@@ -250,38 +228,237 @@ export class PayrollService {
     });
   }
 
-  async calculateProvisionalSettlement(employeeId: string, terminationDateStr: string) {
-    const terminationDate = new Date(terminationDateStr);
-    const month = terminationDateStr.substring(0, 7); // YYYY-MM
-
-    const [employee, employeeSalary] = await Promise.all([
-      this.prisma.employee.findUnique({ where: { employeeId } }),
+  /**
+   * Compute earned salary for a partial period (from periodStart to endDate)
+   * using DailyAttendanceLog as the single source of truth for attendance metrics.
+   *
+   * Multipliers strictly applied:
+   *   - Morning Delay penalty:  1.5× minuteWage per late minute
+   *   - Early Leave penalty:    1.0× minuteWage per early-leave minute
+   *   - Normal Overtime bonus:  1.5× minuteWage per weekday overtime minute
+   *   - Weekend Overtime bonus: 2.0× dailyWage per Friday overtime day
+   *
+   * Returns the net earned salary (prorated base + overtime bonuses − attendance penalties).
+   */
+  private async computeEarnedSalaryForPeriod(
+    employeeId: string,
+    periodStart: Date,
+    endDate: Date,
+    workDays: number,
+    hoursPerDayEmp: number,
+  ): Promise<Prisma.Decimal> {
+    // Fetch salary config
+    const [employee, salaryRecord] = await Promise.all([
+      this.prisma.employee.findUnique({
+        where: { employeeId },
+        select: { hourlyRate: true, baseSalary: true },
+      }),
       this.prisma.employeeSalary.findUnique({ where: { employeeId } }),
     ]);
 
     if (!employee) {
+      throw new NotFoundException(`Employee ${employeeId} not found`);
+    }
+
+    // Count attendance days from IN records within [periodStart, endDate]
+    const attendanceInRecords = await this.prisma.attendanceRecord.findMany({
+      where: {
+        employeeId,
+        type: 'IN',
+        date: {
+          gte: periodStart.toISOString().slice(0, 10),
+          lte: endDate.toISOString().slice(0, 10),
+        },
+      },
+      select: { date: true },
+    });
+    const uniqueDates = new Set(attendanceInRecords.map((r) => r.date));
+    const attendanceDays = uniqueDates.size;
+
+    // ── Trigger real-time aggregation for each attendance date ──
+    // DailyAttendanceLog (DELAY_MINUTES, EARLY_LEAVE_MINUTES, OVERTIME_MINUTES)
+    // may not yet exist for these dates. Aggregate now so the queries below
+    // pick up the freshly computed penalty records.
+    if (this.aggregationService && uniqueDates.size > 0) {
+      await Promise.all(
+        [...uniqueDates].map((dateStr) =>
+          this.aggregationService!
+            .aggregateEmployeeDay(employeeId, dateStr)
+            .catch((err) =>
+              this.logger.warn(
+                `[EARNED] Aggregation failed for ${employeeId} on ${dateStr}: ${err.message}`,
+              ),
+            ),
+        ),
+      );
+    }
+
+    // Fetch DailyAttendanceLog records for the partial period
+    const fromDate = new Date(periodStart);
+    const toDate = new Date(endDate);
+    toDate.setUTCHours(23, 59, 59, 999);
+
+    const [delayLogs, overtimeLogs, earlyLeaveLogs] = await Promise.all([
+      this.prisma.dailyAttendanceLog.findMany({
+        where: {
+          employeeId,
+          recordType: 'DELAY_MINUTES',
+          date: { gte: fromDate, lte: toDate },
+        },
+        select: { value: true },
+      }),
+      this.prisma.dailyAttendanceLog.findMany({
+        where: {
+          employeeId,
+          recordType: 'OVERTIME_MINUTES',
+          date: { gte: fromDate, lte: toDate },
+        },
+        select: { date: true, value: true },
+      }),
+      this.prisma.dailyAttendanceLog.findMany({
+        where: {
+          employeeId,
+          recordType: 'EARLY_LEAVE_MINUTES',
+          date: { gte: fromDate, lte: toDate },
+        },
+        select: { value: true },
+      }),
+    ]);
+
+    // ── g3 formula: baseSalary + livingAllowance + lumpSumSalary ──
+    const fallbackBaseSalary = Number(employee.hourlyRate || 0) * hoursPerDayEmp * workDays;
+    const baseSalary = this.toDecimal(
+      salaryRecord?.baseSalary ?? employee.baseSalary ?? fallbackBaseSalary,
+    );
+    const livingAllowance = this.toDecimal(salaryRecord?.livingAllowance ?? 0);
+    const lumpSumSalary = this.toDecimal(salaryRecord?.lumpSumSalary ?? 0);
+
+    const g3 = baseSalary
+      .plus(livingAllowance)
+      .plus(lumpSumSalary);
+    const dailyWage = g3.div(STANDARD_WORK_DAYS);
+    const hourlyWage = dailyWage.div(new Prisma.Decimal(hoursPerDayEmp));
+    const minuteWage = hourlyWage.div(MINUTES_PER_HOUR);
+
+    // 1. Prorated earned base = dailyWage × attendance days actually worked
+    const earnedBase = dailyWage.times(this.toDecimal(attendanceDays));
+
+    // 2. Aggregate DELAY_MINUTES → penalty at 1.5× minuteWage
+    let totalDelayMinutes = 0;
+    for (const log of delayLogs) {
+      const minutes = Number(log.value ?? 0);
+      if (Number.isFinite(minutes) && minutes > 0) {
+        totalDelayMinutes += minutes;
+      }
+    }
+    const latePenalty = minuteWage
+      .times(this.toDecimal(totalDelayMinutes))
+      .times(new Prisma.Decimal(1.5));
+
+    // 3. Aggregate EARLY_LEAVE_MINUTES → penalty at 1.0× minuteWage
+    let totalEarlyLeaveMinutes = 0;
+    for (const log of earlyLeaveLogs) {
+      const minutes = Number(log.value ?? 0);
+      if (Number.isFinite(minutes) && minutes > 0) {
+        totalEarlyLeaveMinutes += minutes;
+      }
+    }
+    const earlyLeavePenalty = minuteWage.times(this.toDecimal(totalEarlyLeaveMinutes));
+
+    // 4. Aggregate OVERTIME_MINUTES → classify weekday vs weekend (Friday)
+    let weekdayOvertimeMinutes = 0;
+    let weekendOvertimeDays = 0;
+
+    for (const log of overtimeLogs) {
+      const minutes = Number(log.value ?? 0);
+      if (!Number.isFinite(minutes) || minutes <= 0) continue;
+
+      const d = new Date(log.date);
+      if (d.getDay() === 5) {
+        // Friday = weekend → count as weekend overtime day
+        weekendOvertimeDays += 1;
+      } else {
+        weekdayOvertimeMinutes += minutes;
+      }
+    }
+
+    // Weekday overtime bonus: 1.5× minuteWage
+    const overtimeRegularPay = minuteWage
+      .times(new Prisma.Decimal(1.5))
+      .times(this.toDecimal(weekdayOvertimeMinutes));
+
+    // Weekend overtime bonus: 2.0× dailyWage per Friday day
+    const overtimeWeekendPay = dailyWage
+      .times(new Prisma.Decimal(2.0))
+      .times(this.toDecimal(weekendOvertimeDays));
+
+    // 5. Net earned salary = earnedBase + overtime bonuses − attendance penalties
+    const netEarned = earnedBase
+      .plus(overtimeRegularPay)
+      .plus(overtimeWeekendPay)
+      .minus(latePenalty)
+      .minus(earlyLeavePenalty);
+
+    this.logger.log(
+      `[EARNED] ${employeeId} ${periodStart.toISOString().slice(0,10)}→${endDate.toISOString().slice(0,10)} ` +
+      `g3=${g3.toFixed(2)} days=${attendanceDays} delay=${totalDelayMinutes}min early=${totalEarlyLeaveMinutes}min ` +
+      `otWeekday=${weekdayOvertimeMinutes}min otWeekendDays=${weekendOvertimeDays} net=${netEarned.toFixed(2)}`,
+    );
+
+    return netEarned;
+  }
+
+  async calculateProvisionalSettlement(employeeId: string, terminationDateStr: string) {
+    const terminationDate = new Date(terminationDateStr);
+    const month = terminationDateStr.substring(0, 7); // YYYY-MM
+
+    // Compute month boundaries for bonus filtering
+    const [yearStr, monthStr] = month.split('-');
+    const monthStart = new Date(Date.UTC(Number(yearStr), Number(monthStr) - 1, 1));
+    const monthEnd = new Date(Date.UTC(Number(yearStr), Number(monthStr), 0, 23, 59, 59, 999));
+
+    // 1. Fetch employee record
+    const employee = await this.prisma.employee.findUnique({ where: { employeeId } });
+    if (!employee) {
       throw new NotFoundException(`Employee with ID ${employeeId} not found.`);
     }
 
-    // 2. Fetch bonuses, advances, and penalties in parallel
+    const workDays = employee.workDaysInPeriod ?? 26;
+    const hoursPerDayEmp = employee.hoursPerDay ?? 8;
+
+    // 2. Compute earned salary dynamically from DailyAttendanceLog (start of month → terminationDate)
+    const periodStart = new Date(Date.UTC(Number(yearStr), Number(monthStr) - 1, 1));
+    const earnedSalary = await this.computeEarnedSalaryForPeriod(
+      employeeId,
+      periodStart,
+      terminationDate,
+      workDays,
+      hoursPerDayEmp,
+    );
+
+    // 3. Use end-of-day for date comparisons (terminationDate may be midnight UTC)
+    const terminationEndOfDay = new Date(terminationDate);
+    terminationEndOfDay.setUTCHours(23, 59, 59, 999);
+
+    // 4. Fetch bonuses, advances, penalties in parallel
     const [bonuses, advances, penalties] = await Promise.all([
       this.prisma.employeeBonus.findMany({
         where: {
           employeeId,
-          period: month,
+          createdAt: { gte: monthStart, lte: monthEnd },
         },
       }),
       this.prisma.employeeAdvance.findMany({
         where: {
           employeeId,
-          issueDate: { lte: terminationDate },
+          issueDate: { lte: terminationEndOfDay },
           remainingAmount: { gt: 0 },
         },
       }),
       this.prisma.employeePenalty.findMany({
         where: {
           employeeId,
-          issueDate: { lte: terminationDate },
+          issueDate: { lte: terminationEndOfDay },
         },
       }),
     ]);
@@ -293,7 +470,9 @@ export class PayrollService {
     const totalAdvances = advances.reduce((sum, a) => {
       const installment = this.toDecimal(a.installmentAmount).toNumber();
       const remaining = this.toDecimal(a.remainingAmount).toNumber();
-      const deductible = Math.min(installment, remaining);
+      // Lump-sum advance (installment=0): deduct entire remaining amount
+      // Installment-based: deduct the smaller of installment or remaining
+      const deductible = installment > 0 ? Math.min(installment, remaining) : remaining;
       return sum.plus(new Prisma.Decimal(deductible));
     }, new Prisma.Decimal(0));
 
@@ -301,28 +480,37 @@ export class PayrollService {
       return sum.plus(this.toDecimal(p.amount));
     }, new Prisma.Decimal(0));
 
-    const otherDeductions = this.toDecimal(employeeSalary?.insuranceAmount);
+    const employeeSalary = await this.prisma.employeeSalary.findUnique({ where: { employeeId } });
+    const insuranceDeduction = this.toDecimal(employeeSalary?.insuranceAmount);
 
-    const totalDeductions = totalAdvances.plus(totalPenalties).plus(otherDeductions);
-
-    // 4. Calculate earned salary using the same g3 formula as processPayrollRun
-    let earnedSalary = new Prisma.Decimal(0);
-    if (employee.baseSalary || employeeSalary) {
-      const baseSalary = this.toDecimal(employeeSalary?.baseSalary ?? employee.baseSalary ?? 0);
-      const livingAllowance = this.toDecimal(employeeSalary?.livingAllowance ?? 0);
-      const lumpSumSalary = this.toDecimal(employeeSalary?.lumpSumSalary ?? 0);
-      const g3 = baseSalary.plus(livingAllowance).plus(lumpSumSalary);
-      const dailyWage = g3.div(STANDARD_WORK_DAYS);
-      const daysWorkedInTerminationMonth = new Prisma.Decimal(terminationDate.getDate());
-      earnedSalary = dailyWage.mul(daysWorkedInTerminationMonth);
-    } else if (employee.hourlyRate) {
-      const hourlyRate = this.toDecimal(employee.hourlyRate);
-      const hoursPerDay = this.toDecimal(employee.hoursPerDay ?? WORK_HOURS_PER_DAY);
-      const daysWorkedInTerminationMonth = new Prisma.Decimal(terminationDate.getDate());
-      earnedSalary = hourlyRate.mul(hoursPerDay).mul(daysWorkedInTerminationMonth);
+    // 5. Bus subscription deduction (prorated for the partial month up to termination date)
+    let busDeduction = 0;
+    if (this.transportationService) {
+      try {
+        const batchResult = await this.transportationService.calculateBatchBusDeductions(
+          [employeeId],
+          terminationDate,
+        );
+        busDeduction = batchResult.get(employeeId) ?? 0;
+      } catch (err) {
+        this.logger.warn(
+          `Failed to calculate bus deduction for provisional settlement: ${(err as Error)?.message || String(err)}`,
+        );
+      }
     }
 
-    // Final calculation for provisional settlement
+    const totalDeductions = totalAdvances
+      .plus(totalPenalties)
+      .plus(insuranceDeduction)
+      .plus(new Prisma.Decimal(busDeduction));
+
+    // TEMP DIAGNOSTIC LOG
+    this.logger.log(`[PROVISIONAL] empId=${employeeId} termDate=${terminationDateStr} termEndOfDay=${terminationEndOfDay.toISOString()}`);
+    this.logger.log(`[PROVISIONAL] advances=${JSON.stringify(advances.map(a => ({id:a.id,totalAmount:a.totalAmount.toString(),installment:a.installmentAmount.toString(),remaining:a.remainingAmount.toString(),issueDate:a.issueDate})))}`);
+    this.logger.log(`[PROVISIONAL] totalAdvances=${totalAdvances.toString()} totalPenalties=${totalPenalties.toString()} insurance=${insuranceDeduction.toString()} busDeduction=${busDeduction}`);
+    this.logger.log(`[PROVISIONAL] totalDeductions=${totalDeductions.toString()}`);
+
+    // Final provisional settlement
     const provisionalFinalSalary = earnedSalary.plus(totalBonuses).minus(totalDeductions);
 
     return {
@@ -767,7 +955,7 @@ export class PayrollService {
     const periodStart = dto.periodStart.slice(0, 10);
     const periodEnd = dto.periodEnd.slice(0, 10);
     const periodTag = periodStart.slice(0, 7);
-    const defaultGracePeriodMinutes = Math.max(0, Number(dto.gracePeriodMinutes ?? 5));
+
     const defaultWorkDaysInPeriod = Math.max(1, Number(dto.workDaysInPeriod ?? 26));
     const defaultHoursPerDay = Math.max(1, Number(dto.hoursPerDay ?? 8));
 
@@ -784,6 +972,7 @@ export class PayrollService {
       payrollInputs,
       dailyOvertimeLogs,
       dailyEarlyLeaveLogs,
+      dailyDelayLogs,
     ] = await Promise.all([
 
 
@@ -793,14 +982,11 @@ export class PayrollService {
       this.prisma.employeeBonus.findMany({
         where: {
           employeeId: { in: employeeIds },
-          OR: [
-            // جلب bonuses بفترة محددة
-            { period: periodTag },
-            // جلب bonuses بدون فترة (خصومات عامة)
-            { period: null },
-            // جلب bonuses المنشأة خلال الفترة (في حالة عدم تحديد period)
-            { createdAt: { gte: new Date(`${periodStart}T00:00:00.000Z`), lte: new Date(`${periodEnd}T23:59:59.999Z`) } },
-          ],
+          // period column may not exist in DB yet — filter by createdAt date range
+          createdAt: {
+            gte: new Date(`${periodStart}T00:00:00.000Z`),
+            lte: new Date(`${periodEnd}T23:59:59.999Z`),
+          },
         },
       }),
       this.prisma.employeeAdvance.findMany({
@@ -818,6 +1004,7 @@ export class PayrollService {
           },
         },
       }),
+      // Attendance IN records — used ONLY for counting attendance days (absence calculation)
       includeAttendanceDeductions
         ? this.prisma.attendanceRecord.findMany({
             where: {
@@ -831,7 +1018,6 @@ export class PayrollService {
             select: {
               employeeId: true,
               date: true,
-              shiftPair: true,
             },
           })
         : Promise.resolve([]),
@@ -842,7 +1028,7 @@ export class PayrollService {
           periodEnd: this.toDateOnly(periodEnd),
         },
       }),
-      // DailyAttendanceLog: base automated overtime data
+      // DailyAttendanceLog: OVERTIME_MINUTES (all days — weekday + weekend)
       this.prisma.dailyAttendanceLog.findMany({
         where: {
           employeeId: { in: employeeIds },
@@ -858,7 +1044,7 @@ export class PayrollService {
           value: true,
         },
       }),
-      // DailyAttendanceLog: aggregated EARLY_LEAVE_MINUTES from missing-minutes engine
+      // DailyAttendanceLog: EARLY_LEAVE_MINUTES from missing-minutes engine
       this.prisma.dailyAttendanceLog.findMany({
         where: {
           employeeId: { in: employeeIds },
@@ -873,45 +1059,151 @@ export class PayrollService {
           value: true,
         },
       }),
+      // DailyAttendanceLog: DELAY_MINUTES from aggregation engine
+      this.prisma.dailyAttendanceLog.findMany({
+        where: {
+          employeeId: { in: employeeIds },
+          recordType: 'DELAY_MINUTES',
+          date: {
+            gte: new Date(`${periodStart}T00:00:00.000Z`),
+            lte: new Date(`${periodEnd}T23:59:59.999Z`),
+          },
+        },
+        select: {
+          employeeId: true,
+          value: true,
+        },
+      }),
     ]);
 
 
+    // ── Trigger on-demand aggregation for all employee attendance dates ──
+    // This ensures DailyAttendanceLog (DELAY, EARLY_LEAVE, OVERTIME) is
+    // populated BEFORE the queries below read it.
+    if (this.aggregationService && includeAttendanceDeductions) {
+      const empDatesMap = new Map<string, Set<string>>();
+      for (const rec of attendanceInRecords) {
+        const dates = empDatesMap.get(rec.employeeId) || new Set<string>();
+        dates.add(rec.date);
+        empDatesMap.set(rec.employeeId, dates);
+      }
+      const aggregationPromises: Promise<unknown>[] = [];
+      for (const [empId, dates] of empDatesMap) {
+        for (const dateStr of dates) {
+          aggregationPromises.push(
+            this.aggregationService!
+              .aggregateEmployeeDay(empId, dateStr)
+              .catch((err) =>
+                this.logger.warn(
+                  `[PAYROLL] Aggregation failed for ${empId} on ${dateStr}: ${err.message}`,
+                ),
+              ),
+          );
+        }
+      }
+      if (aggregationPromises.length > 0) {
+        this.logger.log(
+          `[PAYROLL] Triggering aggregation for ${aggregationPromises.length} employee-date(s)`,
+        );
+        await Promise.all(aggregationPromises);
+
+        // Re-fetch DailyAttendanceLog records AFTER aggregation
+        const [refreshedOvertime, refreshedEarlyLeave, refreshedDelay] = await Promise.all([
+          this.prisma.dailyAttendanceLog.findMany({
+            where: {
+              employeeId: { in: employeeIds },
+              recordType: 'OVERTIME_MINUTES',
+              date: {
+                gte: new Date(`${periodStart}T00:00:00.000Z`),
+                lte: new Date(`${periodEnd}T23:59:59.999Z`),
+              },
+            },
+            select: { employeeId: true, date: true, value: true },
+          }),
+          this.prisma.dailyAttendanceLog.findMany({
+            where: {
+              employeeId: { in: employeeIds },
+              recordType: 'EARLY_LEAVE_MINUTES',
+              date: {
+                gte: new Date(`${periodStart}T00:00:00.000Z`),
+                lte: new Date(`${periodEnd}T23:59:59.999Z`),
+              },
+            },
+            select: { employeeId: true, value: true },
+          }),
+          this.prisma.dailyAttendanceLog.findMany({
+            where: {
+              employeeId: { in: employeeIds },
+              recordType: 'DELAY_MINUTES',
+              date: {
+                gte: new Date(`${periodStart}T00:00:00.000Z`),
+                lte: new Date(`${periodEnd}T23:59:59.999Z`),
+              },
+            },
+            select: { employeeId: true, value: true },
+          }),
+        ]);
+        // Replace the stale pre-aggregation arrays
+        dailyOvertimeLogs.length = 0;
+        dailyOvertimeLogs.push(...refreshedOvertime);
+        dailyEarlyLeaveLogs.length = 0;
+        dailyEarlyLeaveLogs.push(...refreshedEarlyLeave);
+        dailyDelayLogs.length = 0;
+        dailyDelayLogs.push(...refreshedDelay);
+      }
+    }
+
     const salaryByEmployee = new Map(salaryRecords.map((record) => [record.employeeId, record]));
-    const employeeById = new Map(targetEmployees.map((employee) => [employee.employeeId, employee]));
+
     const payrollInputByEmployee = new Map(payrollInputs.map((input) => [input.employeeId, input]));
 
     const attendanceDatesByEmployee = new Map<string, Set<string>>();
+
+    // ── Aggregate DELAY_MINUTES from DailyAttendanceLog (authoritative source) ──
     const lateMinutesByEmployee = new Map<string, number>();
-    const overtimeMinutesByEmployee = new Map<string, number>();
-
-    const overtimeWeekendMinutesByEmployee = new Map<string, number>();
-    const overtimeWeekendDaysByEmployee = new Map<string, number>();
-
-    // Classify weekend overtime (Friday) from DailyAttendanceLog
-    for (const log of dailyOvertimeLogs) {
-      // NOTE timezone: relies on JS Date created by Prisma for `date` field.
-      const d = new Date(log.date);
-      const isFriday = d.getDay() === 5;
-      if (!isFriday) continue;
-
+    for (const log of dailyDelayLogs) {
       const minutes = Number(log.value ?? 0);
       if (!Number.isFinite(minutes) || minutes <= 0) continue;
-
-      overtimeWeekendMinutesByEmployee.set(
+      lateMinutesByEmployee.set(
         log.employeeId,
-        (overtimeWeekendMinutesByEmployee.get(log.employeeId) || 0) + minutes,
-      );
-
-      // For days representation: convert minutes to working day-hours model later if needed.
-      // Here we approximate weekend overtime days as 1 per any weekend log day.
-      overtimeWeekendDaysByEmployee.set(
-        log.employeeId,
-        (overtimeWeekendDaysByEmployee.get(log.employeeId) || 0) + 1,
+        (lateMinutesByEmployee.get(log.employeeId) || 0) + minutes,
       );
     }
 
+    // ── Aggregate OVERTIME_MINUTES from DailyAttendanceLog ──
+    // Weekday overtime → regular overtime pay
+    // Weekend (Friday) overtime → weekend overtime pay + weekend days
+    const overtimeMinutesByEmployee = new Map<string, number>();
+    const overtimeWeekendMinutesByEmployee = new Map<string, number>();
+    const overtimeWeekendDaysByEmployee = new Map<string, number>();
+
+    for (const log of dailyOvertimeLogs) {
+      const minutes = Number(log.value ?? 0);
+      if (!Number.isFinite(minutes) || minutes <= 0) continue;
+
+      const d = new Date(log.date);
+      const isFriday = d.getDay() === 5;
+
+      if (isFriday) {
+        // Weekend overtime: separate bucket for weekend multiplier
+        overtimeWeekendMinutesByEmployee.set(
+          log.employeeId,
+          (overtimeWeekendMinutesByEmployee.get(log.employeeId) || 0) + minutes,
+        );
+        overtimeWeekendDaysByEmployee.set(
+          log.employeeId,
+          (overtimeWeekendDaysByEmployee.get(log.employeeId) || 0) + 1,
+        );
+      } else {
+        // Weekday overtime: regular overtime pay
+        overtimeMinutesByEmployee.set(
+          log.employeeId,
+          (overtimeMinutesByEmployee.get(log.employeeId) || 0) + minutes,
+        );
+      }
+    }
+
     // ── Aggregate EARLY_LEAVE_MINUTES from DailyAttendanceLog (missing-minutes engine) ──
-    // This provides the automated penalty computed by AttendanceAggregationService.
     const earlyLeaveMinutesByEmployee = new Map<string, number>();
     for (const log of dailyEarlyLeaveLogs) {
       const minutes = Number(log.value ?? 0);
@@ -922,37 +1214,12 @@ export class PayrollService {
       );
     }
 
-
-    // معالجة خصومات الدوام فقط إذا كان enabled
+    // ── Count attendance days from IN records (for absence calculation only) ──
     if (includeAttendanceDeductions) {
       for (const record of attendanceInRecords) {
         const dates = attendanceDatesByEmployee.get(record.employeeId) || new Set<string>();
         dates.add(record.date);
         attendanceDatesByEmployee.set(record.employeeId, dates);
-
-        const employee = employeeById.get(record.employeeId);
-        const graceForEmployee = employee?.gracePeriodMinutes ?? defaultGracePeriodMinutes;
-        const hoursPerDayForEmployee = employee?.hoursPerDay ?? defaultHoursPerDay;
-
-        const minutesLate = this.extractMinutesLate(record.shiftPair);
-        const lateAfterGrace = Math.max(0, minutesLate - graceForEmployee);
-        if (lateAfterGrace <= 0) {
-          continue;
-        }
-
-        lateMinutesByEmployee.set(
-          record.employeeId,
-          (lateMinutesByEmployee.get(record.employeeId) || 0) + lateAfterGrace,
-        );
-
-        const hoursWorked = this.extractHoursWorked(record.shiftPair);
-        if (hoursWorked > hoursPerDayForEmployee) {
-          const overtimeMinutes = (hoursWorked - hoursPerDayForEmployee) * 60;
-          overtimeMinutesByEmployee.set(
-            record.employeeId,
-            (overtimeMinutesByEmployee.get(record.employeeId) || 0) + overtimeMinutes,
-          );
-        }
       }
     }
 
@@ -975,11 +1242,13 @@ export class PayrollService {
       const installment = Number(advance.installmentAmount || 0);
       const remaining = Number(advance.remainingAmount || 0);
 
-      if (installment <= 0 || remaining <= 0) {
+      if (remaining <= 0) {
         continue;
       }
 
-      const deductible = Math.min(installment, remaining);
+      // Lump-sum advance (installment=0): deduct entire remaining amount
+      // Installment-based: deduct the smaller of installment or remaining
+      const deductible = installment > 0 ? Math.min(installment, remaining) : remaining;
       advancesByEmployee.set(
         advance.employeeId,
         (advancesByEmployee.get(advance.employeeId) || 0) + deductible,
@@ -1159,7 +1428,7 @@ export class PayrollService {
           .plus(livingAllowance)
           .plus(lumpSumSalary);
         const dailyWage = g3.div(STANDARD_WORK_DAYS);
-        const hourlyWage = dailyWage.div(STANDARD_HOURS_PER_DAY);
+        const hourlyWage = dailyWage.div(new Prisma.Decimal(hoursPerDayEmp));
         const minuteWage = hourlyWage.div(MINUTES_PER_HOUR);
 
         // Late penalty policy: minuteWage * lateMinutes * 1.5 (overtime multiplier)

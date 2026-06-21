@@ -85,7 +85,19 @@ export class FinancesService {
       this.prisma.employee.findUnique({ where: { employeeId } }),
       this.prisma.employeeSalary.findUnique({ where: { employeeId } }),
       this.prisma.employeeInsurance.findUnique({ where: { employeeId } }),
-      this.prisma.employeeBonus.findMany({ where: { employeeId, period } }),
+      this.prisma.employeeBonus.findMany({
+        where: {
+          employeeId,
+          // period column may not exist in DB yet — filter by createdAt date range
+          createdAt: (() => {
+            const [y, m] = period.split('-').map(Number);
+            return {
+              gte: new Date(Date.UTC(y, m - 1, 1)),
+              lte: new Date(Date.UTC(y, m, 0, 23, 59, 59, 999)),
+            };
+          })(),
+        },
+      }),
       this.prisma.employeeAdvance.findMany({
         where: {
           employeeId,

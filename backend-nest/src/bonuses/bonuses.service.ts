@@ -167,7 +167,15 @@ export class BonusesService {
   }
 
   async periodSummary(period: string) {
-    const records = await this.prisma.employeeBonus.findMany({ where: { period } });
+    // period column may not exist in DB yet — filter by createdAt date range
+    const [y, m] = period.split('-').map(Number);
+    const periodStart = new Date(Date.UTC(y, m - 1, 1));
+    const periodEnd = new Date(Date.UTC(y, m, 0, 23, 59, 59, 999));
+    const records = await this.prisma.employeeBonus.findMany({
+      where: {
+        createdAt: { gte: periodStart, lte: periodEnd },
+      },
+    });
     const totalBonus      = records.reduce((s, r) => s + Number(r.bonusAmount),      0);
     const totalAssistance = records.reduce((s, r) => s + Number(r.assistanceAmount), 0);
     return { period, count: records.length, totalBonus, totalAssistance, records };
