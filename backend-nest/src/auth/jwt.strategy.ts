@@ -7,6 +7,17 @@ import { AuthenticatedUser } from '../common/types/authenticated-user.types';
 import { RequestWithCookies } from '../common/types/request-context.types';
 import { PrismaService } from '../prisma/prisma.service';
 import { TokenRevocationService } from './token-revocation.service';
+import { ShortCacheService } from '../common/cache/short-cache.service';
+import { JWT_USER_CACHE_TTL_SECONDS } from '../common/constants/auth.constants';
+
+type CachedAuthUser = {
+  userId: string;
+  username: string;
+  email?: string;
+  role: string;
+  roles: string[];
+  permissions: string[];
+};
 
 @Injectable()
 export class JwtStrategy extends PassportStrategy(Strategy) {
@@ -17,14 +28,13 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     config: ConfigService,
     private readonly prisma: PrismaService,
     private readonly tokenRevocation: TokenRevocationService,
+    private readonly shortCache: ShortCacheService,
   ) {
     const cookieName = config.get<string>('JWT_COOKIE_NAME', 'warehouse_access_token');
     const nodeEnv = config.get<string>('NODE_ENV', 'development');
-    // السماح بالـ Bearer فقط في التطوير أو إذا تم تفعيله صراحة
     const allowBearer = config.get<boolean>('JWT_ALLOW_BEARER', nodeEnv !== 'production');
 
     super({
-      // استخراج التوكن من الكوكيز أو الهيدر حسب الإعدادات
       jwtFromRequest: ExtractJwt.fromExtractors([
         (req: Request) => (req as RequestWithCookies)?.cookies?.[cookieName] || null,
         ...(allowBearer ? [ExtractJwt.fromAuthHeaderAsBearerToken()] : []),
@@ -38,49 +48,49 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     this.allowBearer = allowBearer;
   }
 
-  /**
-   * دالة التحقق (القلب النابض للشرطي)
-   */
   async validate(req: Request, payload: AuthenticatedUser): Promise<AuthenticatedUser> {
-    // 1. التأكد من وجود معرف المستخدم في التوكن
     if (!payload?.userId) {
-      throw new UnauthorizedException('توكن غير صالح');
+      throw new UnauthorizedException('Invalid token');
     }
 
-    // 2. استخراج التوكن الخام للتأكد من أنه ليس في القائمة السوداء (Revocation)
     const rawToken = this.extractRawToken(req);
-    if (!rawToken || await this.tokenRevocation.isRevoked(rawToken)) {
-      throw new UnauthorizedException('انتهت صلاحية الجلسة، يرجى تسجيل الدخول مجدداً');
+    if (!rawToken || (await this.tokenRevocation.isRevoked(rawToken))) {
+      throw new UnauthorizedException('Session expired, please sign in again');
     }
 
-    // 3. التحقق من حالة المستخدم في قاعدة البيانات (الأمان اللحظي)
-    const user = await this.prisma.user.findUnique({
-      where: { id: payload.userId },
-      include: { role: true },
-    });
+    const cacheKey = `jwt-user:${payload.userId}`;
+    const cached = await this.shortCache.getJson<CachedAuthUser>(cacheKey);
 
-    if (!user || user.status !== 'active') {
-      throw new UnauthorizedException('هذا الحساب لم يعد نشطاً');
-    }
+    const resolved =
+      cached ??
+      (await this.shortCache.getOrSetJson(cacheKey, JWT_USER_CACHE_TTL_SECONDS, async () => {
+        const user = await this.prisma.user.findUnique({
+          where: { id: payload.userId },
+          include: { role: true },
+        });
 
-    // 4. بناء كائن المستخدم الذي سيتم استخدامه في كل الـ Controllers (عبر @CurrentUser)
-    const roleName = user.role?.name || 'staff';
+        if (!user || user.status !== 'active') {
+          throw new UnauthorizedException('Account is no longer active');
+        }
+
+        const roleName = user.role?.name || 'staff';
+        return {
+          userId: user.id,
+          username: user.username,
+          email: user.email ?? undefined,
+          role: roleName,
+          roles: [roleName],
+          permissions: user.role?.permissions || [],
+        };
+      }));
 
     return {
-      userId: user.id,
-      username: user.username,
-      email: user.email ?? undefined,
-      role: roleName,
-      roles: [roleName],
-      permissions: user.role?.permissions || [],
+      ...resolved,
       iat: payload.iat,
       exp: payload.exp,
     };
   }
 
-  /**
-   * استخراج التوكن يدوياً للفحص
-   */
   private extractRawToken(req: Request): string | null {
     const cookieToken = (req as RequestWithCookies)?.cookies?.[this.cookieName];
     if (cookieToken) return cookieToken;

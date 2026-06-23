@@ -12,9 +12,9 @@ services:
     container_name: warehouse_postgres
     restart: unless-stopped
     environment:
-      POSTGRES_DB: warehouse_systemfinly
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: Anwar@23
+      POSTGRES_DB: ${POSTGRES_DB:-warehouse_systemfinly}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
     ports:
       - "5432:5432"
     volumes:
@@ -31,6 +31,8 @@ services:
       dockerfile: Dockerfile
     container_name: warehouse_api
     restart: unless-stopped
+    env_file:
+      - .env
     depends_on:
       postgres:
         condition: service_healthy
@@ -39,24 +41,16 @@ services:
     environment:
       NODE_ENV: production
       PORT: 5001
-      JWT_SECRET: warehouse_nest_jwt_secret_change_me
-      JWT_EXPIRE: 24h
-      JWT_COOKIE_NAME: warehouse_access_token
-      JWT_COOKIE_SECURE: false
-      JWT_COOKIE_SAME_SITE: lax
-      JWT_COOKIE_MAX_AGE_MS: 86400000
-      ADMIN_USERNAME: admin
-      ADMIN_EMAIL: admin@warehouse.local
-      ADMIN_BOOTSTRAP_PASSWORD: password123
-      DEV_ADMIN_USERNAME: developer
-      DEV_ADMIN_EMAIL: developer@warehouse.local
-      DEV_ADMIN_PASSWORD: DevAdmin@2026!
-      DATABASE_URL: postgresql://postgres:Anwar%4023@postgres:5432/warehouse_systemfinly?schema=public
-      CORS_ORIGIN: ""
-      BCRYPT_ROUNDS: 10
-      THROTTLE_TTL_MS: 60000
-      THROTTLE_LIMIT: 120
+      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-warehouse_systemfinly}?schema=public
       REDIS_URL: redis://redis:6379
+      JWT_EXPIRE: 15m
+      JWT_COOKIE_MAX_AGE_MS: 900000
+      JWT_ALLOW_BEARER: "false"
+      AUTH_RETURN_TOKEN_IN_BODY: "false"
+      REGISTRATION_ENABLED: "false"
+      CSRF_PROTECTION_ENABLED: "true"
+      BCRYPT_ROUNDS: 12
+      QUEUES_ENABLED: "true"
     ports:
       - "5001:5001"
     command: sh -c "npm run prisma:push && node dist/main"

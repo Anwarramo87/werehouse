@@ -32,7 +32,7 @@ export class PrismaService
       // Keep connections alive — critical for Neon serverless
       max: 10,
       idleTimeoutMillis: 30_000,
-      connectionTimeoutMillis: 10_000,
+      connectionTimeoutMillis: 30_000, // Increased from 10s to 30s for Neon cold starts
       keepAlive: true,
       keepAliveInitialDelayMillis: 10_000,
     });
@@ -111,7 +111,7 @@ export class PrismaService
   }
 
   /**
-   * Sends a lightweight ping to Neon every 4 minutes so it never
+   * Sends a lightweight ping to Neon every 2 minutes so it never
    * enters sleep mode while the backend is running.
    */
   private startKeepalive() {
@@ -122,6 +122,8 @@ export class PrismaService
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         this.logger.warn(`[Keepalive] Neon ping failed: ${message}`);
+        // Don't try to manually reconnect - Prisma/Pool will handle reconnection
+        // on the next actual database query automatically
       }
     }, KEEPALIVE_INTERVAL_MS);
 
