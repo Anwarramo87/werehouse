@@ -20,6 +20,7 @@ import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { PermissionsGuard } from '../common/guards/permissions.guard';
 import { Permissions } from '../common/decorators/permissions.decorator';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
+import { EmployeeAccessService } from '../common/services/employee-access.service';
 import { CreateAttendanceDto } from './dto/create-attendance.dto';
 import { UpdateAttendanceDto } from './dto/update-attendance.dto';
 import { AttendanceListQueryDto } from './dto/attendance-list-query.dto';
@@ -34,7 +35,10 @@ import { AuthenticatedUser } from '../common/types/authenticated-user.types';
 @Controller('attendance')
 @UseGuards(JwtAuthGuard, PermissionsGuard)
 export class AttendanceController {
-  constructor(private readonly attendanceService: AttendanceService) {}
+  constructor(
+    private readonly attendanceService: AttendanceService,
+    private readonly employeeAccess: EmployeeAccessService,
+  ) {}
 
   private static readonly uploadOptions = {
     fileFilter: (
@@ -132,16 +136,31 @@ export class AttendanceController {
 
   @Get('employee/:employeeId/date/:date')
   @Permissions('view_attendance')
-  employeeOnDate(@Param('employeeId') employeeId: string, @Param('date') date: string) {
+  async employeeOnDate(
+    @Param('employeeId') employeeId: string,
+    @Param('date') date: string,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    await this.employeeAccess.assertCanAccessEmployee(user, employeeId, [
+      'view_attendance',
+      'edit_attendance',
+      'view_payroll',
+    ]);
     return this.attendanceService.employeeOnDate(employeeId, date);
   }
 
   @Get('employee/:employeeId/period')
   @Permissions('view_attendance')
-  employeePeriod(
+  async employeePeriod(
     @Param('employeeId') employeeId: string,
     @Query() query: AttendancePeriodQueryDto,
+    @CurrentUser() user: AuthenticatedUser,
   ) {
+    await this.employeeAccess.assertCanAccessEmployee(user, employeeId, [
+      'view_attendance',
+      'edit_attendance',
+      'view_payroll',
+    ]);
     return this.attendanceService.employeePeriod(employeeId, query.startDate, query.endDate);
   }
 

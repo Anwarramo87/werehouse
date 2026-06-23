@@ -24,6 +24,7 @@ import { BonusesModule } from './bonuses/bonuses.module';
 import { FilesModule } from './files/files.module';
 import { FinancesModule } from './finances/finances.module';
 import { ShortCacheModule } from './common/cache/short-cache.module';
+import { EmployeeAccessModule } from './common/access/employee-access.module';
 import { TransportationModule } from './transportation/transportation.module';
 import { DashboardModule } from './dashboard/dashboard.module';
 import { DiscountsModule } from './discounts/discounts.module';
@@ -102,6 +103,8 @@ const queueInfraModules = queuesEnabled
           .default('lax'),
         JWT_COOKIE_DOMAIN: Joi.string().allow('').default(''),
         JWT_COOKIE_MAX_AGE_MS: Joi.number().min(60_000).default(900_000),
+        JWT_REFRESH_DAYS: Joi.number().min(1).max(30).default(7),
+        JWT_REFRESH_COOKIE_NAME: Joi.string().default('warehouse_refresh_token'),
         JWT_ROTATE_THRESHOLD_SEC: Joi.number().min(30).max(3_600).default(300),
         AUTH_MAX_LOGIN_ATTEMPTS: Joi.number().min(3).max(20).default(5),
         AUTH_LOCKOUT_MINUTES: Joi.number().min(1).max(1_440).default(15),
@@ -136,16 +139,31 @@ const queueInfraModules = queuesEnabled
         CORS_ORIGIN: Joi.string().allow('').default(''),
         JWT_ALLOW_BEARER: Joi.when('NODE_ENV', {
           is: 'production',
-          then: Joi.boolean().default(true),
+          then: Joi.boolean().default(false),
           otherwise: Joi.boolean().default(true),
         }),
-        AUTH_RETURN_TOKEN_IN_BODY: Joi.boolean().default(true),
+        AUTH_RETURN_TOKEN_IN_BODY: Joi.when('NODE_ENV', {
+          is: 'production',
+          then: Joi.boolean().default(false),
+          otherwise: Joi.boolean().default(true),
+        }),
+        REGISTRATION_ENABLED: Joi.when('NODE_ENV', {
+          is: 'production',
+          then: Joi.boolean().default(false),
+          otherwise: Joi.boolean().default(true),
+        }),
+        DEVICE_API_KEY: Joi.when('NODE_ENV', {
+          is: 'production',
+          then: Joi.string().min(16).required(),
+          otherwise: Joi.string().allow('').default(''),
+        }),
+        APP_TIMEZONE_OFFSET_MINUTES: Joi.number().min(-720).max(840).default(180),
         TRUST_PROXY: Joi.when('NODE_ENV', {
           is: 'production',
           then: Joi.boolean().default(true),
           otherwise: Joi.boolean().default(false),
         }),
-        BCRYPT_ROUNDS: Joi.number().min(8).max(14).default(10),
+        BCRYPT_ROUNDS: Joi.number().min(8).max(14).default(12),
         THROTTLE_TTL_MS: Joi.number().min(1_000).default(60_000),
         THROTTLE_LIMIT: Joi.number().min(10).default(120),
         QUEUES_ENABLED: Joi.when('NODE_ENV', {
@@ -174,6 +192,7 @@ const queueInfraModules = queuesEnabled
     ...queueInfraModules,
     WinstonModule.forRoot(winstonConfig),
     ShortCacheModule,
+    EmployeeAccessModule,
     PrismaModule,
     HealthModule,
     AuthModule,

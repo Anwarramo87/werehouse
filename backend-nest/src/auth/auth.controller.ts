@@ -51,7 +51,7 @@ export class AuthController implements OnModuleInit {
     }
   }
 
-  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
   @Post('login')
   @ApiOperation({ summary: 'تسجيل الدخول', description: 'يقبل username أو email مع كلمة المرور، يُرجع JWT في HttpOnly Cookie' })
   @ApiResponse({ status: 200, description: 'تم تسجيل الدخول بنجاح' })
@@ -59,16 +59,16 @@ export class AuthController implements OnModuleInit {
   @ApiResponse({ status: 429, description: 'تجاوزت حد الطلبات المسموح' })
   async login(@Body() dto: LoginDto, @Res({ passthrough: true }) res: Response) {
     const result = await this.authService.login(dto);
-    this.setAuthCookie(res, result.token);
+    this.setSessionCookies(res, result.token, result.refreshToken);
     res.setHeader('Cache-Control', 'no-store');
     return this.formatAuthResult(result);
   }
 
-  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
   @Post('register')
   async register(@Body() dto: RegisterDto, @Res({ passthrough: true }) res: Response) {
     const result = await this.authService.register(dto);
-    this.setAuthCookie(res, result.token);
+    this.setSessionCookies(res, result.token, result.refreshToken);
     res.setHeader('Cache-Control', 'no-store');
     return this.formatAuthResult(result);
   }
@@ -104,7 +104,7 @@ export class AuthController implements OnModuleInit {
     @Res({ passthrough: true }) res: Response,
   ) {
     const result = await this.authService.finishBiometricLogin(dto);
-    this.setAuthCookie(res, result.token);
+    this.setSessionCookies(res, result.token, result.refreshToken);
     res.setHeader('Cache-Control', 'no-store');
     return this.formatAuthResult(result);
   }
@@ -124,11 +124,38 @@ export class AuthController implements OnModuleInit {
       await this.authService.revokeToken(token);
     }
 
+    const refreshToken = this.extractRefreshTokenFromRequest(req);
+    if (refreshToken) {
+      await this.authService.revokeRefreshToken(refreshToken);
+    }
+
     const cookieName = this.config.get<string>('JWT_COOKIE_NAME', 'warehouse_access_token');
+    const refreshCookieName = this.config.get<string>(
+      'JWT_REFRESH_COOKIE_NAME',
+      'warehouse_refresh_token',
+    );
     const { maxAge, ...cookieOptions } = this.getAuthCookieOptions();
     res.clearCookie(cookieName, cookieOptions);
+    res.clearCookie(refreshCookieName, this.getRefreshCookieOptions());
     res.setHeader('Cache-Control', 'no-store');
     return { message: 'Logged out successfully' };
+  }
+
+  @Post('refresh')
+  @ApiOperation({ summary: 'Refresh access token', description: 'Uses HttpOnly refresh cookie to issue a new access token' })
+  @ApiResponse({ status: 200, description: 'Session refreshed' })
+  @ApiResponse({ status: 401, description: 'Invalid refresh token' })
+  async refresh(@Req() req: Request, @Res({ passthrough: true }) res: Response) {
+    const refreshToken = this.extractRefreshTokenFromRequest(req);
+    if (!refreshToken) {
+      res.status(401);
+      return { message: 'Refresh token missing' };
+    }
+
+    const result = await this.authService.refreshSession(refreshToken);
+    this.setSessionCookies(res, result.token, result.refreshToken);
+    res.setHeader('Cache-Control', 'no-store');
+    return this.formatAuthResult(result);
   }
 
   @UseGuards(JwtAuthGuard)
@@ -200,13 +227,26 @@ export class AuthController implements OnModuleInit {
     res.cookie(cookieName, token, this.getAuthCookieOptions());
   }
 
-  private formatAuthResult<T extends { token: string }>(result: T) {
+  private setRefreshCookie(res: Response, refreshToken: string) {
+    const cookieName = this.config.get<string>(
+      'JWT_REFRESH_COOKIE_NAME',
+      'warehouse_refresh_token',
+    );
+    res.cookie(cookieName, refreshToken, this.getRefreshCookieOptions());
+  }
+
+  private setSessionCookies(res: Response, accessToken: string, refreshToken: string) {
+    this.setAuthCookie(res, accessToken);
+    this.setRefreshCookie(res, refreshToken);
+  }
+
+  private formatAuthResult<T extends { token: string; refreshToken?: string }>(result: T) {
     const shouldReturnToken = this.config.get<boolean>('AUTH_RETURN_TOKEN_IN_BODY', false);
     if (shouldReturnToken) {
       return result;
     }
 
-    const { token, ...sanitizedResult } = result;
+    const { token, refreshToken, ...sanitizedResult } = result;
     return sanitizedResult;
   }
 
@@ -237,6 +277,34 @@ export class AuthController implements OnModuleInit {
     } as const;
   }
 
+  private getRefreshCookieOptions() {
+    const isProduction = this.config.get<string>('NODE_ENV', 'development') === 'production';
+    const secureSetting = this.config.get<boolean>('JWT_COOKIE_SECURE', isProduction);
+    const defaultSameSite = isProduction ? 'none' : 'lax';
+    const sameSiteRaw = this.config
+      .get<string>('JWT_COOKIE_SAME_SITE', defaultSameSite)
+      .toLowerCase();
+    const days = this.config.get<number>('JWT_REFRESH_DAYS', 7);
+    const maxAge = Math.max(1, days) * 24 * 60 * 60 * 1000;
+    const rawDomain = this.config.get<string>('JWT_COOKIE_DOMAIN', '').trim();
+    const domain =
+      rawDomain && !rawDomain.includes('://') && !rawDomain.includes('/') && !rawDomain.includes(':')
+        ? rawDomain
+        : '';
+    const configuredSameSite =
+      sameSiteRaw === 'strict' || sameSiteRaw === 'none' ? sameSiteRaw : 'lax';
+    const sameSite = configuredSameSite;
+
+    return {
+      httpOnly: true,
+      secure: isProduction ? true : secureSetting || sameSite === 'none',
+      sameSite,
+      maxAge,
+      path: '/api/auth/refresh',
+      ...(domain ? { domain } : {}),
+    } as const;
+  }
+
   private extractTokenFromRequest(req: Request) {
     const cookieName = this.config.get<string>('JWT_COOKIE_NAME', 'warehouse_access_token');
     const cookieToken = (req as RequestWithCookies)?.cookies?.[cookieName];
@@ -251,6 +319,18 @@ export class AuthController implements OnModuleInit {
       return bearerToken || null;
     }
 
+    return null;
+  }
+
+  private extractRefreshTokenFromRequest(req: Request) {
+    const cookieName = this.config.get<string>(
+      'JWT_REFRESH_COOKIE_NAME',
+      'warehouse_refresh_token',
+    );
+    const cookieToken = (req as RequestWithCookies)?.cookies?.[cookieName];
+    if (typeof cookieToken === 'string' && cookieToken.trim()) {
+      return cookieToken.trim();
+    }
     return null;
   }
 }
