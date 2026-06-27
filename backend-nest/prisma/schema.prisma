@@ -36,6 +36,7 @@ model User {
   biometricCredentials BiometricCredential[]
 
   @@index([lockoutUntil])
+  @@index([roleId])
   @@map("users")
 }
 
@@ -115,6 +116,7 @@ model Employee {
   @@index([status])
   @@index([name])
   @@index([createdAt])
+  @@index([roleId])
   @@index([status, employeeId])
   @@index([department, status])
   @@index([departmentId])

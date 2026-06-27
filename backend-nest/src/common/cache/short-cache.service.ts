@@ -25,7 +25,12 @@ export class ShortCacheService implements OnModuleInit, OnModuleDestroy {
     this.redisUrl = this.config.get<string>('REDIS_URL', '').trim();
   }
 
+  private pruneInterval: ReturnType<typeof setInterval> | null = null;
+
   async onModuleInit() {
+    // Periodic memory cache cleanup every 60 seconds
+    this.pruneInterval = setInterval(() => this.pruneExpired(), 60_000);
+
     if (!this.cacheEnabled || !this.redisUrl) {
       return;
     }
@@ -60,6 +65,11 @@ export class ShortCacheService implements OnModuleInit, OnModuleDestroy {
   }
 
   async onModuleDestroy() {
+    if (this.pruneInterval) {
+      clearInterval(this.pruneInterval);
+      this.pruneInterval = null;
+    }
+
     if (!this.redisClient) {
       return;
     }
@@ -206,7 +216,13 @@ export class ShortCacheService implements OnModuleInit, OnModuleDestroy {
       const match = this.redisKey(`${prefix}*`);
 
       do {
-        const [nextCursor, keys] = await this.redisClient.scan(cursor, 'MATCH', match, 'COUNT', 100);
+        const [nextCursor, keys] = await this.redisClient.scan(
+          cursor,
+          'MATCH',
+          match,
+          'COUNT',
+          100,
+        );
         cursor = nextCursor;
         if (keys.length > 0) {
           await this.redisClient.del(...keys);

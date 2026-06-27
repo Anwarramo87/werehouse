@@ -11,15 +11,30 @@ const pool = new Pool({ connectionString: process.env.DATABASE_URL, max: 2 });
 const prisma = new PrismaClient({ adapter: new PrismaPg(pool) });
 
 const ADMIN_PERMISSIONS = [
-  'view_employees', 'edit_employees', 'delete_employees',
-  'view_devices', 'manage_devices',
-  'manage_users', 'manage_roles',
-  'view_attendance', 'edit_attendance',
-  'view_payroll', 'run_payroll', 'approve_payroll',
-  'view_inventory', 'edit_inventory',
-  'view_imports', 'run_imports',
-  'manage_salary', 'manage_advances', 'manage_insurance',
-  'manage_bonuses', 'manage_penalties',
+  'manage_users',
+  'manage_advances',
+  'edit_attendance',
+  'view_attendance',
+  'run_payroll',
+  'view_payroll',
+  'edit_employees',
+  'view_employees',
+  'manage_bonuses',
+  'manage_penalties',
+  'manage_leaves',
+  'manage_insurance',
+  'manage_transportation',
+  'manage_inventory',
+  'manage_departments',
+  'manage_salary',
+  'manage_payroll',
+  'manage_finances',
+  'manage_files',
+  'manage_imports',
+  'manage_trash',
+  'manage_backup',
+  'manage_devices',
+  'manage_dashboard',
 ];
 
 async function main() {
@@ -33,7 +48,12 @@ async function main() {
     });
     console.log('  Created admin role');
   } else {
-    console.log('  Admin role already exists');
+    // Update permissions on existing role
+    adminRole = await prisma.role.update({
+      where: { name: 'admin' },
+      data: { permissions: ADMIN_PERMISSIONS },
+    });
+    console.log('  Admin role updated with full permissions');
   }
 
   const username = process.env.SUPERADMIN_USERNAME || 'superadmin';
@@ -75,5 +95,11 @@ async function main() {
 }
 
 main()
-  .catch(e => { console.error(e); process.exit(1); })
-  .finally(async () => { await prisma.$disconnect(); await pool.end(); });
+  .catch((e) => {
+    console.error(e);
+    process.exit(1);
+  })
+  .finally(async () => {
+    await prisma.$disconnect();
+    await pool.end();
+  });
