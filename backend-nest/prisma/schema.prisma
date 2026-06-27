@@ -103,14 +103,13 @@ model Employee {
   rehireRecords             RehireRecord[]
 
   employeeSalary    EmployeeSalary?
-  employeeInsurance EmployeeInsurance? @relation(fields: [employeeInsuranceId], references: [id])
+  employeeInsurance EmployeeInsurance?
   employeeBonuses   EmployeeBonus[]
   employeePenalties EmployeePenalty[]
   payrollInputs     PayrollInput[]
 
   createdAt           DateTime       @default(now())
   updatedAt           DateTime       @updatedAt
-  employeeInsuranceId String?        @db.Uuid
   busPassengers       BusPassenger[]
 
   @@index([status])
@@ -120,13 +119,15 @@ model Employee {
   @@index([department, status])
   @@index([departmentId])
   @@index([status, createdAt])
-  @@index([department, status, createdAt])
+  @@index([status, departmentId])
+  @@index([departmentId, status])
   @@map("employees")
 }
 
 model Department {
   id        String     @id @default(uuid()) @db.Uuid
   name      String     @unique
+  manager   String?
   employees Employee[]
   createdAt DateTime   @default(now())
   updatedAt DateTime   @updatedAt
@@ -217,7 +218,8 @@ model AttendanceRecord {
   @@index([deviceId, timestamp])
   @@index([employeeId, type, date])
   @@index([employeeId, date, timestamp])
-  @@index([type, date])
+  @@index([date, type])
+  @@index([employeeId, date, type])
   @@map("attendance_records")
 }
 
@@ -365,7 +367,7 @@ model PayrollItem {
 
   @@unique([payrollRunId, employeeId])
   @@index([payrollRunId])
-  @@index([employeeId, createdAt])
+  @@index([payrollRunId, employeeId])
   @@map("payroll_items")
 }
 
@@ -475,14 +477,14 @@ model DeletedRecordHistory {
 // Insurance (تامينات) — social insurance details per employee
 // ---------------------------------------------------------------------------
 model EmployeeInsurance {
-  id                   String     @id @default(uuid()) @db.Uuid
-  employeeId           String     @unique
-  insuranceSalary      Decimal    @db.Decimal(14, 2)
+  id                   String    @id @default(uuid()) @db.Uuid
+  employeeId           String    @unique
+  employee             Employee  @relation(fields: [employeeId], references: [employeeId], onDelete: Cascade)
+  insuranceSalary      Decimal   @db.Decimal(14, 2)
   socialSecurityNumber String?
   registrationDate     DateTime?
-  createdAt            DateTime   @default(now())
-  updatedAt            DateTime   @updatedAt
-  employees            Employee[]
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
 
   @@map("employee_insurance")
 }

@@ -95,8 +95,8 @@ describe('Auth Logic', () => {
       expect(DEFAULT_LOCKOUT_MINUTES).toBe(15);
     });
 
-    it('BCRYPT_DEFAULT_ROUNDS should be at least 8', () => {
-      expect(BCRYPT_DEFAULT_ROUNDS).toBeGreaterThanOrEqual(8);
+    it('BCRYPT_DEFAULT_ROUNDS should be at least 12', () => {
+      expect(BCRYPT_DEFAULT_ROUNDS).toBeGreaterThanOrEqual(12);
     });
   });
 

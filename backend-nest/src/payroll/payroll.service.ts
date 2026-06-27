@@ -10,7 +10,11 @@ import { Queue } from 'bullmq';
 import { QUEUE_JOBS, QUEUE_NAMES } from '../queues/queue.constants';
 import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
 import { TransportationService } from '../transportation/transportation.service';
-import { AttendanceAggregationService } from '../attendance/attendance-aggregation.service';
+import { factoryDateKeyDayOfWeek } from '../common/utils/timezone.util';
+import {
+  countPaidLeaveDaysInPeriod,
+  resolveSalaryToDecimal,
+} from '../common/utils/salary-resolution.util';
 import {
   PAYROLL_BATCH_SIZE,
   WORK_DAYS_PER_MONTH,
@@ -41,9 +45,8 @@ export class PayrollService {
 
   constructor(
     private readonly prisma: PrismaService,
+    private readonly transportationService: TransportationService,
     @Optional() @InjectQueue(QUEUE_NAMES.PAYROLL) private readonly payrollQueue?: Queue,
-    @Optional() private readonly transportationService?: TransportationService,
-    @Optional() private readonly aggregationService?: AttendanceAggregationService,
   ) {}
 
   private toDecimal(value: Prisma.Decimal | number | string | null | undefined) {
@@ -753,6 +756,7 @@ export class PayrollService {
         department: true,
         hourlyRate: true,
         baseSalary: true,
+        livingAllowance: true,
         workDaysInPeriod: true,
         hoursPerDay: true,
         gracePeriodMinutes: true,
@@ -784,6 +788,7 @@ export class PayrollService {
       payrollInputs,
       dailyOvertimeLogs,
       dailyEarlyLeaveLogs,
+      paidApprovedLeaves,
     ] = await Promise.all([
 
 
@@ -873,12 +878,32 @@ export class PayrollService {
           value: true,
         },
       }),
+      this.prisma.leaveRequest.findMany({
+        where: {
+          employeeId: { in: employeeIds },
+          status: 'APPROVED',
+          leaveType: { in: ['PAID', 'SICK', 'ADMIN', 'DEATH'] },
+          startDate: { lte: new Date(`${periodEnd}T00:00:00.000Z`) },
+          endDate: { gte: new Date(`${periodStart}T00:00:00.000Z`) },
+        },
+        select: {
+          employeeId: true,
+          startDate: true,
+          endDate: true,
+        },
+      }),
     ]);
 
 
     const salaryByEmployee = new Map(salaryRecords.map((record) => [record.employeeId, record]));
     const employeeById = new Map(targetEmployees.map((employee) => [employee.employeeId, employee]));
     const payrollInputByEmployee = new Map(payrollInputs.map((input) => [input.employeeId, input]));
+    const paidLeavesByEmployee = new Map<string, Array<{ startDate: Date; endDate: Date }>>();
+    for (const leave of paidApprovedLeaves) {
+      const bucket = paidLeavesByEmployee.get(leave.employeeId) || [];
+      bucket.push({ startDate: leave.startDate, endDate: leave.endDate });
+      paidLeavesByEmployee.set(leave.employeeId, bucket);
+    }
 
     const attendanceDatesByEmployee = new Map<string, Set<string>>();
     const lateMinutesByEmployee = new Map<string, number>();
@@ -889,9 +914,11 @@ export class PayrollService {
 
     // Classify weekend overtime (Friday) from DailyAttendanceLog
     for (const log of dailyOvertimeLogs) {
-      // NOTE timezone: relies on JS Date created by Prisma for `date` field.
-      const d = new Date(log.date);
-      const isFriday = d.getDay() === 5;
+      const dateKey =
+        log.date instanceof Date
+          ? log.date.toISOString().slice(0, 10)
+          : String(log.date).slice(0, 10);
+      const isFriday = factoryDateKeyDayOfWeek(dateKey) === 5;
       if (!isFriday) continue;
 
       const minutes = Number(log.value ?? 0);
@@ -1007,7 +1034,7 @@ export class PayrollService {
 
     // ── Batch-calculate bus subscription deductions for all target employees ──
     const busDeductionsByEmployee = new Map<string, number>();
-    if (includeTransportationDeductions && this.transportationService) {
+    if (includeTransportationDeductions) {
       try {
         const targetMonth = new Date(periodEnd);
         const allEmpIds = targetEmployees.map((e) => e.employeeId);
@@ -1035,50 +1062,30 @@ export class PayrollService {
       for (const employee of employeesBatch) {
         const salaryRecord = salaryByEmployee.get(employee.employeeId);
         const input = payrollInputByEmployee.get(employee.employeeId);
-        
+
         const workDays = employee.workDaysInPeriod ?? defaultWorkDaysInPeriod;
         const hoursPerDayEmp = employee.hoursPerDay ?? defaultHoursPerDay;
-        
-        const fallbackBaseSalary = Number(employee.hourlyRate || 0) * hoursPerDayEmp * workDays;
-        const baseSalary = this.toDecimal(
-          salaryRecord?.baseSalary ?? employee.baseSalary ?? fallbackBaseSalary,
-        );
-        const livingAllowance = this.toDecimal(salaryRecord?.livingAllowance ?? 0);
-        const lumpSumSalary = this.toDecimal(salaryRecord?.lumpSumSalary ?? 0);
+
+        const salaryParts = resolveSalaryToDecimal(employee, salaryRecord);
+        const baseSalary = salaryParts.baseSalary;
+        const livingAllowance = salaryParts.livingAllowance;
+        const lumpSumSalary = salaryParts.lumpSumSalary;
         // responsibilityAllowance, extraEffortAllowance, productionIncentive
         // are no longer auto-computed and are excluded from g3.
         const transportAllowanceBase = this.toDecimal(
-          input?.transportAllowanceOverride ?? salaryRecord?.transportAllowance ?? 0,
+          input?.transportAllowanceOverride ?? salaryParts.transportAllowance ?? 0,
         );
 
         const attendanceDays = attendanceDaysByEmployee.get(employee.employeeId) || 0;
         const hoursWorked = attendanceDays * hoursPerDayEmp;
 
-        // absenceDaysFallback: compute as (workDays - attendanceDays) BUT exclude APPROVED paid leaves
         const absenceDaysFallbackRaw = Math.max(0, workDays - attendanceDays);
 
-        // Count paid approved leave days inside period to avoid double-penalizing them as absence
-        // NOTE: For now we treat PAID leave type or isPaid=true as "paid".
-        // This logic is intentionally inclusive for overlap partials.
-        const paidApprovedLeaves = await this.prisma.leaveRequest.findMany({
-          where: {
-            employeeId: employee.employeeId,
-            status: 'APPROVED',
-            leaveType: { in: ['PAID', 'SICK', 'ADMIN', 'DEATH'] },
-            startDate: { lte: new Date(periodEnd) },
-            endDate: { gte: new Date(periodStart) },
-          },
-          select: { startDate: true, endDate: true, isPaid: true, leaveType: true },
-        });
-
-        const paidApprovedLeaveDaysInPeriod = paidApprovedLeaves.reduce((sum, l) => {
-          // inclusive overlap day count
-          const overlapStart = l.startDate > new Date(periodStart) ? l.startDate : new Date(periodStart);
-          const overlapEnd = l.endDate < new Date(periodEnd) ? l.endDate : new Date(periodEnd);
-          const ms = overlapEnd.getTime() - overlapStart.getTime();
-          const days = Math.floor(ms / 86_400_000) + 1;
-          return sum + (Number.isFinite(days) && days > 0 ? days : 0);
-        }, 0);
+        const paidApprovedLeaveDaysInPeriod = countPaidLeaveDaysInPeriod(
+          paidLeavesByEmployee.get(employee.employeeId) || [],
+          periodStart,
+          periodEnd,
+        );
 
         const absenceDaysFallback = Math.max(
           0,
@@ -1105,7 +1112,7 @@ export class PayrollService {
           input?.advanceAmount ?? advancesInstallments,
         );
         const insuranceAmount = this.toDecimal(
-          input?.insuranceAmount ?? salaryRecord?.insuranceAmount ?? 0,
+          input?.insuranceAmount ?? salaryParts.insuranceAmount ?? 0,
         );
 
         const lateMinutes = this.resolveAttendanceValue(

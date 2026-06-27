@@ -22,26 +22,25 @@ import {
   BIOMETRIC_CHALLENGE_TTL_SECONDS,
   AUTO_REFRESH_THRESHOLD_SECONDS,
 } from '../common/constants/auth.constants';
+import { BiometricChallengeService } from './biometric-challenge.service';
+import { RefreshTokenService } from './refresh-token.service';
+import { AuthCacheService } from './auth-cache.service';
+import { toFactoryDateKey, resolveTimezoneOffsetMinutes } from '../common/utils/timezone.util';
 
 type BiometricChallengePurpose = 'REGISTER' | 'LOGIN';
 
-interface BiometricChallengeRecord {
-  id: string;
-  userId: string;
-  purpose: BiometricChallengePurpose;
-  challengeHash: string;
-  challengeBase64: string;
-  expiresAt: number;
-  usedAt?: Date;
-  keyId?: string;
-  pendingPublicKeyBase64?: string;
-  pendingDeviceName?: string;
-}
+type SessionResult = {
+  token: string;
+  refreshToken: string;
+  user: { id: string; username: string; role: string };
+  roles?: string[];
+  permissions?: string[];
+};
 
 @Injectable()
 export class AuthService {
   private readonly logger = new Logger(AuthService.name);
-  private readonly biometricChallenges = new Map<string, BiometricChallengeRecord>();
+  private readonly timezoneOffsetMinutes: number;
 
   private static readonly ADMIN_PERMISSIONS = [
     'view_employees',
@@ -75,7 +74,18 @@ export class AuthService {
     private readonly config: ConfigService,
     private readonly tokenRevocation: TokenRevocationService,
     private readonly realtimeGateway: RealtimeGateway,
-  ) {}
+    private readonly biometricChallenges: BiometricChallengeService,
+    private readonly refreshTokens: RefreshTokenService,
+    private readonly authCache: AuthCacheService,
+  ) {
+    this.timezoneOffsetMinutes = resolveTimezoneOffsetMinutes(
+      this.config.get<string>('APP_TIMEZONE_OFFSET_MINUTES'),
+    );
+  }
+
+  private bcryptRounds(): number {
+    return this.config.get<number>('BCRYPT_ROUNDS', BCRYPT_DEFAULT_ROUNDS);
+  }
 
   async login(dto: LoginDto) {
     const normalizedUsername = dto.username.trim();
@@ -114,15 +124,15 @@ export class AuthService {
     });
 
     const payload = this.buildAuthPayload(user);
-    return {
-      token: await this.jwtService.signAsync(payload),
-      user: this.toPublicAuthUser(user),
-      roles: [user.role?.name || 'staff'],
-      permissions: user.role?.permissions || [],
-    };
+    return this.createSession(user, payload);
   }
 
   async register(dto: RegisterDto) {
+    const registrationEnabled = this.config.get<boolean>('REGISTRATION_ENABLED', false);
+    if (this.config.get<string>('NODE_ENV') === 'production' && !registrationEnabled) {
+      throw new BadRequestException('Registration is disabled');
+    }
+
     const existing = await this.prisma.user.findFirst({
       where: { OR: [{ username: dto.username }, { email: dto.email }] },
     });
@@ -135,17 +145,14 @@ export class AuthService {
       (await this.prisma.role.findUnique({ where: { name: 'staff' } })) ??
       (await this.prisma.role.create({ data: { name: 'staff', permissions: ['view_attendance'] } }));
 
-    const hash = await bcrypt.hash(dto.password, BCRYPT_DEFAULT_ROUNDS);
+    const hash = await bcrypt.hash(dto.password, this.bcryptRounds());
     const user = await this.prisma.user.create({
       data: { username: dto.username, email: dto.email, passwordHash: hash, roleId: role.id },
       include: { role: true },
     });
 
     const payload = this.buildAuthPayload(user);
-    return {
-      token: await this.jwtService.signAsync(payload),
-      user: this.toPublicAuthUser(user),
-    };
+    return this.createSession(user, payload);
   }
 
   async me(userId: string) {
@@ -161,7 +168,7 @@ export class AuthService {
     const challengeId = randomBytes(16).toString('hex');
     const challengeBase64 = randomBytes(BIOMETRIC_CHALLENGE_BYTES).toString('base64url');
 
-    this.biometricChallenges.set(challengeId, {
+    await this.biometricChallenges.save({
       id: challengeId,
       userId,
       purpose: 'REGISTER',
@@ -177,7 +184,7 @@ export class AuthService {
   }
 
   async finishBiometricRegistration(userId: string, dto: BiometricRegisterFinishDto) {
-    const challenge = this.consumeChallenge(dto.challengeId, 'REGISTER', userId);
+    const challenge = await this.biometricChallenges.consume(dto.challengeId, 'REGISTER', userId);
     if (!challenge) {
       throw new BadRequestException('تحدي غير صالح');
     }
@@ -212,7 +219,7 @@ export class AuthService {
     const challengeId = randomBytes(16).toString('hex');
     const challengeBase64 = randomBytes(BIOMETRIC_CHALLENGE_BYTES).toString('base64url');
 
-    this.biometricChallenges.set(challengeId, {
+    await this.biometricChallenges.save({
       id: challengeId,
       userId: user.id,
       purpose: 'LOGIN',
@@ -225,7 +232,7 @@ export class AuthService {
   }
 
   async finishBiometricLogin(dto: BiometricLoginFinishDto) {
-    const challenge = this.consumeChallenge(dto.challengeId, 'LOGIN');
+    const challenge = await this.biometricChallenges.consume(dto.challengeId, 'LOGIN');
     if (!challenge) {
       throw new BadRequestException('التحدي منتهي');
     }
@@ -262,7 +269,7 @@ export class AuthService {
     }
 
     const payload = this.buildAuthPayload(user);
-    return { token: await this.jwtService.signAsync(payload), user: this.toPublicAuthUser(user) };
+    return this.createSession(user, payload);
   }
 
   async revokeBiometric(userId: string, dto: BiometricRevokeDto) {
@@ -273,7 +280,7 @@ export class AuthService {
   }
 
   async createUser(dto: CreateUserDto) {
-    const hash = await bcrypt.hash(dto.password, BCRYPT_DEFAULT_ROUNDS);
+    const hash = await bcrypt.hash(dto.password, this.bcryptRounds());
     const user = await this.prisma.user.create({
       data: {
         username: dto.username,
@@ -301,11 +308,35 @@ export class AuthService {
     await this.tokenRevocation.revoke(token);
   }
 
+  async revokeRefreshToken(refreshToken: string) {
+    await this.refreshTokens.revoke(refreshToken);
+  }
+
+  async refreshSession(refreshToken: string): Promise<SessionResult> {
+    const userId = await this.refreshTokens.consume(refreshToken);
+    if (!userId) {
+      throw new UnauthorizedException('Refresh token expired or invalid');
+    }
+
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      include: { role: true },
+    });
+
+    if (!user || user.status !== 'active') {
+      throw new UnauthorizedException('Account is no longer active');
+    }
+
+    await this.authCache.invalidateUser(userId);
+    return this.createSession(user, this.buildAuthPayload(user));
+  }
+
   async rotateSessionIfNeeded(user: any) {
     const now = Math.floor(Date.now() / 1000);
     if (user?.exp && user.exp - now < AUTO_REFRESH_THRESHOLD_SECONDS) {
       const dbUser = await this.prisma.user.findUnique({ where: { id: user.userId }, include: { role: true } });
       if (dbUser) {
+        await this.authCache.invalidateUser(dbUser.id);
         return this.jwtService.signAsync(this.buildAuthPayload(dbUser));
       }
     }
@@ -323,7 +354,7 @@ export class AuthService {
       throw new Error('ADMIN_BOOTSTRAP_PASSWORD must be set in production');
     }
 
-    const hash = await bcrypt.hash(password || 'password123', BCRYPT_DEFAULT_ROUNDS);
+    const hash = await bcrypt.hash(password || 'password123', this.bcryptRounds());
     const adminUsername = this.config.get('ADMIN_USERNAME', 'admin');
     const existingAdmin = await this.prisma.user.findUnique({ where: { username: adminUsername } });
     if (!existingAdmin) {
@@ -352,7 +383,7 @@ export class AuthService {
       throw new Error('SUPERADMIN_PASSWORD must be set in production');
     }
 
-    const hash = await bcrypt.hash(password || 'SuperAdmin@2026!', BCRYPT_DEFAULT_ROUNDS);
+    const hash = await bcrypt.hash(password || 'SuperAdmin@2026!', this.bcryptRounds());
     const existingSuperadmin = await this.prisma.user.findUnique({ where: { username } });
     if (!existingSuperadmin) {
       await this.prisma.user.create({
@@ -377,8 +408,7 @@ export class AuthService {
     }
 
     const now = new Date();
-    // نستخدم التاريخ المحلي بدلاً من UTC لتجنب انحراف التاريخ
-    const localDate = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+    const localDate = toFactoryDateKey(now, this.timezoneOffsetMinutes);
     const attendance = await this.prisma.attendanceRecord.create({
       data: {
         employeeId: employee.employeeId,
@@ -401,6 +431,19 @@ export class AuthService {
       action: 'created',
       message: 'تسجيل حضور تلقائي',
     });
+  }
+
+  private async createSession(user: any, payload: Record<string, unknown>): Promise<SessionResult> {
+    const token = await this.jwtService.signAsync(payload);
+    const refreshToken = await this.refreshTokens.issue(user.id);
+
+    return {
+      token,
+      refreshToken,
+      user: this.toPublicAuthUser(user),
+      roles: [user.role?.name || 'staff'],
+      permissions: user.role?.permissions || [],
+    };
   }
 
   private buildAuthPayload(user: any) {
@@ -454,26 +497,6 @@ export class AuthService {
     } catch {
       return false;
     }
-  }
-
-  private consumeChallenge(challengeId: string, purpose: BiometricChallengePurpose, userId?: string) {
-    const challenge = this.biometricChallenges.get(challengeId);
-    if (!challenge) {
-      return null;
-    }
-
-    if (challenge.usedAt || challenge.expiresAt < Date.now() || challenge.purpose !== purpose) {
-      this.biometricChallenges.delete(challengeId);
-      return null;
-    }
-
-    if (userId && challenge.userId !== userId) {
-      return null;
-    }
-
-    challenge.usedAt = new Date();
-    this.biometricChallenges.delete(challengeId);
-    return challenge;
   }
 
   private buildSpkiPublicKeyDer(publicKeyBase64?: string) {

@@ -8,6 +8,7 @@ import { PublicAttendanceController } from './public-attendance.controller';
 import { PrismaModule } from '../prisma/prisma.module';
 import { AttendanceAggregationService } from './attendance-aggregation.service';
 import { AttendanceAggregationController } from './attendance-aggregation.controller';
+import { DeviceApiKeyGuard } from '../common/guards/device-api-key.guard';
 
 @Module({
   imports: [RealtimeModule, PrismaModule],
@@ -17,7 +18,12 @@ import { AttendanceAggregationController } from './attendance-aggregation.contro
     PublicAttendanceController,
     AttendanceAggregationController,
   ],
-  providers: [AttendanceService, DailyLogsService, AttendanceAggregationService],
+  providers: [
+    AttendanceService,
+    DailyLogsService,
+    AttendanceAggregationService,
+    DeviceApiKeyGuard,
+  ],
   exports: [AttendanceService, DailyLogsService, AttendanceAggregationService],
 })
 export class AttendanceModule {}

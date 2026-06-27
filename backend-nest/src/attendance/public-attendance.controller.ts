@@ -6,40 +6,24 @@ import {
   Param,
   Logger,
   BadRequestException,
+  UseGuards,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation } from '@nestjs/swagger';
-import { AttendanceService } from './attendance.service';
 import { AttendanceAggregationService } from './attendance-aggregation.service';
 import { PrismaService } from '../prisma/prisma.service';
-
-const TIMEZONE_OFFSET_MS = 3 * 60 * 60 * 1000; // UTC+3 Saudi Arabia
+import { DeviceApiKeyGuard } from '../common/guards/device-api-key.guard';
+import { toFactoryDateKey } from '../common/utils/timezone.util';
 
 @ApiTags('attendance')
 @Controller('attendance/public')
+@UseGuards(DeviceApiKeyGuard)
 export class PublicAttendanceController {
   private readonly logger = new Logger(PublicAttendanceController.name);
 
   constructor(
-    private readonly attendanceService: AttendanceService,
     private readonly prisma: PrismaService,
     private readonly aggregationService: AttendanceAggregationService,
   ) {}
-
-  private getLocalNow(): Date {
-    return new Date(Date.now() + TIMEZONE_OFFSET_MS);
-  }
-
-  private getLocalDateKey(): string {
-    const local = this.getLocalNow();
-    const y = local.getUTCFullYear();
-    const m = String(local.getUTCMonth() + 1).padStart(2, '0');
-    const d = String(local.getUTCDate()).padStart(2, '0');
-    return `${y}-${m}-${d}`;
-  }
-
-  private getLocalTimestamp(): Date {
-    return new Date(Date.now());
-  }
 
   @Post('check-in')
   @ApiOperation({ summary: 'Check-in an employee' })
@@ -50,8 +34,8 @@ export class PublicAttendanceController {
       throw new BadRequestException('employeeId is required');
     }
 
-    const dateKey = this.getLocalDateKey();
-    const now = this.getLocalTimestamp();
+    const dateKey = toFactoryDateKey();
+    const now = new Date();
 
     const existingIn = await this.prisma.attendanceRecord.findFirst({
       where: {
@@ -76,13 +60,11 @@ export class PublicAttendanceController {
       },
     });
 
-    // ── Real-time aggregation: re-calculate missing minutes immediately ──
-    // Fire-and-forget so the check-in response is not blocked.
     this.aggregationService
       .aggregateEmployeeDay(employeeId, dateKey)
       .catch((err) =>
         this.logger.error(
-          `⚠️ Real-time aggregation failed (check-in) for ${employeeId}: ${err.message}`,
+          `Real-time aggregation failed (check-in) for ${employeeId}: ${err.message}`,
         ),
       );
 
@@ -103,8 +85,8 @@ export class PublicAttendanceController {
       throw new BadRequestException('employeeId is required');
     }
 
-    const dateKey = this.getLocalDateKey();
-    const now = this.getLocalTimestamp();
+    const dateKey = toFactoryDateKey();
+    const now = new Date();
 
     const existingOut = await this.prisma.attendanceRecord.findFirst({
       where: {
@@ -163,13 +145,11 @@ export class PublicAttendanceController {
       return outRecord;
     });
 
-    // ── Real-time aggregation: re-calculate missing minutes immediately ──
-    // Fires AFTER the transaction commits, ensuring the OUT punch is visible.
     this.aggregationService
       .aggregateEmployeeDay(employeeId, dateKey)
       .catch((err) =>
         this.logger.error(
-          `⚠️ Real-time aggregation failed (check-out) for ${employeeId}: ${err.message}`,
+          `Real-time aggregation failed (check-out) for ${employeeId}: ${err.message}`,
         ),
       );
 
@@ -183,9 +163,9 @@ export class PublicAttendanceController {
   }
 
   @Get('employee/:employeeId/today')
-  @ApiOperation({ summary: 'Get today\'s attendance for an employee' })
+  @ApiOperation({ summary: "Get today's attendance for an employee" })
   async getTodayAttendance(@Param('employeeId') employeeId: string) {
-    const dateKey = this.getLocalDateKey();
+    const dateKey = toFactoryDateKey();
 
     const records = await this.prisma.attendanceRecord.findMany({
       where: { employeeId, date: dateKey },

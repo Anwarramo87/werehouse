@@ -1,35 +1,32 @@
-import { Controller, Post, Logger } from '@nestjs/common';
+import { Controller, Post, Logger, UseGuards } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
+import { PermissionsGuard } from '../common/guards/permissions.guard';
+import { Permissions } from '../common/decorators/permissions.decorator';
 
 /**
  * Admin controller for one-time database cleanup operations.
- * REMOVE THIS CONTROLLER IN PRODUCTION after running cleanup.
+ * Protected — requires manage_users permission.
  */
 @Controller('admin')
+@UseGuards(JwtAuthGuard, PermissionsGuard)
 export class AdminController {
   private readonly logger = new Logger(AdminController.name);
 
   constructor(private readonly prisma: PrismaService) {}
 
-  /**
-   * One-time cleanup: Find and delete overlapping approved leaves.
-   * Run this ONCE to clean up legacy data before the overlap validation was added.
-   * 
-   * POST /admin/cleanup-overlapping-leaves
-   */
   @Post('cleanup-overlapping-leaves')
+  @Permissions('manage_users')
   async cleanupOverlappingLeaves() {
-    this.logger.log('🔍 Starting cleanup of overlapping leaves...');
+    this.logger.log('Starting cleanup of overlapping leaves...');
 
-    // Get all approved leaves
     const allLeaves = await this.prisma.leaveRequest.findMany({
       where: { status: 'APPROVED' },
       orderBy: [{ employeeId: 'asc' }, { startDate: 'asc' }],
     });
 
-    this.logger.log(`📊 Total approved leaves found: ${allLeaves.length}`);
+    this.logger.log(`Total approved leaves found: ${allLeaves.length}`);
 
-    // Group by employee
     const employeeLeavesMap = new Map<string, typeof allLeaves>();
     for (const leave of allLeaves) {
       if (!employeeLeavesMap.has(leave.employeeId)) {
@@ -42,7 +39,6 @@ export class AdminController {
     let totalDeleted = 0;
     const deletedLeaveIds: string[] = [];
 
-    // Check each employee's leaves for overlaps
     for (const [employeeId, leaves] of employeeLeavesMap.entries()) {
       if (leaves.length < 2) continue;
 
@@ -50,7 +46,7 @@ export class AdminController {
 
       for (let i = 0; i < leaves.length; i++) {
         const leaveA = leaves[i];
-        
+
         if (overlappingIds.includes(leaveA.id)) continue;
 
         for (let j = i + 1; j < leaves.length; j++) {
@@ -58,24 +54,22 @@ export class AdminController {
 
           if (overlappingIds.includes(leaveB.id)) continue;
 
-          // Check overlap: A.start <= B.end AND A.end >= B.start
           if (leaveA.startDate <= leaveB.endDate && leaveA.endDate >= leaveB.startDate) {
             totalOverlapsFound++;
-            
+
             this.logger.log(
-              `⚠️  Overlap: ${employeeId} - ${leaveA.leaveType} (${leaveA.startDate.toISOString().slice(0, 10)} → ${leaveA.endDate.toISOString().slice(0, 10)}) ` +
-              `overlaps with ${leaveB.leaveType} (${leaveB.startDate.toISOString().slice(0, 10)} → ${leaveB.endDate.toISOString().slice(0, 10)})`,
+              `Overlap: ${employeeId} - ${leaveA.leaveType} (${leaveA.startDate.toISOString().slice(0, 10)} → ${leaveA.endDate.toISOString().slice(0, 10)}) ` +
+                `overlaps with ${leaveB.leaveType} (${leaveB.startDate.toISOString().slice(0, 10)} → ${leaveB.endDate.toISOString().slice(0, 10)})`,
             );
-            
-            // Delete the newer one (leaveB)
+
             overlappingIds.push(leaveB.id);
           }
         }
       }
 
       if (overlappingIds.length > 0) {
-        this.logger.log(`🗑️  Deleting ${overlappingIds.length} overlapping leave(s) for ${employeeId}`);
-        
+        this.logger.log(`Deleting ${overlappingIds.length} overlapping leave(s) for ${employeeId}`);
+
         for (const leaveId of overlappingIds) {
           await this.prisma.leaveRequest.delete({ where: { id: leaveId } });
           totalDeleted++;
@@ -91,7 +85,7 @@ export class AdminController {
       deletedLeaveIds,
     };
 
-    this.logger.log(`✅ ${JSON.stringify(result)}`);
+    this.logger.log(`Cleanup result: ${JSON.stringify(result)}`);
     return result;
   }
 }

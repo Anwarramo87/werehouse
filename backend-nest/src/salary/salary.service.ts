@@ -3,6 +3,10 @@ import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { UpsertSalaryDto } from './dto/upsert-salary.dto';
 import { CalculateAllowancesDto } from './dto/calculate-allowances.dto';
+import {
+  buildEmployeeSalaryMirror,
+  resolveSalary,
+} from '../common/utils/salary-resolution.util';
 
 
 @Injectable()
@@ -87,11 +91,25 @@ export class SalaryService {
       transportAllowance:     new Prisma.Decimal((dto.transportAllowance ?? 0).toString()),
     };
 
-    return this.prisma.employeeSalary.upsert({
+    const record = await this.prisma.employeeSalary.upsert({
       where: { employeeId },
       update: data,
       create: { employeeId, ...data },
     });
+
+    const employee = await this.prisma.employee.findUnique({ where: { employeeId } });
+    if (employee) {
+      const resolved = resolveSalary(employee, record);
+      await this.prisma.employee.update({
+        where: { employeeId },
+        data: {
+          ...buildEmployeeSalaryMirror(resolved),
+          ...(dto.profession ? { profession: dto.profession, jobTitle: dto.profession } : {}),
+        },
+      });
+    }
+
+    return record;
   }
 
   async remove(employeeId: string) {

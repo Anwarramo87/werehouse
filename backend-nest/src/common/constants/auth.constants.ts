@@ -10,10 +10,19 @@ export const DEFAULT_MAX_LOGIN_ATTEMPTS = 5;
 export const DEFAULT_LOCKOUT_MINUTES = 15;
 
 /** عدد جولات bcrypt الافتراضي */
-export const BCRYPT_DEFAULT_ROUNDS = 10;
+export const BCRYPT_DEFAULT_ROUNDS = 12;
 
 /** مدة انتهاء JWT الافتراضية */
 export const JWT_DEFAULT_EXPIRE = '15m';
+
+/** TTL for cached JWT user lookups (seconds) */
+export const JWT_USER_CACHE_TTL_SECONDS = 60;
+
+/** Default refresh token lifetime in days */
+export const JWT_REFRESH_DAYS_DEFAULT = 7;
+
+/** Default refresh cookie name */
+export const JWT_REFRESH_COOKIE_NAME_DEFAULT = 'warehouse_refresh_token';
 
 /** عدد البايتات العشوائية للـ biometric challenge */
 export const BIOMETRIC_CHALLENGE_BYTES = 32;

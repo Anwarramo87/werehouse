@@ -11,6 +11,8 @@ import { AttendanceListQueryDto } from './dto/attendance-list-query.dto';
 import { ShortCacheService } from '../common/cache/short-cache.service';
 import { RealtimeGateway } from '../realtime/realtime.gateway';
 import { AttendanceAggregationService } from './attendance-aggregation.service';
+import { toFactoryDateKey } from '../common/utils/timezone.util';
+import { resolveSalary } from '../common/utils/salary-resolution.util';
 
 type ShiftPair = {
   inRecordId?: string;
@@ -1203,7 +1205,7 @@ export class AttendanceService {
     const totalWorkDaysInPeriod = calcWorkingDays(periodStart, periodEnd);
 
     // عدد أيام العمل المنقضية فقط (لحساب الغياب — لا نخصم مستقبلاً)
-    const today = new Date().toISOString().slice(0, 10);
+    const today = toFactoryDateKey();
     const effectivePeriodEnd = periodEnd < today ? periodEnd : today;
     const elapsedWorkDays = calcWorkingDays(periodStart, effectivePeriodEnd);
 
@@ -1214,6 +1216,7 @@ export class AttendanceService {
       name: true,
       hourlyRate: true,
       baseSalary: true,
+      livingAllowance: true,
       scheduledStart: true,
       scheduledEnd: true,
       workDaysInPeriod: true,
@@ -1403,11 +1406,8 @@ export class AttendanceService {
       }
 
       // ── حساب الخصومات المالية ─────────────────────────────────────────────
-      const hourlyRate = employee.hourlyRate ? Number(employee.hourlyRate) : 0;
-      const baseSalary = employee.baseSalary ? Number(employee.baseSalary) : 0;
-      // معدل الساعة الفعلي — يُحسب من hourlyRate أو من baseSalary
-      const effectiveHourlyRate =
-        hourlyRate || (baseSalary > 0 ? baseSalary / (empWorkDays * empHoursPerDay) : 0);
+      const resolved = resolveSalary(employee);
+      const effectiveHourlyRate = resolved.hourlyRate;
       const dailyRate = effectiveHourlyRate * empHoursPerDay;
       const minuteRate = dailyRate / (empHoursPerDay * 60);
       const OVERTIME_MULTIPLIER = 1.5; // معدل 1.5× للإضافي والتأخير
