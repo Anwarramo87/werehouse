@@ -23,7 +23,7 @@ import { UpdateEmployeeDto } from './dto/update-employee.dto';
 import { EmployeesListQueryDto } from './dto/employees-list-query.dto';
 import { EmployeeProfileQueryDto } from './dto/employee-profile-query.dto';
 import { TerminateEmployeeDto } from './dto/terminate-employee.dto';
-import { TerminateEmployeeZodDto } from './dto/terminate-employee-zod.dto';
+import { TerminateEmployeeBodyDto } from './dto/terminate-employee-body.dto';
 import { BulkTerminateDepartmentDto } from './dto/bulk-terminate-department.dto';
 import { RehireEmployeeDto } from './dto/rehire-employee.dto';
 import { FinancialSettlementDto } from './dto/financial-settlement.dto';
@@ -38,7 +38,10 @@ export class EmployeesController {
 
   @Get()
   @Permissions('view_employees')
-  @ApiOperation({ summary: 'قائمة الموظفين', description: 'يُرجع قائمة مُصفّاة ومُرقَّمة بالصفحات' })
+  @ApiOperation({
+    summary: 'قائمة الموظفين',
+    description: 'يُرجع قائمة مُصفّاة ومُرقَّمة بالصفحات',
+  })
   list(@Query() query: EmployeesListQueryDto) {
     return this.employeesService.list(query);
   }
@@ -102,10 +105,7 @@ export class EmployeesController {
 
   @Post('terminate')
   @Permissions('edit_employees')
-  terminateEmployee(
-    @Body() dto: TerminateEmployeeZodDto,
-    @CurrentUser() user: AuthenticatedUser,
-  ) {
+  terminateEmployee(@Body() dto: TerminateEmployeeBodyDto, @CurrentUser() user: AuthenticatedUser) {
     return this.employeesService.terminateEmployee(dto, user);
   }
 
@@ -135,10 +135,7 @@ export class EmployeesController {
 
   @Post('rehire')
   @Permissions('edit_employees')
-  rehireEmployee(
-    @Body() dto: RehireEmployeeDto,
-    @CurrentUser() user: AuthenticatedUser,
-  ) {
+  rehireEmployee(@Body() dto: RehireEmployeeDto, @CurrentUser() user: AuthenticatedUser) {
     return this.employeesService.rehireEmployee(dto, user);
   }
 

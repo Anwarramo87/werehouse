@@ -13,7 +13,7 @@ import { EmployeesListQueryDto } from './dto/employees-list-query.dto';
 import { ShortCacheService } from '../common/cache/short-cache.service';
 import { EmployeeProfileQueryDto } from './dto/employee-profile-query.dto';
 import { TerminateEmployeeDto } from './dto/terminate-employee.dto';
-import { TerminateEmployeeInput } from './dto/terminate-employee-zod.dto';
+import { TerminateEmployeeBodyDto } from './dto/terminate-employee-body.dto';
 import { RehireEmployeeDto } from './dto/rehire-employee.dto';
 import { FinancialSettlementDto } from './dto/financial-settlement.dto';
 import { ResignedEmployeesQueryDto } from './dto/resigned-employees-query.dto';
@@ -187,11 +187,15 @@ export class EmployeesService {
           id: true,
           employeeId: true,
           name: true,
+          mobile: true,
+          nationalId: true,
+          residence: true,
+          dateOfBirth: true,
+          gender: true,
           department: true,
           jobTitle: true,
           profession: true,
           status: true,
-          mobile: true,
           biometricNumber: true,
           scheduledStart: true,
           scheduledEnd: true,
@@ -200,10 +204,13 @@ export class EmployeesService {
           hoursPerDay: true,
           hourlyRate: true,
           baseSalary: true,
+          livingAllowance: true,
           currency: true,
           employmentStartDate: true,
           terminationDate: true,
           terminationType: true,
+          terminationReason: true,
+          terminationNotes: true,
           financialSettlementStatus: true,
           isSettled: true,
           createdAt: true,
@@ -817,7 +824,7 @@ export class EmployeesService {
     return { message: successMessage, employee: updated };
   }
 
-  async terminateEmployee(dto: TerminateEmployeeInput, user: AuthenticatedUser) {
+  async terminateEmployee(dto: TerminateEmployeeBodyDto, user: AuthenticatedUser) {
     const employee = await this.prisma.employee.findUnique({
       where: { employeeId: dto.employeeId },
     });

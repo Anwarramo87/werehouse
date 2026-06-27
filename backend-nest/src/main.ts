@@ -5,7 +5,6 @@ import { NestFactory } from '@nestjs/core';
 import { ConfigService } from '@nestjs/config';
 import { NestExpressApplication } from '@nestjs/platform-express';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
-import { ZodValidationPipe } from 'nestjs-zod';
 import helmet from 'helmet';
 import compression from 'compression';
 import responseTime from 'response-time';
@@ -43,13 +42,13 @@ const normalizeOrigin = (value: string): string => {
   }
 };
 
-type OriginFunction = (origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) => void;
+type OriginFunction = (
+  origin: string | undefined,
+  callback: (err: Error | null, allow?: boolean) => void,
+) => void;
 
 const buildCorsOptions = (rawOrigins: string, isProd: boolean) => {
-  const splitted = rawOrigins
-    .split(',')
-    .map(normalizeOrigin)
-    .filter(Boolean);
+  const splitted = rawOrigins.split(',').map(normalizeOrigin).filter(Boolean);
 
   const allowed = new Set(splitted);
 
@@ -117,29 +116,34 @@ async function bootstrap() {
   });
 
   // --- Global Middlewares ---
-  app.use(helmet({
-    hsts: isProd ? {
-      maxAge: 15552000,
-      includeSubDomains: true,
-      preload: true,
-    } : false,
-  }));
+  app.use(
+    helmet({
+      hsts: isProd
+        ? {
+            maxAge: 15552000,
+            includeSubDomains: true,
+            preload: true,
+          }
+        : false,
+    }),
+  );
 
   app.use(compression());
   app.use(cookieParser());
 
   // --- Response-Time Monitoring ---
-  app.use(responseTime((req, res, time) => {
-    res.setHeader('X-Response-Time', `${time.toFixed(2)}ms`);
-    if (time > 500) {
-      logger.warn(`Slow request: ${req.method} ${req.url} took ${time.toFixed(0)}ms`);
-    }
-  }));
+  app.use(
+    responseTime((req, res, time) => {
+      res.setHeader('X-Response-Time', `${time.toFixed(2)}ms`);
+      if (time > 500) {
+        logger.warn(`Slow request: ${req.method} ${req.url} took ${time.toFixed(0)}ms`);
+      }
+    }),
+  );
 
   // --- Global Filters & Pipes ---
   app.useGlobalFilters(new GlobalExceptionFilter());
   app.useGlobalPipes(
-    new ZodValidationPipe(),           // Zod validation for DTOs using Zod schemas
     new ValidationPipe({
       whitelist: true,
       forbidNonWhitelisted: true,
@@ -150,6 +154,10 @@ async function bootstrap() {
 
   // --- CORS Configuration ---
   const corsOrigin = configService.get<string>('CORS_ORIGIN', '');
+  if (isProd && !corsOrigin) {
+    logger.error('CORS_ORIGIN is not set in production! This is a security risk. Exiting.');
+    process.exit(1);
+  }
   app.enableCors(buildCorsOptions(corsOrigin, isProd));
 
   // --- Swagger (متاح فقط في dev أو إذا تم تفعيله صراحة) ---
@@ -157,9 +165,7 @@ async function bootstrap() {
   if (swaggerEnabled) {
     const swaggerConfig = new DocumentBuilder()
       .setTitle('HRM Warehouse API')
-      .setDescription(
-        'نظام إدارة الموارد البشرية والمستودعات — توثيق كامل لجميع الـ endpoints',
-      )
+      .setDescription('نظام إدارة الموارد البشرية والمستودعات — توثيق كامل لجميع الـ endpoints')
       .setVersion('1.0')
       .addTag('auth', 'المصادقة وإدارة الجلسات')
       .addTag('employees', 'إدارة الموظفين')
