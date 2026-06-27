@@ -10,8 +10,12 @@ import { AuthController } from './auth.controller';
 import { JwtStrategy } from './jwt.strategy';
 import { AuditService } from '../common/services/audit.service';
 import { TokenRevocationService } from './token-revocation.service';
+import { BiometricChallengeService } from './biometric-challenge.service';
+import { RefreshTokenService } from './refresh-token.service';
+import { AuthCacheService } from './auth-cache.service';
 import { RealtimeModule } from '../realtime/realtime.module';
 import { PrismaModule } from '../prisma/prisma.module';
+import { JWT_DEFAULT_EXPIRE } from '../common/constants/auth.constants';
 
 @Module({
   imports: [
@@ -23,10 +27,10 @@ import { PrismaModule } from '../prisma/prisma.module';
       imports: [ConfigModule],
       inject: [ConfigService],
       useFactory: (config: ConfigService) => {
-        const expiresIn = config.get<string>('JWT_EXPIRE', '1h'); 
+        const expiresIn = config.get<string>('JWT_EXPIRE', JWT_DEFAULT_EXPIRE);
         return {
           secret: config.getOrThrow<string>('JWT_SECRET'),
-          signOptions: { 
+          signOptions: {
             expiresIn: expiresIn as StringValue,
             algorithm: 'HS256',
           },
@@ -35,10 +39,13 @@ import { PrismaModule } from '../prisma/prisma.module';
     }),
   ],
   providers: [
-    AuthService, 
-    JwtStrategy, 
-    AuditService, 
-    TokenRevocationService
+    AuthService,
+    JwtStrategy,
+    AuditService,
+    TokenRevocationService,
+    BiometricChallengeService,
+    RefreshTokenService,
+    AuthCacheService,
   ],
   controllers: [AuthController],
   exports: [AuthService, JwtModule, AuditService],

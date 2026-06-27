@@ -2,11 +2,8 @@ import { Injectable, Logger, BadRequestException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Prisma, DailyRecordType } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { resolveTimezoneOffsetMinutes } from '../common/utils/timezone.util';
 
-// ─── Constants ────────────────────────────────────────────────────────────────
-
-/** Saudi Arabia UTC+3 = 180 minutes (default) */
-const DEFAULT_TIMEZONE_OFFSET_MINUTES = 180;
 const HH_MM_REGEX = /^([01]\d|2[0-3]):([0-5]\d)$/;
 const MINUTES_IN_DAY = 1440;
 
@@ -58,9 +55,9 @@ export class AttendanceAggregationService {
     private readonly prisma: PrismaService,
     private readonly config: ConfigService,
   ) {
-    this.timezoneOffsetMinutes =
-      this.config.get<number>('TIMEZONE_OFFSET_MINUTES') ??
-      DEFAULT_TIMEZONE_OFFSET_MINUTES;
+    this.timezoneOffsetMinutes = resolveTimezoneOffsetMinutes(
+      this.config.get<string>('APP_TIMEZONE_OFFSET_MINUTES'),
+    );
   }
 
   // ─────────────────────────────────────────────────────────────────────────────

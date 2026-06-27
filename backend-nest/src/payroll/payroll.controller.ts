@@ -7,6 +7,7 @@ import { PayrollService } from './payroll.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { PermissionsGuard } from '../common/guards/permissions.guard';
 import { Permissions } from '../common/decorators/permissions.decorator';
+import { EmployeeAccessService } from '../common/services/employee-access.service';
 import { CalculatePayrollDto } from './dto/calculate-payroll.dto';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { AuditService } from '../common/services/audit.service';
@@ -24,6 +25,7 @@ export class PayrollController {
   constructor(
     private readonly payrollService: PayrollService,
     private readonly audit: AuditService,
+    private readonly employeeAccess: EmployeeAccessService,
   ) {}
 
   @Get()
@@ -192,7 +194,15 @@ export class PayrollController {
 
   @Get('employee/:employeeId')
   @Permissions('view_payroll')
-  employeeHistory(@Param('employeeId') employeeId: string) {
+  async employeeHistory(
+    @Param('employeeId') employeeId: string,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    await this.employeeAccess.assertCanAccessEmployee(user, employeeId, [
+      'view_payroll',
+      'run_payroll',
+      'approve_payroll',
+    ]);
     return this.payrollService.getEmployeeHistory(employeeId);
   }
 }

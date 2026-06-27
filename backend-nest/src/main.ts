@@ -54,12 +54,15 @@ const buildCorsOptions = (rawOrigins: string, isProd: boolean) => {
   const allowed = new Set(splitted);
 
   if (allowed.has('*')) {
+    if (isProd) {
+      return { origin: false, credentials: true };
+    }
     return { origin: true, credentials: true };
   }
 
   const originCallback: OriginFunction = (origin, callback) => {
     if (!origin) {
-      callback(null, true);
+      callback(null, !isProd);
       return;
     }
     callback(null, allowed.has(normalizeOrigin(origin)));
