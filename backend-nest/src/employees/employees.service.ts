@@ -1,13 +1,7 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import * as bcrypt from 'bcryptjs';
 import { PrismaService } from '../prisma/prisma.service';
-import {
-  paginatedResponse,
-  paginationMeta,
-  resolvePagination,
-} from '../common/utils/pagination.util';
 import {
   paginatedResponse,
   paginationMeta,
@@ -33,7 +27,6 @@ import {
   MAX_BASE_SALARY,
   MAX_HOURLY_RATE,
 } from './employees.constants';
-import { buildEmployeeSalaryMirror, resolveSalary } from '../common/utils/salary-resolution.util';
 import { buildEmployeeSalaryMirror, resolveSalary } from '../common/utils/salary-resolution.util';
 
 const DEFAULT_PROFILE_RANGE_DAYS = 30;
@@ -132,8 +125,6 @@ export class EmployeesService {
 
   private employeeSelect() {
     return {
-      // Only select relations that do not touch Department.manager in the current DB.
-      // Department.manager may be missing depending on migration state.
       departmentEntity: {
         select: {
           id: true,
@@ -142,17 +133,16 @@ export class EmployeesService {
           updatedAt: true,
         },
       },
-      // Only select relations that do not touch Department.manager in the current DB.
-      // Department.manager may be missing depending on migration state.
-      departmentEntity: {
+      role: {
         select: {
           id: true,
           name: true,
           createdAt: true,
           updatedAt: true,
+          description: true,
+          permissions: true,
         },
       },
-      role: true,
     } as const;
   }
 
@@ -165,9 +155,6 @@ export class EmployeesService {
   }
 
   private applyEmployeeStatusFilter(where: Prisma.EmployeeWhereInput, queryStatus?: string | null) {
-    // Policy:
-    // - default: exclude terminated/resigned only
-    // - allow overriding with queryStatus
     const excluded = ['terminated', 'resigned'];
 
     if (queryStatus) {
@@ -245,7 +232,6 @@ export class EmployeesService {
   }
 
   async stats() {
-    // Stats is a pure aggregation; keep all statuses visible.
     return this.shortCache.getOrSetJson('employees:stats', 30, async () => {
       const [total, active, inactive, terminated, resigned, groupedByDepartment] =
         await Promise.all([
@@ -259,27 +245,7 @@ export class EmployeesService {
             _count: { _all: true },
           }),
         ]);
-      const [total, active, inactive, terminated, resigned, groupedByDepartment] =
-        await Promise.all([
-          this.prisma.employee.count(),
-          this.prisma.employee.count({ where: { status: 'active' } }),
-          this.prisma.employee.count({ where: { status: 'inactive' } }),
-          this.prisma.employee.count({ where: { status: 'terminated' } }),
-          this.prisma.employee.count({ where: { status: 'resigned' } }),
-          this.prisma.employee.groupBy({
-            by: ['department'],
-            _count: { _all: true },
-          }),
-        ]);
 
-      const byDepartment = groupedByDepartment.reduce<Record<string, number>>(
-        (accumulator, entry) => {
-          const key = entry.department || 'Unassigned';
-          accumulator[key] = entry._count._all;
-          return accumulator;
-        },
-        {},
-      );
       const byDepartment = groupedByDepartment.reduce<Record<string, number>>(
         (accumulator, entry) => {
           const key = entry.department || 'Unassigned';
@@ -422,7 +388,6 @@ export class EmployeesService {
           name: dto.name,
           mobile,
           residence,
-          residence,
           nationalId,
           dateOfBirth: birthDate,
           gender: dto.gender ?? null,
@@ -453,10 +418,6 @@ export class EmployeesService {
           profession,
           baseSalary: baseSalary != null ? new Prisma.Decimal(baseSalary) : new Prisma.Decimal(0),
           lumpSumSalary: new Prisma.Decimal(dto.lumpSumSalary ?? 0),
-          livingAllowance:
-            dto.livingAllowance != null
-              ? new Prisma.Decimal(dto.livingAllowance)
-              : new Prisma.Decimal(0),
           livingAllowance:
             dto.livingAllowance != null
               ? new Prisma.Decimal(dto.livingAllowance)
@@ -495,7 +456,6 @@ export class EmployeesService {
 
     const nationalId =
       dto.nationalId !== undefined ? this.normalizeOptionalString(dto.nationalId) : undefined;
-      dto.nationalId !== undefined ? this.normalizeOptionalString(dto.nationalId) : undefined;
     const employmentStartDate =
       dto.employmentStartDate !== undefined
         ? this.parseOptionalDate(dto.employmentStartDate, 'employmentStartDate')
@@ -515,7 +475,6 @@ export class EmployeesService {
       dto.profession !== undefined || dto.jobTitle !== undefined
         ? this.normalizeOptionalString(dto.profession ?? dto.jobTitle)
         : undefined;
-    const mobile = dto.mobile !== undefined ? this.normalizeOptionalString(dto.mobile) : undefined;
     const mobile = dto.mobile !== undefined ? this.normalizeOptionalString(dto.mobile) : undefined;
 
     const nextEmploymentStartDate =
@@ -549,12 +508,6 @@ export class EmployeesService {
       }
     }
 
-    const loginName =
-      dto.username !== undefined ? this.normalizeLoginName(dto.username) : undefined;
-    const passwordHash =
-      dto.password !== undefined
-        ? await bcrypt.hash(dto.password, BCRYPT_DEFAULT_ROUNDS)
-        : undefined;
     const loginName =
       dto.username !== undefined ? this.normalizeLoginName(dto.username) : undefined;
     const passwordHash =
@@ -597,9 +550,6 @@ export class EmployeesService {
         ...(dto.residence !== undefined && {
           residence: this.normalizeOptionalString(dto.residence),
         }),
-        ...(dto.residence !== undefined && {
-          residence: this.normalizeOptionalString(dto.residence),
-        }),
         ...(nationalId !== undefined && { nationalId }),
         ...(birthDate !== undefined && { dateOfBirth: birthDate }),
         ...(dto.hourlyRate !== undefined && {
@@ -609,8 +559,6 @@ export class EmployeesService {
           baseSalary: dto.baseSalary === null ? null : new Prisma.Decimal(dto.baseSalary),
         }),
         ...(dto.livingAllowance !== undefined && {
-          livingAllowance:
-            dto.livingAllowance === null ? null : new Prisma.Decimal(dto.livingAllowance),
           livingAllowance:
             dto.livingAllowance === null ? null : new Prisma.Decimal(dto.livingAllowance),
         }),
@@ -661,24 +609,6 @@ export class EmployeesService {
           dto.lumpSumSalary !== undefined
             ? new Prisma.Decimal(dto.lumpSumSalary ?? 0)
             : (existingSalary?.lumpSumSalary ?? new Prisma.Decimal(0)),
-        baseSalary:
-          dto.baseSalary !== undefined
-            ? dto.baseSalary === null
-              ? new Prisma.Decimal(0)
-              : new Prisma.Decimal(dto.baseSalary)
-            : (existingSalary?.baseSalary ?? employee.baseSalary ?? new Prisma.Decimal(0)),
-        livingAllowance:
-          dto.livingAllowance !== undefined
-            ? dto.livingAllowance === null
-              ? new Prisma.Decimal(0)
-              : new Prisma.Decimal(dto.livingAllowance)
-            : (existingSalary?.livingAllowance ??
-              employee.livingAllowance ??
-              new Prisma.Decimal(0)),
-        lumpSumSalary:
-          dto.lumpSumSalary !== undefined
-            ? new Prisma.Decimal(dto.lumpSumSalary ?? 0)
-            : (existingSalary?.lumpSumSalary ?? new Prisma.Decimal(0)),
       };
 
       await transaction.employeeSalary.upsert({
@@ -700,19 +630,6 @@ export class EmployeesService {
         where: { employeeId },
         include: this.employeeSelect(),
       });
-      const salaryRecord = await transaction.employeeSalary.findUnique({ where: { employeeId } });
-      if (salaryRecord) {
-        const mirror = buildEmployeeSalaryMirror(resolveSalary(updatedEmployee, salaryRecord));
-        await transaction.employee.update({
-          where: { employeeId },
-          data: mirror,
-        });
-      }
-
-      return transaction.employee.findUnique({
-        where: { employeeId },
-        include: this.employeeSelect(),
-      });
     });
 
     await this.shortCache.invalidatePrefix('employees:stats');
@@ -720,7 +637,6 @@ export class EmployeesService {
     return { message: 'Employee updated successfully', employee: updated };
   }
 
-  async getProfile(employeeId: string, query: EmployeeProfileQueryDto, user?: AuthenticatedUser) {
   async getProfile(employeeId: string, query: EmployeeProfileQueryDto, user?: AuthenticatedUser) {
     const employee = await this.getByEmployeeId(employeeId);
 
@@ -862,13 +778,6 @@ export class EmployeesService {
       'termination',
       'Employee terminated successfully',
     );
-    return this._applySimpleTermination(
-      employeeId,
-      dto,
-      'terminated',
-      'termination',
-      'Employee terminated successfully',
-    );
   }
 
   async resign(employeeId: string, dto: TerminateEmployeeDto) {
@@ -879,18 +788,8 @@ export class EmployeesService {
       'resignation',
       'Employee resigned successfully',
     );
-    return this._applySimpleTermination(
-      employeeId,
-      dto,
-      'resigned',
-      'resignation',
-      'Employee resigned successfully',
-    );
   }
 
-  /**
-   * Shared helper for terminate() and resign() — both differ only in status/type/message.
-   */
   private async _applySimpleTermination(
     employeeId: string,
     dto: TerminateEmployeeDto,
@@ -902,8 +801,6 @@ export class EmployeesService {
 
     if (!employee) throw new NotFoundException('Employee not found');
 
-    const terminationDate =
-      this.parseOptionalDate(dto.terminationDate, 'terminationDate') || new Date();
     const terminationDate =
       this.parseOptionalDate(dto.terminationDate, 'terminationDate') || new Date();
 
@@ -942,17 +839,13 @@ export class EmployeesService {
 
     const terminationDate = this.parseOptionalDate(dto.terminationDate, 'terminationDate');
 
-
     if (!terminationDate) {
       throw new BadRequestException('Invalid termination date');
     }
 
-    // Determine the status based on termination type
     const status = dto.terminationType === 'resignation' ? 'resigned' : 'terminated';
 
-    // Use transaction to update employee and create termination record
     const result = await this.prisma.$transaction(async (tx) => {
-      // Update employee status
       const updated = await tx.employee.update({
         where: { employeeId: dto.employeeId },
         data: {
@@ -968,7 +861,6 @@ export class EmployeesService {
         include: this.employeeSelect(),
       });
 
-      // Create termination record for audit trail
       const terminationRecord = await tx.terminationRecord.create({
         data: {
           employeeId: dto.employeeId,
@@ -989,15 +881,9 @@ export class EmployeesService {
       dto.terminationType === 'resignation'
         ? 'Employee resigned successfully'
         : 'Employee terminated successfully';
-    const actionMessage =
-      dto.terminationType === 'resignation'
-        ? 'Employee resigned successfully'
-        : 'Employee terminated successfully';
 
     return {
-    return {
       success: true,
-      message: actionMessage,
       message: actionMessage,
       employee: result.employee,
       terminationRecord: result.terminationRecord,
@@ -1005,10 +891,7 @@ export class EmployeesService {
   }
 
   async bulkTerminateDepartment(dto: BulkTerminateDepartmentDto, user: AuthenticatedUser) {
-  async bulkTerminateDepartment(dto: BulkTerminateDepartmentDto, user: AuthenticatedUser) {
     const status = dto.terminationType === 'resignation' ? 'resigned' : 'terminated';
-    const terminationDate =
-      this.parseOptionalDate(dto.terminationDate, 'terminationDate') || new Date();
     const terminationDate =
       this.parseOptionalDate(dto.terminationDate, 'terminationDate') || new Date();
 
@@ -1071,9 +954,6 @@ export class EmployeesService {
   }
 
   async rehireEmployee(dto: RehireEmployeeDto, user: AuthenticatedUser) {
-    // 1. Validate employee exists and is resigned/terminated
-    const employee = await this.prisma.employee.findUnique({
-      where: { employeeId: dto.employeeId },
     const employee = await this.prisma.employee.findUnique({
       where: { employeeId: dto.employeeId },
     });
@@ -1086,28 +966,20 @@ export class EmployeesService {
       throw new BadRequestException(
         'Employee is not eligible for rehire. Only resigned or terminated employees can be rehired.',
       );
-      throw new BadRequestException(
-        'Employee is not eligible for rehire. Only resigned or terminated employees can be rehired.',
-      );
     }
 
     const rehireDate = this.parseOptionalDate(dto.rehireDate, 'rehireDate');
-
 
     if (!rehireDate) {
       throw new BadRequestException('Invalid rehire date');
     }
 
-    // Store previous settings if needed for restoration
     const restorePreviousSettings = dto.restorePreviousSettings ?? true;
 
-    // Use transaction to update employee and create rehire record
     const result = await this.prisma.$transaction(async (tx) => {
-      // 2. Restore employee to active status
       const updateData: Prisma.EmployeeUpdateInput = {
         status: 'active',
         rehireDate,
-        // Clear termination-related fields
         terminationDate: null,
         terminationType: null,
         terminationReason: null,
@@ -1117,22 +989,17 @@ export class EmployeesService {
         isFinanciallySettled: false,
       };
 
-      // If restorePreviousSettings is true, keep all previous data (salary, department, etc.)
-      // Otherwise, the data is already preserved in the employee record
-
       const updatedEmployee = await tx.employee.update({
         where: { employeeId: dto.employeeId },
         data: updateData,
         include: this.employeeSelect(),
       });
 
-      // 3. Find the most recent termination record for this employee
       const previousTermination = await tx.terminationRecord.findFirst({
         where: { employeeId: dto.employeeId },
         orderBy: { terminationDate: 'desc' },
       });
 
-      // 4. Create rehire record for audit trail
       const rehireRecord = await tx.rehireRecord.create({
         data: {
           employeeId: dto.employeeId,
@@ -1149,9 +1016,7 @@ export class EmployeesService {
     await this.shortCache.invalidatePrefix('employees:stats');
 
     return {
-    return {
       success: true,
-      message: 'Employee rehired successfully',
       message: 'Employee rehired successfully',
       employee: result.employee,
       rehireRecord: result.rehireRecord,
@@ -1159,9 +1024,6 @@ export class EmployeesService {
   }
 
   async processFinancialSettlement(dto: FinancialSettlementDto, user: AuthenticatedUser) {
-    // 1. Validate employee exists and is resigned/terminated
-    const employee = await this.prisma.employee.findUnique({
-      where: { employeeId: dto.employeeId },
     const employee = await this.prisma.employee.findUnique({
       where: { employeeId: dto.employeeId },
     });
@@ -1174,9 +1036,6 @@ export class EmployeesService {
       throw new BadRequestException(
         'Employee is not eligible for financial settlement. Only resigned or terminated employees can be settled.',
       );
-      throw new BadRequestException(
-        'Employee is not eligible for financial settlement. Only resigned or terminated employees can be settled.',
-      );
     }
 
     if (employee.financialSettlementStatus === 'completed' || employee.isFinanciallySettled) {
@@ -1185,20 +1044,16 @@ export class EmployeesService {
 
     const settlementDate = this.parseOptionalDate(dto.settlementDate, 'settlementDate');
 
-
     if (!settlementDate) {
       throw new BadRequestException('Invalid settlement date');
     }
 
-    // 2. Calculate total settlement amount
     const finalSalaryAmount = dto.finalSalaryAmount;
     const deductions = dto.deductions ?? 0;
     const bonuses = dto.bonuses ?? 0;
     const totalSettlement = finalSalaryAmount + bonuses - deductions;
 
-    // Use transaction to update employee and create settlement record
     const result = await this.prisma.$transaction(async (tx) => {
-      // 3. Create financial settlement record
       const settlement = await tx.financialSettlement.create({
         data: {
           employeeId: dto.employeeId,
@@ -1213,7 +1068,6 @@ export class EmployeesService {
         },
       });
 
-      // 4. Update employee financial status
       const updatedEmployee = await tx.employee.update({
         where: { employeeId: dto.employeeId },
         data: {
@@ -1231,9 +1085,7 @@ export class EmployeesService {
     await this.shortCache.invalidatePrefix('employees:stats');
 
     return {
-    return {
       success: true,
-      message: 'Financial settlement processed successfully',
       message: 'Financial settlement processed successfully',
       settlement: result.settlement,
       employee: result.employee,
@@ -1243,30 +1095,24 @@ export class EmployeesService {
   async getResignedEmployees(query: ResignedEmployeesQueryDto) {
     const { page, limit, skip } = resolvePagination(query);
 
-
-    // Build where clause for resigned/terminated employees
     const where: Prisma.EmployeeWhereInput = {
       status: {
         in: ['resigned', 'terminated'],
       },
     };
 
-    // Filter by department
     if (query.department) {
       where.department = query.department;
     }
 
-    // Filter by termination type
     if (query.type) {
       where.terminationType = query.type;
     }
 
-    // Filter by financial settlement status
     if (query.financialStatus) {
       where.financialSettlementStatus = query.financialStatus;
     }
 
-    // Filter by search term
     if (query.search) {
       where.OR = [
         { name: { contains: query.search, mode: 'insensitive' } },
@@ -1276,7 +1122,6 @@ export class EmployeesService {
       ];
     }
 
-    // Filter by month (current or previous)
     if (query.month && query.month !== 'all') {
       const now = new Date();
       const currentMonthStart = new Date(now.getFullYear(), now.getMonth(), 1);
@@ -1294,7 +1139,6 @@ export class EmployeesService {
       }
     }
 
-    // Execute queries
     const [employees, total] = await Promise.all([
       this.prisma.employee.findMany({
         where,
@@ -1306,7 +1150,6 @@ export class EmployeesService {
       this.prisma.employee.count({ where }),
     ]);
 
-    // Calculate statistics
     const now = new Date();
     const currentMonthStart = new Date(now.getFullYear(), now.getMonth(), 1);
 
