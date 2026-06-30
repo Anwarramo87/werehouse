@@ -51,54 +51,63 @@ export class BiometricService {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
+    // Convert local time to UTC by subtracting the timezone offset
+    const timezoneOffsetMs = today.getTimezoneOffset() * 60 * 1000;
+
     return [
-      // هبا - حضور عادي مع تأخير 37 دقيقة
+      // هبا - حضور عادي مع تأخير 37 دقيقة (UTC timestamps)
       {
         deviceUserId: 6,
-        recordTime: new Date(today.getTime() + 8 * 60 * 60 * 1000 + 37 * 60 * 1000), // 08:37 AM
+        recordTime: new Date(
+          today.getTime() + 8 * 60 * 60 * 1000 + 37 * 60 * 1000 - timezoneOffsetMs,
+        ), // 08:37 AM UTC
         checkType: 0,
       },
       {
         deviceUserId: 6,
-        recordTime: new Date(today.getTime() + 17 * 60 * 60 * 1000), // 05:00 PM
+        recordTime: new Date(today.getTime() + 17 * 60 * 60 * 1000 - timezoneOffsetMs), // 05:00 PM UTC
         checkType: 1,
       },
 
       // شلاي - غياب كامل (لا توجد سجلات)
 
-      // موظف 10 - وقت إضافي
+      // موظف 10 - وقت إضافي (UTC timestamps)
       {
         deviceUserId: 10,
-        recordTime: new Date(today.getTime() + 7 * 60 * 60 * 1000), // 07:00 AM (مبكر)
+        recordTime: new Date(today.getTime() + 7 * 60 * 60 * 1000 - timezoneOffsetMs), // 07:00 AM UTC
         checkType: 0,
       },
       {
         deviceUserId: 10,
-        recordTime: new Date(today.getTime() + 19 * 60 * 60 * 1000), // 07:00 PM (متأخر)
+        recordTime: new Date(today.getTime() + 19 * 60 * 60 * 1000 - timezoneOffsetMs), // 07:00 PM UTC
         checkType: 1,
       },
 
-      // موظف 15 - مغادرة مبكرة
+      // موظف 15 - مغادرة مبكرة (UTC timestamps)
       {
         deviceUserId: 15,
-        recordTime: new Date(today.getTime() + 8 * 60 * 60 * 1000), // 08:00 AM
+        recordTime: new Date(today.getTime() + 8 * 60 * 60 * 1000 - timezoneOffsetMs), // 08:00 AM UTC
         checkType: 0,
       },
       {
         deviceUserId: 15,
-        recordTime: new Date(today.getTime() + 15 * 60 * 60 * 1000), // 03:00 PM (مبكر)
+        recordTime: new Date(today.getTime() + 15 * 60 * 60 * 1000 - timezoneOffsetMs), // 03:00 PM UTC
         checkType: 1,
       },
 
-      // عطلة نهاية الأسبوع - السبت
+      // عطلة نهاية الأسبوع - السبت (UTC timestamps)
       {
         deviceUserId: 6,
-        recordTime: new Date(today.getTime() - 2 * 24 * 60 * 60 * 1000 + 9 * 60 * 60 * 1000), // السبت 09:00 AM
+        recordTime: new Date(
+          today.getTime() - 2 * 24 * 60 * 60 * 1000 + 9 * 60 * 60 * 1000 - timezoneOffsetMs,
+        ), // السبت 09:00 AM UTC
         checkType: 0,
       },
       {
         deviceUserId: 6,
-        recordTime: new Date(today.getTime() - 2 * 24 * 60 * 60 * 1000 + 14 * 60 * 60 * 1000), // السبت 02:00 PM
+        recordTime: new Date(
+          today.getTime() - 2 * 24 * 60 * 60 * 1000 + 14 * 60 * 60 * 1000 - timezoneOffsetMs,
+        ), // السبت 02:00 PM UTC
         checkType: 1,
       },
     ];
@@ -215,10 +224,7 @@ export class BiometricService {
       // fall back to the legacy EMP + device number convention.
       const employee = await this.prisma.employee.findFirst({
         where: {
-          OR: [
-            { biometricNumber: log.deviceUserId },
-            { employeeId: fallbackEmployeeId },
-          ],
+          OR: [{ biometricNumber: log.deviceUserId }, { employeeId: fallbackEmployeeId }],
         },
         select: { employeeId: true, scheduledStart: true, scheduledEnd: true },
       });
@@ -284,9 +290,7 @@ export class BiometricService {
 
     try {
       // Fetch logs (simulator or real device)
-      const rawLogs = this.useSimulator
-        ? this.generateSimulatorLogs()
-        : await this.fetchRealLogs();
+      const rawLogs = this.useSimulator ? this.generateSimulatorLogs() : await this.fetchRealLogs();
 
       this.logger.log(`📊 Fetched ${rawLogs.length} raw logs`);
 

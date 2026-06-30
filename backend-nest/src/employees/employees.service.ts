@@ -59,6 +59,13 @@ export class EmployeesService {
       throw new BadRequestException(`${fieldName} must be a valid ISO date`);
     }
 
+    // Prevent dates in the far future (> 100 years from now)
+    const maxDate = new Date();
+    maxDate.setFullYear(maxDate.getFullYear() + 100);
+    if (parsed > maxDate) {
+      throw new BadRequestException(`${fieldName} cannot be more than 100 years in the future`);
+    }
+
     return parsed;
   }
 
@@ -125,6 +132,8 @@ export class EmployeesService {
 
   private employeeSelect() {
     return {
+      // Only select relations that do not touch Department.manager in the current DB.
+      // Department.manager may be missing depending on migration state.
       departmentEntity: {
         select: {
           id: true,
@@ -133,16 +142,7 @@ export class EmployeesService {
           updatedAt: true,
         },
       },
-      role: {
-        select: {
-          id: true,
-          name: true,
-          createdAt: true,
-          updatedAt: true,
-          description: true,
-          permissions: true,
-        },
-      },
+      role: true,
     } as const;
   }
 
@@ -155,6 +155,9 @@ export class EmployeesService {
   }
 
   private applyEmployeeStatusFilter(where: Prisma.EmployeeWhereInput, queryStatus?: string | null) {
+    // Policy:
+    // - default: exclude terminated/resigned only
+    // - allow overriding with queryStatus
     const excluded = ['terminated', 'resigned'];
 
     if (queryStatus) {
@@ -232,6 +235,7 @@ export class EmployeesService {
   }
 
   async stats() {
+    // Stats is a pure aggregation; keep all statuses visible.
     return this.shortCache.getOrSetJson('employees:stats', 30, async () => {
       const [total, active, inactive, terminated, resigned, groupedByDepartment] =
         await Promise.all([
@@ -790,6 +794,9 @@ export class EmployeesService {
     );
   }
 
+  /**
+   * Shared helper for terminate() and resign() — both differ only in status/type/message.
+   */
   private async _applySimpleTermination(
     employeeId: string,
     dto: TerminateEmployeeDto,
@@ -843,9 +850,12 @@ export class EmployeesService {
       throw new BadRequestException('Invalid termination date');
     }
 
+    // Determine the status based on termination type
     const status = dto.terminationType === 'resignation' ? 'resigned' : 'terminated';
 
+    // Use transaction to update employee and create termination record
     const result = await this.prisma.$transaction(async (tx) => {
+      // Update employee status
       const updated = await tx.employee.update({
         where: { employeeId: dto.employeeId },
         data: {
@@ -861,6 +871,7 @@ export class EmployeesService {
         include: this.employeeSelect(),
       });
 
+      // Create termination record for audit trail
       const terminationRecord = await tx.terminationRecord.create({
         data: {
           employeeId: dto.employeeId,
@@ -954,6 +965,7 @@ export class EmployeesService {
   }
 
   async rehireEmployee(dto: RehireEmployeeDto, user: AuthenticatedUser) {
+    // 1. Validate employee exists and is resigned/terminated
     const employee = await this.prisma.employee.findUnique({
       where: { employeeId: dto.employeeId },
     });
@@ -974,12 +986,16 @@ export class EmployeesService {
       throw new BadRequestException('Invalid rehire date');
     }
 
+    // Store previous settings if needed for restoration
     const restorePreviousSettings = dto.restorePreviousSettings ?? true;
 
+    // Use transaction to update employee and create rehire record
     const result = await this.prisma.$transaction(async (tx) => {
+      // 2. Restore employee to active status
       const updateData: Prisma.EmployeeUpdateInput = {
         status: 'active',
         rehireDate,
+        // Clear termination-related fields
         terminationDate: null,
         terminationType: null,
         terminationReason: null,
@@ -989,17 +1005,22 @@ export class EmployeesService {
         isFinanciallySettled: false,
       };
 
+      // If restorePreviousSettings is true, keep all previous data (salary, department, etc.)
+      // Otherwise, the data is already preserved in the employee record
+
       const updatedEmployee = await tx.employee.update({
         where: { employeeId: dto.employeeId },
         data: updateData,
         include: this.employeeSelect(),
       });
 
+      // 3. Find the most recent termination record for this employee
       const previousTermination = await tx.terminationRecord.findFirst({
         where: { employeeId: dto.employeeId },
         orderBy: { terminationDate: 'desc' },
       });
 
+      // 4. Create rehire record for audit trail
       const rehireRecord = await tx.rehireRecord.create({
         data: {
           employeeId: dto.employeeId,
@@ -1024,6 +1045,7 @@ export class EmployeesService {
   }
 
   async processFinancialSettlement(dto: FinancialSettlementDto, user: AuthenticatedUser) {
+    // 1. Validate employee exists and is resigned/terminated
     const employee = await this.prisma.employee.findUnique({
       where: { employeeId: dto.employeeId },
     });
@@ -1048,12 +1070,15 @@ export class EmployeesService {
       throw new BadRequestException('Invalid settlement date');
     }
 
+    // 2. Calculate total settlement amount
     const finalSalaryAmount = dto.finalSalaryAmount;
     const deductions = dto.deductions ?? 0;
     const bonuses = dto.bonuses ?? 0;
     const totalSettlement = finalSalaryAmount + bonuses - deductions;
 
+    // Use transaction to update employee and create settlement record
     const result = await this.prisma.$transaction(async (tx) => {
+      // 3. Create financial settlement record
       const settlement = await tx.financialSettlement.create({
         data: {
           employeeId: dto.employeeId,
@@ -1068,6 +1093,7 @@ export class EmployeesService {
         },
       });
 
+      // 4. Update employee financial status
       const updatedEmployee = await tx.employee.update({
         where: { employeeId: dto.employeeId },
         data: {
@@ -1095,24 +1121,29 @@ export class EmployeesService {
   async getResignedEmployees(query: ResignedEmployeesQueryDto) {
     const { page, limit, skip } = resolvePagination(query);
 
+    // Build where clause for resigned/terminated employees
     const where: Prisma.EmployeeWhereInput = {
       status: {
         in: ['resigned', 'terminated'],
       },
     };
 
+    // Filter by department
     if (query.department) {
       where.department = query.department;
     }
 
+    // Filter by termination type
     if (query.type) {
       where.terminationType = query.type;
     }
 
+    // Filter by financial settlement status
     if (query.financialStatus) {
       where.financialSettlementStatus = query.financialStatus;
     }
 
+    // Filter by search term
     if (query.search) {
       where.OR = [
         { name: { contains: query.search, mode: 'insensitive' } },
@@ -1122,6 +1153,7 @@ export class EmployeesService {
       ];
     }
 
+    // Filter by month (current or previous)
     if (query.month && query.month !== 'all') {
       const now = new Date();
       const currentMonthStart = new Date(now.getFullYear(), now.getMonth(), 1);
@@ -1139,6 +1171,7 @@ export class EmployeesService {
       }
     }
 
+    // Execute queries
     const [employees, total] = await Promise.all([
       this.prisma.employee.findMany({
         where,
@@ -1150,6 +1183,7 @@ export class EmployeesService {
       this.prisma.employee.count({ where }),
     ]);
 
+    // Calculate statistics
     const now = new Date();
     const currentMonthStart = new Date(now.getFullYear(), now.getMonth(), 1);
 
