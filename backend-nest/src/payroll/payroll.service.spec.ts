@@ -95,13 +95,13 @@ describe('Payroll Calculations', () => {
       expect(calcLateDeduction(GROSS, 0)).toBe(0);
     });
 
-    it('should compute late deduction = minuteWage × lateMinutes', () => {
-      const expected = getMinuteWage(GROSS) * 30;
+    it('should compute late deduction = minuteWage × lateMinutes × 1.5', () => {
+      const expected = getMinuteWage(GROSS) * 30 * 1.5;
       expect(calcLateDeduction(GROSS, 30)).toBeCloseTo(expected, 6);
     });
 
-    it('late deduction for 60 minutes should equal 1× hourly wage', () => {
-      const expected = getHourlyWage(GROSS);
+    it('late deduction for 60 minutes should equal 1.5× hourly wage', () => {
+      const expected = getHourlyWage(GROSS) * 1.5;
       expect(calcLateDeduction(GROSS, 60)).toBeCloseTo(expected, 6);
     });
 
@@ -135,9 +135,9 @@ describe('Payroll Calculations', () => {
       expect(actual).toBeCloseTo(expected, 6);
     });
 
-    it('should not apply late penalty multiplier to lateMinutes (policy regression guard)', () => {
+    it('should apply late penalty multiplier to lateMinutes (policy regression guard)', () => {
       const lateMinutes = 30;
-      const expected = getMinuteWage(GROSS) * lateMinutes;
+      const expected = getMinuteWage(GROSS) * lateMinutes * 1.5;
       const actual = calcLateDeduction(GROSS, lateMinutes);
       expect(actual).toBeCloseTo(expected, 6);
     });

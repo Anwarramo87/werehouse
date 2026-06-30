@@ -53,7 +53,7 @@ services:
       QUEUES_ENABLED: "true"
     ports:
       - "5001:5001"
-    command: sh -c "npm run prisma:push && node dist/main"
+    command: sh -c "npx prisma migrate deploy && node dist/main"
 
 volumes:
   postgres_data:

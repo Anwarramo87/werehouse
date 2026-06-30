@@ -111,8 +111,8 @@ From this folder:
 4. Stop:
 	- `docker compose down`
 
-The API container runs Prisma schema sync on startup:
-- `npm run prisma:push` (internally: `prisma db push --accept-data-loss`)
+The API container applies pending migrations on startup:
+- `npx prisma migrate deploy`
 
 Before adding the `nationalId` unique index on an existing DB, verify there are no duplicates:
 - `SELECT "nationalId", COUNT(*) FROM "employees" WHERE "nationalId" IS NOT NULL AND TRIM("nationalId") <> '' GROUP BY "nationalId" HAVING COUNT(*) > 1;`

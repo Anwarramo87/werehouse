@@ -81,7 +81,18 @@ export class AttendanceAggregationService {
    */
   private utcTimestampToLocalMinutes(utc: Date): number {
     const utcMinutes = utc.getUTCHours() * 60 + utc.getUTCMinutes();
-    return ((utcMinutes + this.timezoneOffsetMinutes) % MINUTES_IN_DAY + MINUTES_IN_DAY) % MINUTES_IN_DAY;
+    return (
+      (((utcMinutes + this.timezoneOffsetMinutes) % MINUTES_IN_DAY) + MINUTES_IN_DAY) %
+      MINUTES_IN_DAY
+    );
+  }
+
+  /**
+   * Convert a local timestamp to minutes since midnight.
+   * Use this when the biometric device sends local timestamps.
+   */
+  private localTimestampToMinutes(local: Date): number {
+    return local.getHours() * 60 + local.getMinutes();
   }
 
   /**
@@ -141,9 +152,7 @@ export class AttendanceAggregationService {
     if (punches.length === 0) return 0;
 
     // Sort chronologically
-    const sorted = [...punches].sort(
-      (a, b) => a.timestamp.getTime() - b.timestamp.getTime(),
-    );
+    const sorted = [...punches].sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
 
     let workedMs = 0;
     let pendingIn: Date | null = null;
@@ -250,9 +259,7 @@ export class AttendanceAggregationService {
     scheduledStartMin: number,
     gracePeriodMinutes: number,
   ): number {
-    const sorted = [...punches].sort(
-      (a, b) => a.timestamp.getTime() - b.timestamp.getTime(),
-    );
+    const sorted = [...punches].sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
 
     const firstIn = sorted.find((p) => p.type.toUpperCase() === 'IN');
     if (!firstIn) return 0;
@@ -283,9 +290,7 @@ export class AttendanceAggregationService {
     punches: DailyPunchRecord[],
     scheduledEndMin: number,
   ): number {
-    const sorted = [...punches].sort(
-      (a, b) => a.timestamp.getTime() - b.timestamp.getTime(),
-    );
+    const sorted = [...punches].sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
 
     // Walk backwards to find the last OUT punch
     for (let i = sorted.length - 1; i >= 0; i--) {
@@ -387,10 +392,7 @@ export class AttendanceAggregationService {
 
     // ── Step 4b: Calculate early leave from last OUT punch (independent) ────
     // This avoids misattributing grace-period delay as early leave.
-    const rawEarlyLeaveMinutes = this.calculateEarlyLeaveFromPunches(
-      punches,
-      scheduledEndMin,
-    );
+    const rawEarlyLeaveMinutes = this.calculateEarlyLeaveFromPunches(punches, scheduledEndMin);
 
     // ── Step 5: Fetch approved hourly leaves ────────────────────────────────
     const hourlyLeaves = await this.getApprovedHourlyLeaves(employeeId, dateOnly);
@@ -570,9 +572,7 @@ export class AttendanceAggregationService {
         }
       } catch (err) {
         this.logger.error(
-          `Failed to aggregate ${emp.employeeId} for ${dateStr}: ${
-            (err as Error).message
-          }`,
+          `Failed to aggregate ${emp.employeeId} for ${dateStr}: ${(err as Error).message}`,
         );
         skippedCount++;
       }
@@ -687,10 +687,7 @@ export class AttendanceAggregationService {
     for (const log of logs) {
       const minutes = Number(log.value || 0);
       if (!Number.isFinite(minutes) || minutes <= 0) continue;
-      result.set(
-        log.employeeId,
-        (result.get(log.employeeId) || 0) + minutes,
-      );
+      result.set(log.employeeId, (result.get(log.employeeId) || 0) + minutes);
     }
 
     return result;

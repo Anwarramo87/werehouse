@@ -16,6 +16,17 @@ type LowStockAlert = {
   reorderLevel: number;
 };
 
+type StockLevelRow = {
+  id: string;
+  sku: string;
+  location: string;
+  quantity: number;
+  reserved: number;
+  available: number;
+  createdAt: Date;
+  updatedAt: Date;
+};
+
 @Injectable()
 export class InventoryService {
   constructor(
@@ -112,25 +123,32 @@ export class InventoryService {
   }
 
   async adjustStock(dto: AdjustStockDto) {
-    let stock = await this.prisma.stockLevel.findUnique({
-      where: { sku_location: { sku: dto.sku, location: dto.location } },
-    });
+    const rows = await this.prisma.$queryRaw<StockLevelRow[]>`
+      INSERT INTO stock_levels (id, sku, location, quantity, reserved, available, "createdAt", "updatedAt")
+      VALUES (
+        gen_random_uuid(),
+        ${dto.sku},
+        ${dto.location},
+        GREATEST(0, ${dto.change}),
+        0,
+        GREATEST(0, ${dto.change}),
+        NOW(),
+        NOW()
+      )
+      ON CONFLICT (sku, location) DO UPDATE SET
+        quantity = GREATEST(0, stock_levels.quantity + ${dto.change}),
+        available = GREATEST(
+          0,
+          GREATEST(0, stock_levels.quantity + ${dto.change}) - stock_levels.reserved
+        ),
+        "updatedAt" = NOW()
+      RETURNING id, sku, location, quantity, reserved, available, "createdAt", "updatedAt"
+    `;
 
-    if (!stock) {
-      stock = await this.prisma.stockLevel.create({
-        data: { sku: dto.sku, location: dto.location, quantity: 0, reserved: 0, available: 0 },
-      });
+    const updated = rows[0];
+    if (!updated) {
+      throw new BadRequestException('Stock adjustment failed');
     }
-
-    const quantity = Math.max(0, stock.quantity + dto.change);
-    const reserved = stock.reserved;
-    const updated = await this.prisma.stockLevel.update({
-      where: { sku_location: { sku: dto.sku, location: dto.location } },
-      data: {
-        quantity,
-        available: Math.max(0, quantity - reserved),
-      },
-    });
 
     await this.invalidateInventoryCaches();
 
@@ -138,51 +156,59 @@ export class InventoryService {
   }
 
   async reserveStock(dto: ReserveStockDto) {
-    const stock = await this.prisma.stockLevel.findUnique({
-      where: { sku_location: { sku: dto.sku, location: dto.location } },
-    });
-    if (!stock) throw new NotFoundException('Stock level not found');
+    const rows = await this.prisma.$queryRaw<StockLevelRow[]>`
+      UPDATE stock_levels
+      SET
+        reserved = reserved + ${dto.quantity},
+        available = available - ${dto.quantity},
+        "updatedAt" = NOW()
+      WHERE sku = ${dto.sku}
+        AND location = ${dto.location}
+        AND available >= ${dto.quantity}
+      RETURNING id, sku, location, quantity, reserved, available, "createdAt", "updatedAt"
+    `;
 
-    if (stock.available < dto.quantity) {
+    if (rows.length === 0) {
+      await this.assertStockLevelExistsOrThrow(dto.sku, dto.location);
       throw new BadRequestException('Insufficient stock available');
     }
 
-    const reserved = stock.reserved + dto.quantity;
-    const updated = await this.prisma.stockLevel.update({
-      where: { sku_location: { sku: dto.sku, location: dto.location } },
-      data: {
-        reserved,
-        available: Math.max(0, stock.quantity - reserved),
-      },
-    });
-
     await this.invalidateInventoryCaches();
 
-    return { message: 'Stock reserved successfully', stockLevel: updated };
+    return { message: 'Stock reserved successfully', stockLevel: rows[0] };
   }
 
   async releaseReservation(dto: ReserveStockDto) {
-    const stock = await this.prisma.stockLevel.findUnique({
-      where: { sku_location: { sku: dto.sku, location: dto.location } },
-    });
-    if (!stock) throw new NotFoundException('Stock level not found');
+    const rows = await this.prisma.$queryRaw<StockLevelRow[]>`
+      UPDATE stock_levels
+      SET
+        reserved = reserved - ${dto.quantity},
+        available = available + ${dto.quantity},
+        "updatedAt" = NOW()
+      WHERE sku = ${dto.sku}
+        AND location = ${dto.location}
+        AND reserved >= ${dto.quantity}
+      RETURNING id, sku, location, quantity, reserved, available, "createdAt", "updatedAt"
+    `;
 
-    if (stock.reserved < dto.quantity) {
+    if (rows.length === 0) {
+      await this.assertStockLevelExistsOrThrow(dto.sku, dto.location);
       throw new BadRequestException('Cannot release more than reserved');
     }
 
-    const reserved = stock.reserved - dto.quantity;
-    const updated = await this.prisma.stockLevel.update({
-      where: { sku_location: { sku: dto.sku, location: dto.location } },
-      data: {
-        reserved,
-        available: Math.max(0, stock.quantity - reserved),
-      },
-    });
-
     await this.invalidateInventoryCaches();
 
-    return { message: 'Reservation released successfully', stockLevel: updated };
+    return { message: 'Reservation released successfully', stockLevel: rows[0] };
+  }
+
+  private async assertStockLevelExistsOrThrow(sku: string, location: string) {
+    const stock = await this.prisma.stockLevel.findUnique({
+      where: { sku_location: { sku, location } },
+      select: { id: true },
+    });
+    if (!stock) {
+      throw new NotFoundException('Stock level not found');
+    }
   }
 
   async lowStockAlerts(query?: { page?: number; limit?: number }) {

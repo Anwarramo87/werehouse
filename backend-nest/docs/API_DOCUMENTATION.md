@@ -217,37 +217,4 @@ Records an employee's check-out and calculates the hours worked for the shift. T
 
 ## 3. Salary Calculation
 
-### **GET /salary/calculate**
-
-Calculates the gross and net salary for a specific employee for a given month and year, based on recorded attendance. This endpoint does not require authentication for biometric device integration.
-
-*   **URL**: `/salary/public/calculate`
-*   **Method**: `GET`
-*   **Authentication**: Not Required (Public access for biometric devices)
-*   **Query Parameters**:
-
-    *   `employeeId` (string, required): The unique identifier of the employee.
-    *   `month` (string, required): The month for salary calculation (e.g., `01` for January, `12` for December).
-    *   `year` (number, required): The year for salary calculation (e.g., `2024`).
-
-*   **Expected Response (200 OK)**:
-
-    ```json
-    {
-      "employeeId": "EMP001",
-      "employeeName": "John Doe",
-      "period": {
-        "startDate": "2024-01-01",
-        "endDate": "2024-01-31"
-      },
-      "hoursWorked": 160.00,
-      "hourlyRate": 25.50,
-      "grossSalary": 4080.00,
-      "deductions": 0,
-      "netSalary": 4080.00
-    }
-    ```
-
-*   **Error Responses**:
-    *   **400 Bad Request**: `{"statusCode": 400, "message": "employeeId, month, and year are required"}` if any required query parameter is missing.
-    *   **400 Bad Request**: `{"statusCode": 400, "message": "Employee not found"}` if the provided `employeeId` does not exist.
+Salary endpoints require authentication. See `POST /api/salary/calculate-allowances` in `docs/salary-public-usage.md` for the dev-only allowance calculator, and the authenticated routes under `/api/salary` for employee salary management.

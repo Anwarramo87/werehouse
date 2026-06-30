@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { ShortCacheService } from '../common/cache/short-cache.service';
 import {
   formatFactoryLocalTime,
   monthDateRange,
@@ -33,7 +34,10 @@ function toNum(val: unknown): number {
 
 @Injectable()
 export class DashboardService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly shortCache: ShortCacheService,
+  ) {}
 
   private parseClockMinutes(time: string): number {
     const match = /^(\d{1,2}):(\d{2})$/.exec((time ?? DEFAULT_SCHEDULED_START).slice(0, 5));
@@ -86,6 +90,13 @@ export class DashboardService {
 
   async getHomeStats() {
     const today = toFactoryDateKey();
+
+    return this.shortCache.getOrSetJson(`dashboard:home-stats:${today}`, 25, async () =>
+      this.buildHomeStats(today),
+    );
+  }
+
+  private async buildHomeStats(today: string) {
     const now = new Date();
     const { start: monthStart, end: monthEnd } = monthDateRange(now.getFullYear(), now.getMonth());
 

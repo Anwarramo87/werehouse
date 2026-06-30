@@ -34,6 +34,8 @@ export class DepartmentsService {
     const department = await this.prisma.department.create({
       data: {
         name,
+        ...(dto.manager !== undefined && { manager: dto.manager }),
+        ...(dto.establishedAt !== undefined && { establishedAt: new Date(dto.establishedAt) }),
       },
     });
 
@@ -54,6 +56,8 @@ export class DepartmentsService {
       where: { id },
       data: {
         name,
+        ...(dto.manager !== undefined && { manager: dto.manager }),
+        ...(dto.establishedAt !== undefined && { establishedAt: new Date(dto.establishedAt) }),
       },
     });
     return { message: 'Department updated', department: dept };

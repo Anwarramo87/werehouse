@@ -112,7 +112,7 @@ git push origin --force --all
 | 5.2 | `departments/*` + `Factory/hooks/useDepartments.ts` | Persist manager from UI | ✅ DONE |
 | 5.3 | `prisma/schema.prisma` | EmployeeInsurance proper 1:1 relation | ✅ DONE |
 | 5.4 | `prisma/migrations/20260620_hardening_schema/` | Migration SQL | ✅ DONE |
-| 5.5 | Run migration | `npx prisma migrate deploy` or `db push` | ⏳ TODO 👤 |
+| 5.5 | Run migration | `npx prisma migrate deploy` (after `pg_dump` backup) | ⏳ TODO 👤 |
 | 5.6 | Consolidate duplicate salary sources (`Employee.baseSalary` vs `EmployeeSalary`) | ✅ DONE |
 | 5.7 | Employee-scoped access checks (IDOR protection) | ✅ DONE |
 
@@ -123,7 +123,7 @@ git push origin --force --all
 | Step | Action | Status |
 |------|--------|--------|
 | 6.1 | Run `npm run build` in `backend-nest` | ✅ DONE |
-| 6.2 | Run `npx prisma db push` against your DB | ⏳ TODO 👤 |
+| 6.2 | Backup DB (`pg_dump`), then `npx prisma migrate deploy` | ⏳ TODO 👤 |
 | 6.3 | Set production env vars (see checklist below) | ⏳ TODO 👤 |
 | 6.4 | Smoke test: login, dashboard, payroll, kiosk check-in | ⏳ TODO 👤 |
 | 6.5 | Commit changes (do not commit `.env`) | ⏳ TODO 👤 |
@@ -213,6 +213,6 @@ To reach **100/100**: complete Phase 2 refresh tokens, run Phase 6 deploy checks
 1. ~~Phase 5.6 salary consolidation~~ ✅
 2. ~~Phase 4.5 indexes~~ ✅
 3. ~~Phase 5.7 IDOR guards~~ ✅
-4. Run `npx prisma db push` 👤 MANUAL
+4. `pg_dump` backup, then `npx prisma migrate deploy` 👤 MANUAL
 5. Rotate secrets + smoke test 👤 MANUAL
 6. Git history scrub if `.env` was pushed 👤 MANUAL

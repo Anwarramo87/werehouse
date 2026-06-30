@@ -89,6 +89,18 @@ export class BonusesService {
       },
     });
 
+    // If this is a permanent salary increase, update the employee's base salary
+    if (dto.bonusReason === 'زيادة راتب' && dto.bonusAmount && dto.bonusAmount > 0 && dto.employeeId !== 'ALL') {
+      await this.prisma.employee.update({
+        where: { employeeId: dto.employeeId },
+        data: {
+          baseSalary: {
+            increment: new Prisma.Decimal(dto.bonusAmount),
+          },
+        },
+      });
+    }
+
     await this.shortCache.invalidatePrefix('employees:stats');
     return result;
   }

@@ -1,6 +1,7 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { LeavesService } from './leaves.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { ShortCacheService } from '../common/cache/short-cache.service';
 
 describe('LeavesService', () => {
   let service: LeavesService;
@@ -15,12 +16,18 @@ describe('LeavesService', () => {
     },
   };
 
+  const shortCacheMock = {
+    getOrSetJson: jest.fn(),
+    invalidatePrefix: jest.fn(),
+  };
+
   beforeEach(async () => {
     jest.clearAllMocks();
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         LeavesService,
         { provide: PrismaService, useValue: prismaMock },
+        { provide: ShortCacheService, useValue: shortCacheMock },
       ],
     }).compile();
 
