@@ -6,10 +6,13 @@ node_modules/
 dist/
 **/dist/
 
-# Environment files
+# Environment files — root and all subdirectories
 .env
 .env.*
+**/.env
+**/.env.*
 !.env.example
+!**/.env.example
 
 # Logs
 *.log
