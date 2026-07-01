@@ -463,9 +463,11 @@ export class PayrollService {
       }),
     ]);
 
-    const totalBonuses = bonuses.reduce((sum, b) => {
-      return sum.plus(this.toDecimal(b.bonusAmount)).plus(this.toDecimal(b.assistanceAmount));
-    }, new Prisma.Decimal(0));
+    const totalBonuses = bonuses
+      .filter((b) => b.bonusReason !== 'زيادة في الراتب')
+      .reduce((sum, b) => {
+        return sum.plus(this.toDecimal(b.bonusAmount)).plus(this.toDecimal(b.assistanceAmount));
+      }, new Prisma.Decimal(0));
 
     const totalAdvances = advances.reduce((sum, a) => {
       const installment = this.toDecimal(a.installmentAmount).toNumber();
@@ -1230,6 +1232,8 @@ export class PayrollService {
 
     const bonusesByEmployee = new Map<string, { bonus: number; deductions: number }>();
     for (const bonus of bonuses) {
+      // Exclude permanent salary raises — these are already applied to baseSalary
+      if (bonus.bonusReason === 'زيادة في الراتب') continue;
       const current = bonusesByEmployee.get(bonus.employeeId) || { bonus: 0, deductions: 0 };
       // المكافآت (bonusAmount + assistanceAmount) تُضاف للراتب
       current.bonus += Number(bonus.bonusAmount || 0);
