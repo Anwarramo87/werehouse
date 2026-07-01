@@ -6,6 +6,7 @@ import { PermissionsGuard } from '../common/guards/permissions.guard';
 import { Permissions } from '../common/decorators/permissions.decorator';
 import { UpsertSalaryDto } from './dto/upsert-salary.dto';
 import { CalculateAllowancesDto } from './dto/calculate-allowances.dto';
+import { BulkRaiseDto } from './dto/bulk-raise.dto';
 
 @ApiTags('salary')
 @ApiCookieAuth()
@@ -16,13 +17,21 @@ export class SalaryController {
 
   /**
    * POST /api/salary/calculate-allowances
-   * يستقبل: salary, lumpSumSalary, livingAllowance
-   * يعيد: difference + البدلات الثلاثة + تحقق المجموع
    */
   @Post('calculate-allowances')
   @Permissions('manage_salary')
   calculateAllowances(@Body() dto: CalculateAllowancesDto) {
     return this.salaryService.calculateAllowances(dto);
+  }
+
+  /**
+   * POST /api/salary/bulk-raise
+   * يضيف مبلغ الزيادة على baseSalary بشكل دائم لكل الموظفين (أو موظف واحد)
+   */
+  @Post('bulk-raise')
+  @Permissions('manage_salary')
+  bulkRaise(@Body() dto: BulkRaiseDto) {
+    return this.salaryService.bulkRaise(dto);
   }
 
   @Get()

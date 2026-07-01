@@ -90,7 +90,7 @@ export class DashboardService {
   async getHomeStats() {
     const today = toFactoryDateKey();
 
-    return this.shortCache.getOrSetJson(`dashboard:home-stats:${today}`, 25, async () =>
+    return this.shortCache.getOrSetJson(`dashboard:home-stats:${today}`, 300, async () =>
       this.buildHomeStats(today),
     );
   }
@@ -111,7 +111,11 @@ export class DashboardService {
 
       this.prisma.attendanceRecord.findMany({
         where: { date: today },
-        include: {
+        select: {
+          employeeId: true,
+          type: true,
+          timestamp: true,
+          shiftPair: true,
           employee: {
             select: {
               name: true,
@@ -139,7 +143,7 @@ export class DashboardService {
           },
         },
         orderBy: { timestamp: 'asc' },
-        take: 10000,
+        take: 2000,
       }),
 
       this.prisma.employeeSalary.aggregate({

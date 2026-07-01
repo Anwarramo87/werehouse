@@ -3,6 +3,7 @@ import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { UpsertSalaryDto } from './dto/upsert-salary.dto';
 import { CalculateAllowancesDto } from './dto/calculate-allowances.dto';
+import { BulkRaiseDto } from './dto/bulk-raise.dto';
 import {
   buildEmployeeSalaryMirror,
   resolveSalary,
@@ -116,5 +117,65 @@ export class SalaryService {
     await this.getByEmployee(employeeId);
     await this.prisma.employeeSalary.delete({ where: { employeeId } });
     return { message: 'Salary record deleted' };
+  }
+
+  /**
+   * POST /api/salary/bulk-raise
+   * يضيف مبلغ الزيادة على baseSalary بشكل دائم.
+   * - إذا employeeId = ALL أو غير مُرسل → كل الموظفين النشطين
+   * - إذا employeeId محدد → موظف واحد فقط
+   */
+  async bulkRaise(dto: BulkRaiseDto) {
+    const raise = new Prisma.Decimal(dto.amount.toString());
+    const applyToAll = !dto.employeeId || dto.employeeId === 'ALL';
+
+    // جلب سجلات الرواتب المستهدفة
+    const salaryRecords = await this.prisma.employeeSalary.findMany({
+      where: applyToAll
+        ? {
+            employee: { status: 'active' },
+          }
+        : { employeeId: dto.employeeId },
+      include: {
+        employee: true,
+      },
+    });
+
+    if (salaryRecords.length === 0) {
+      return { updated: 0, message: 'لا يوجد سجلات رواتب للتعديل' };
+    }
+
+    // تحديث baseSalary لكل موظف في transaction واحدة
+    const updates = await this.prisma.$transaction(
+      salaryRecords.map((record) => {
+        const newBaseSalary = record.baseSalary.plus(raise);
+        return this.prisma.employeeSalary.update({
+          where: { employeeId: record.employeeId },
+          data: { baseSalary: newBaseSalary },
+        });
+      }),
+    );
+
+    // مزامنة mirror fields على جدول employee
+    await this.prisma.$transaction(
+      updates.map((updated) => {
+        const employee = salaryRecords.find(
+          (r) => r.employeeId === updated.employeeId,
+        )?.employee;
+        if (!employee) return this.prisma.employee.findFirst({ where: { employeeId: 'SKIP' } });
+        const resolved = resolveSalary(employee, updated);
+        return this.prisma.employee.update({
+          where: { employeeId: updated.employeeId },
+          data: buildEmployeeSalaryMirror(resolved),
+        });
+      }).filter(Boolean) as Parameters<typeof this.prisma.$transaction>[0],
+    );
+
+    return {
+      updated: updates.length,
+      raiseAmount: dto.amount,
+      appliedTo: applyToAll ? 'all_active' : dto.employeeId,
+      message: `تمت إضافة ${dto.amount.toLocaleString()} ل.س على الراتب الأساسي لـ ${updates.length} موظف بشكل دائم`,
+    };
   }
 }
