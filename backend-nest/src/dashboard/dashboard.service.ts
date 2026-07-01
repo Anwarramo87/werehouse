@@ -13,7 +13,6 @@ import { resolveSalary } from '../common/utils/salary-resolution.util';
 const GRACE_PERIOD_MINUTES = 5;
 const DEFAULT_SCHEDULED_START = '08:00';
 const STANDARD_WORKING_DAYS = 26;
-const STANDARD_HOURS_PER_DAY = 8;
 
 function toNum(val: unknown): number {
   if (val == null) return 0;
@@ -281,27 +280,34 @@ export class DashboardService {
     const overtimeEmployees: OvertimeEntry[] = [];
     let totalOvertimeMinutes = 0;
 
+    // Track last OUT record per employee (in case of multiple punches)
+    const lastOutMap = new Map<string, typeof todayAttendanceRecords[number]>();
     for (const rec of todayAttendanceRecords) {
       if (rec.type !== 'OUT') continue;
-      const shiftPair = rec.shiftPair as Record<string, unknown> | null;
-      const hoursWorked = toNum(shiftPair?.hoursWorked);
-      const workDays = rec.employee.workDaysInPeriod || STANDARD_WORKING_DAYS;
-      const hoursPerDay = rec.employee.hoursPerDay || STANDARD_HOURS_PER_DAY;
-      const standardHours = hoursPerDay;
-      const overtimeHours = Math.max(0, hoursWorked - standardHours);
-      const overtimeMinutes = Math.round(overtimeHours * 60);
+      lastOutMap.set(rec.employeeId, rec);
+    }
+
+    for (const rec of lastOutMap.values()) {
+      const scheduledEnd = rec.employee.scheduledEnd || '16:00';
+      const match = /^(\d{1,2}):(\d{2})$/.exec(scheduledEnd.slice(0, 5));
+      const scheduledEndMinutes = match
+        ? Number(match[1]) * 60 + Number(match[2])
+        : 16 * 60;
+
+      const checkOutLocalMinutes = utcTimestampToLocalMinutes(rec.timestamp);
+      const overtimeMinutes = Math.max(0, checkOutLocalMinutes - scheduledEndMinutes);
 
       if (overtimeMinutes <= 0) continue;
 
+      const overtimeHours = overtimeMinutes / 60;
       const resolved = resolveSalary(rec.employee, rec.employee.employeeSalary);
-      const hourlyRate = resolved.hourlyRate;
-      const overtimePay = Number((hourlyRate * overtimeHours * 1.5).toFixed(2));
+      const overtimePay = Number((resolved.hourlyRate * overtimeHours * 1.5).toFixed(2));
 
       overtimeEmployees.push({
         employeeId: rec.employeeId,
         name: rec.employee.name,
         department: rec.employee.department,
-        scheduledEnd: rec.employee.scheduledEnd || '16:00',
+        scheduledEnd,
         actualCheckOut: formatFactoryLocalTime(rec.timestamp),
         overtimeMinutes,
         overtimePay,
