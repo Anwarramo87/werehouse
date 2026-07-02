@@ -22,4 +22,4 @@ COPY --from=build /app/prisma ./prisma
 COPY --from=build /app/prisma.config.ts ./prisma.config.ts
 
 EXPOSE 5001
-CMD ["sh", "-c", "echo 'Running prisma migrate deploy...' && npx prisma migrate deploy && echo 'Starting node dist/main...' && node dist/main"]
+CMD ["sh", "-c", "echo 'Starting node dist/main...' && node dist/main"]
