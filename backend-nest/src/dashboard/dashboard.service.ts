@@ -15,7 +15,7 @@ const DEFAULT_SCHEDULED_START = '08:00';
 const STANDARD_WORKING_DAYS = 26;
 
 function toNum(val: unknown): number {
-  if (val == null) return 0;
+  if (val === null || val === undefined) return 0;
   if (typeof val === 'number') return Number.isFinite(val) ? val : 0;
   if (typeof val === 'string') {
     const n = Number(val);
@@ -90,7 +90,7 @@ export class DashboardService {
   async getHomeStats() {
     const today = toFactoryDateKey();
 
-    return this.shortCache.getOrSetJson(`dashboard:home-stats:${today}`, 300, async () =>
+    return this.shortCache.getOrSetJson(`dashboard:home-stats:${today}`, 60, async () =>
       this.buildHomeStats(today),
     );
   }
@@ -245,7 +245,7 @@ export class DashboardService {
       firstInMap.set(rec.employeeId, {
         timestamp: rec.timestamp,
         scheduledStart: rec.employee.scheduledStart ?? null,
-        shiftPairMinutesLate: sp?.minutesLate != null ? Number(sp.minutesLate) : null,
+        shiftPairMinutesLate: sp?.minutesLate !== null && sp?.minutesLate !== undefined ? Number(sp.minutesLate) : null,
         name: rec.employee.name,
       });
     }
@@ -293,13 +293,24 @@ export class DashboardService {
 
     for (const rec of lastOutMap.values()) {
       const scheduledEnd = rec.employee.scheduledEnd || '16:00';
-      const match = /^(\d{1,2}):(\d{2})$/.exec(scheduledEnd.slice(0, 5));
-      const scheduledEndMinutes = match
-        ? Number(match[1]) * 60 + Number(match[2])
-        : 16 * 60;
 
-      const checkOutLocalMinutes = utcTimestampToLocalMinutes(rec.timestamp);
-      const overtimeMinutes = Math.max(0, checkOutLocalMinutes - scheduledEndMinutes);
+      // Prefer shiftPair.overtimeMinutes (from biometric pairing) when available,
+      // otherwise fall back to computing checkOut - scheduledEnd directly.
+      const shiftPair = rec.shiftPair as Record<string, unknown> | null;
+      const shiftPairOvertimeMinutes =
+        shiftPair?.overtimeMinutes !== null && shiftPair?.overtimeMinutes !== undefined ? toNum(shiftPair.overtimeMinutes) : null;
+
+      let overtimeMinutes: number;
+      if (shiftPairOvertimeMinutes !== null && shiftPairOvertimeMinutes > 0) {
+        overtimeMinutes = Math.round(shiftPairOvertimeMinutes);
+      } else {
+        const match = /^(\d{1,2}):(\d{2})$/.exec(scheduledEnd.slice(0, 5));
+        const scheduledEndMinutes = match
+          ? Number(match[1]) * 60 + Number(match[2])
+          : 16 * 60;
+        const checkOutLocalMinutes = utcTimestampToLocalMinutes(rec.timestamp);
+        overtimeMinutes = Math.max(0, checkOutLocalMinutes - scheduledEndMinutes);
+      }
 
       if (overtimeMinutes <= 0) continue;
 

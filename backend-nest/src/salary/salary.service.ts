@@ -145,31 +145,29 @@ export class SalaryService {
       return { updated: 0, message: 'لا يوجد سجلات رواتب للتعديل' };
     }
 
-    // تحديث baseSalary لكل موظف في transaction واحدة
-    const updates = await this.prisma.$transaction(
-      salaryRecords.map((record) => {
-        const newBaseSalary = record.baseSalary.plus(raise);
-        return this.prisma.employeeSalary.update({
+    // تحديث baseSalary ومزامنة mirror fields في transaction واحدة
+    const transactionOperations = [];
+    for (const record of salaryRecords) {
+      const newBaseSalary = record.baseSalary.plus(raise);
+      transactionOperations.push(
+        this.prisma.employeeSalary.update({
           where: { employeeId: record.employeeId },
           data: { baseSalary: newBaseSalary },
-        });
-      }),
-    );
-
-    // مزامنة mirror fields على جدول employee
-    await this.prisma.$transaction(
-      updates.map((updated) => {
-        const employee = salaryRecords.find(
-          (r) => r.employeeId === updated.employeeId,
-        )?.employee;
-        if (!employee) return this.prisma.employee.findFirst({ where: { employeeId: 'SKIP' } });
-        const resolved = resolveSalary(employee, updated);
-        return this.prisma.employee.update({
-          where: { employeeId: updated.employeeId },
-          data: buildEmployeeSalaryMirror(resolved),
-        });
-      }).filter(Boolean) as Parameters<typeof this.prisma.$transaction>[0],
-    );
+        }),
+      );
+      if (record.employee) {
+        const resolved = resolveSalary(record.employee, { ...record, baseSalary: newBaseSalary });
+        transactionOperations.push(
+          this.prisma.employee.update({
+            where: { employeeId: record.employeeId },
+            data: buildEmployeeSalaryMirror(resolved),
+          }),
+        );
+      }
+    }
+    
+    await this.prisma.$transaction(transactionOperations);
+    const updates = salaryRecords;
 
     return {
       updated: updates.length,

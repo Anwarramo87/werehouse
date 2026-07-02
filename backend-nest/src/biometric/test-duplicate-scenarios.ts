@@ -180,7 +180,7 @@ if (require.main === module) {
   const args = process.argv.slice(2);
 
   if (args.includes('--live')) {
-    runLiveTest();
+    void runLiveTest();
   } else {
     printScenarios();
     console.log('\n💡 Tip: Run with --live flag to test with real database');

@@ -5,7 +5,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { parse as parseCsv } from 'csv-parse/sync';
 import { extname } from 'path';
 import { Queue } from 'bullmq';
-import * as XLSX from 'xlsx';
+import * as ExcelJS from 'exceljs';
 import { QUEUE_JOBS, QUEUE_NAMES } from '../queues/queue.constants';
 import { paginatedResponse, resolvePagination } from '../common/utils/pagination.util';
 import { ImportsHistoryQueryDto } from './dto/imports-history-query.dto';
@@ -551,7 +551,7 @@ export class ImportsService {
     const format = this.detectImportFormat(fileName, mimeType);
 
     if (format === 'excel') {
-      return this.parseSpreadsheetRows(buffer);
+      return await this.parseSpreadsheetRows(buffer);
     }
 
     if (format === 'json') {
@@ -624,51 +624,35 @@ export class ImportsService {
     return { rows, headers };
   }
 
-  private parseSpreadsheetRows(buffer: Buffer): ParseResult {
+  private async parseSpreadsheetRows(buffer: Buffer): Promise<ParseResult> {
     try {
-      const workbook = XLSX.read(buffer, {
-        type: 'buffer',
-        raw: false,
-        cellDates: false,
-        dense: true,
-      });
-
-      const firstSheetName = workbook.SheetNames?.[0];
-      if (!firstSheetName) {
+      const workbook = new ExcelJS.Workbook();
+      await workbook.xlsx.load(buffer as any);
+      const worksheet = workbook.worksheets[0];
+      if (!worksheet) {
         throw new BadRequestException('Excel file must contain at least one worksheet');
       }
 
-      const worksheet = workbook.Sheets[firstSheetName];
-      const matrix = XLSX.utils.sheet_to_json(worksheet, {
-        header: 1,
-        raw: false,
-        defval: '',
-        blankrows: false,
-      }) as unknown[][];
+      let headers: string[] = [];
+      const rows: ParsedRow[] = [];
 
-      if (matrix.length === 0) {
-        return { rows: [], headers: [] };
-      }
-
-      const firstRow = Array.isArray(matrix[0]) ? matrix[0] : [];
-      const headers = firstRow.map((cell) => this.normalizeHeader(String(cell ?? '')));
-      const rows = matrix
-        .slice(1)
-        .map((cells) => {
+      worksheet.eachRow((row, rowNumber) => {
+        const values = (row.values as ExcelJS.CellValue[]).slice(1);
+        if (rowNumber === 1) {
+          headers = values.map((cell) => this.normalizeHeader(String(cell ?? '')));
+        } else {
           const normalized: ParsedRow = {};
           headers.forEach((header, index) => {
-            normalized[header] = String(Array.isArray(cells) ? cells[index] ?? '' : '').trim();
+            normalized[header] = String(values[index] ?? '').trim();
           });
-          return normalized;
-        })
-        .filter((row) => Object.values(row).some((value) => value !== ''));
+          if (Object.values(normalized).some((v) => v !== '')) rows.push(normalized);
+        }
+      });
 
       this.assertRowsLimit(rows.length);
       return { rows, headers };
     } catch (error: unknown) {
-      if (error instanceof BadRequestException) {
-        throw error;
-      }
+      if (error instanceof BadRequestException) throw error;
       throw new BadRequestException('Unable to parse spreadsheet file. Ensure file content is valid');
     }
   }

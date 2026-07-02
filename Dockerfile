@@ -1,7 +1,7 @@
-FROM node:20-alpine AS deps
+FROM node:22-alpine AS deps
 WORKDIR /app
 COPY backend-nest/package.json backend-nest/package-lock.json ./
-RUN npm ci
+RUN npm ci --legacy-peer-deps
 
 FROM deps AS build
 COPY backend-nest/ ./
@@ -10,7 +10,7 @@ ENV DATABASE_URL=${DATABASE_URL}
 RUN npm run prisma:generate
 RUN npm run build
 
-FROM node:20-alpine AS runner
+FROM node:22-alpine AS runner
 WORKDIR /app
 ENV NODE_ENV=production
 
