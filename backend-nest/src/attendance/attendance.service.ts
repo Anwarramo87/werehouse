@@ -2,7 +2,7 @@ import { Injectable, NotFoundException, BadRequestException, Logger } from '@nes
 import { Prisma } from '@prisma/client';
 import { parse as parseCsv } from 'csv-parse/sync';
 import { extname } from 'path';
-import * as XLSX from 'xlsx';
+import * as ExcelJS from 'exceljs';
 import { PrismaService } from '../prisma/prisma.service';
 import { paginationMeta, resolvePagination } from '../common/utils/pagination.util';
 import { CreateAttendanceDto } from './dto/create-attendance.dto';
@@ -278,34 +278,38 @@ export class AttendanceService {
       .filter((row) => Object.values(row).some((value) => value !== ''));
   }
 
-  private parseSpreadsheetRows(buffer: Buffer) {
+  private async parseSpreadsheetRows(buffer: Buffer) {
     try {
-      const workbook = XLSX.read(buffer, {
-        type: 'buffer',
-        raw: false,
-        cellDates: false,
-        dense: true,
-      });
+      const workbook = new ExcelJS.Workbook();
+      const wb = await workbook.xlsx.load(buffer as any);
 
-      const firstSheetName = workbook.SheetNames?.[0];
-      if (!firstSheetName) {
+      const worksheet = wb.worksheets[0];
+      if (!worksheet) {
         throw new BadRequestException('Attendance spreadsheet must contain at least one sheet');
       }
 
-      const worksheet = workbook.Sheets[firstSheetName];
-      const rows = XLSX.utils.sheet_to_json<Record<string, unknown>>(worksheet, {
-        defval: '',
-        raw: false,
+      const rows: Record<string, string>[] = [];
+      let headers: string[] = [];
+      worksheet.eachRow((row, rowNumber) => {
+        const values = (row.values as ExcelJS.CellValue[]).slice(1);
+        if (rowNumber === 1) {
+          headers = values.map((value) => String(value ?? '').trim());
+        } else {
+          const obj: Record<string, string> = {};
+          headers.forEach((header, index) => {
+            obj[header] = String(values[index] ?? '').trim();
+          });
+          if (Object.values(obj).some((value) => value !== '')) {
+            rows.push(obj);
+          }
+        }
       });
 
-      return rows
-        .map((row) => this.normalizeImportRow(row))
-        .filter((row) => Object.values(row).some((value) => value !== ''));
+      return rows.map((row) => this.normalizeImportRow(row));
     } catch (error) {
       if (error instanceof BadRequestException) {
         throw error;
       }
-
       throw new BadRequestException('Unable to parse attendance spreadsheet file');
     }
   }
@@ -338,7 +342,7 @@ export class AttendanceService {
     return value?.trim().toLowerCase() === 'device' ? 'device' : 'manual';
   }
 
-  private extractAttendanceRows(file: Express.Multer.File): AttendanceImportRow[] {
+  private async extractAttendanceRows(file: Express.Multer.File): Promise<AttendanceImportRow[]> {
     if (!file?.buffer || file.buffer.length === 0) {
       throw new BadRequestException('Attendance file is required');
     }
@@ -353,7 +357,7 @@ export class AttendanceService {
     if (extension === '.json') {
       rows = this.parseJsonRows(file.buffer.toString('utf8'));
     } else if (['.xlsx', '.xls', '.xlsm', '.xlsb', '.ods'].includes(extension)) {
-      rows = this.parseSpreadsheetRows(file.buffer);
+      rows = await this.parseSpreadsheetRows(file.buffer);
     } else {
       const content = file.buffer.toString('utf8');
       const delimiter = extension === '.tsv' ? '\t' : this.detectDelimiter(content);
@@ -475,7 +479,7 @@ export class AttendanceService {
   }
 
   async upload(file: Express.Multer.File, userId?: string) {
-    const rows = this.extractAttendanceRows(file);
+    const rows = await this.extractAttendanceRows(file);
     if (rows.length === 0) {
       throw new BadRequestException('No attendance rows found in uploaded file');
     }
@@ -1087,7 +1091,7 @@ export class AttendanceService {
         const localMin = ((utcMin + TIMEZONE_OFFSET_MINUTES) % 1440) % 1440;
         const rawLate = Math.max(0, localMin - scheduledMinutes);
 
-        if (entry.maxMinutesLate != null && entry.maxMinutesLate > 0) {
+        if (entry.maxMinutesLate !== null && entry.maxMinutesLate !== undefined && entry.maxMinutesLate > 0) {
           status = 'late';
           notes = `متأخر ${entry.maxMinutesLate} دقيقة`;
         } else if (rawLate > grace) {
@@ -1347,7 +1351,7 @@ export class AttendanceService {
         if (recType === 'IN') {
           if (firstInByDate.has(record.date)) continue;
           const sp = record.shiftPair as Record<string, unknown> | null;
-          const spLate = sp?.minutesLate != null ? Number(sp.minutesLate) : null;
+          const spLate = sp?.minutesLate !== null && sp?.minutesLate !== undefined ? Number(sp.minutesLate) : null;
           firstInByDate.set(record.date, {
             timestamp: record.timestamp,
             date: record.date,

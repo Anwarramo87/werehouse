@@ -316,7 +316,7 @@ export class EmployeesService {
     const resolvedHoursPerDay = dto.hoursPerDay ?? DEFAULT_HOURS_PER_DAY;
     const resolvedHourlyRate =
       dto.hourlyRate ??
-      (baseSalary != null
+      (baseSalary !== null && baseSalary !== undefined
         ? Number((baseSalary / (resolvedWorkDaysInPeriod * resolvedHoursPerDay)).toFixed(2))
         : null);
 
@@ -324,7 +324,7 @@ export class EmployeesService {
       throw new BadRequestException('baseSalary is required when hourlyRate is not provided');
     }
 
-    if (baseSalary != null && baseSalary > MAX_BASE_SALARY) {
+    if (baseSalary !== null && baseSalary !== undefined && baseSalary > MAX_BASE_SALARY) {
       throw new BadRequestException('baseSalary is too large');
     }
 
@@ -398,9 +398,9 @@ export class EmployeesService {
           jobTitle: profession,
           profession,
           hourlyRate: new Prisma.Decimal(resolvedHourlyRate),
-          baseSalary: baseSalary != null ? new Prisma.Decimal(baseSalary) : null,
+          baseSalary: baseSalary !== null && baseSalary !== undefined ? new Prisma.Decimal(baseSalary) : null,
           livingAllowance:
-            dto.livingAllowance != null ? new Prisma.Decimal(dto.livingAllowance) : null,
+            dto.livingAllowance !== null && dto.livingAllowance !== undefined ? new Prisma.Decimal(dto.livingAllowance) : null,
           roleId: dto.roleId || null,
           department: department.name,
           departmentId: department.id,
@@ -420,10 +420,10 @@ export class EmployeesService {
         data: {
           employeeId: dto.employeeId,
           profession,
-          baseSalary: baseSalary != null ? new Prisma.Decimal(baseSalary) : new Prisma.Decimal(0),
+          baseSalary: baseSalary !== null && baseSalary !== undefined ? new Prisma.Decimal(baseSalary) : new Prisma.Decimal(0),
           lumpSumSalary: new Prisma.Decimal(dto.lumpSumSalary ?? 0),
           livingAllowance:
-            dto.livingAllowance != null
+            dto.livingAllowance !== null && dto.livingAllowance !== undefined
               ? new Prisma.Decimal(dto.livingAllowance)
               : new Prisma.Decimal(0),
         },
