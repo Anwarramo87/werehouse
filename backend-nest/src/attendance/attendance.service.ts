@@ -102,7 +102,14 @@ export class AttendanceService {
   }
 
   private async emitAttendanceRealtime(
-    record: { id: string; employeeId: string; type: string; timestamp: Date; date: string; source?: string | null },
+    record: {
+      id: string;
+      employeeId: string;
+      type: string;
+      timestamp: Date;
+      date: string;
+      source?: string | null;
+    },
     action: 'created' | 'updated',
   ) {
     try {
@@ -190,7 +197,7 @@ export class AttendanceService {
   }
 
   private minutesFromCheckIn(checkIn: Date) {
-    return (checkIn.getHours() * 60) + checkIn.getMinutes();
+    return checkIn.getHours() * 60 + checkIn.getMinutes();
   }
 
   private resolveMinutesLate(
@@ -273,7 +280,9 @@ export class AttendanceService {
     }
 
     return parsed
-      .filter((entry): entry is Record<string, unknown> => Boolean(entry) && typeof entry === 'object')
+      .filter(
+        (entry): entry is Record<string, unknown> => Boolean(entry) && typeof entry === 'object',
+      )
       .map((entry) => this.normalizeImportRow(entry))
       .filter((row) => Object.values(row).some((value) => value !== ''));
   }
@@ -383,7 +392,8 @@ export class AttendanceService {
           'الوقت',
         ]),
         type: this.pickRowValue(row, ['type', 'eventType', 'direction', 'status', 'النوع']),
-        deviceId: this.pickRowValue(row, ['deviceId', 'device_id', 'device', 'الجهاز']) || undefined,
+        deviceId:
+          this.pickRowValue(row, ['deviceId', 'device_id', 'device', 'الجهاز']) || undefined,
         location: this.pickRowValue(row, ['location', 'site', 'الموقع']) || undefined,
         source: this.pickRowValue(row, ['source', 'المصدر']) || undefined,
         notes: this.pickRowValue(row, ['notes', 'note', 'ملاحظات']) || undefined,
@@ -499,7 +509,10 @@ export class AttendanceService {
       const rowNumber = index + 2;
 
       if (!row.employeeId || !employeeSet.has(row.employeeId)) {
-        errors.push({ row: rowNumber, error: `Employee not found: ${row.employeeId || 'unknown'}` });
+        errors.push({
+          row: rowNumber,
+          error: `Employee not found: ${row.employeeId || 'unknown'}`,
+        });
         continue;
       }
 
@@ -809,17 +822,25 @@ export class AttendanceService {
           where: { status: 'active' },
         });
 
-        const employeeMap = new Map<string, { employeeId: string; name: string; minutesLate: number; records: number }>();
+        const employeeMap = new Map<
+          string,
+          { employeeId: string; name: string; minutesLate: number; records: number }
+        >();
         let totalLateMinutes = 0;
         let totalLateArrivals = 0;
 
         for (const record of records) {
           const empId = record.employeeId;
           const shiftPair = record.shiftPair as ShiftPair | null;
-          const minutesLate = (shiftPair?.minutesLate || 0);
+          const minutesLate = shiftPair?.minutesLate || 0;
 
           if (!employeeMap.has(empId)) {
-            employeeMap.set(empId, { employeeId: empId, name: record.employee?.name || empId, minutesLate: 0, records: 0 });
+            employeeMap.set(empId, {
+              employeeId: empId,
+              name: record.employee?.name || empId,
+              minutesLate: 0,
+              records: 0,
+            });
           }
           const empData = employeeMap.get(empId)!;
           empData.minutesLate += minutesLate;
@@ -829,10 +850,14 @@ export class AttendanceService {
         }
 
         const topLateEmployees = Array.from(employeeMap.values())
-          .filter(e => e.minutesLate > 0)
+          .filter((e) => e.minutesLate > 0)
           .sort((a, b) => b.minutesLate - a.minutesLate)
           .slice(0, 10)
-          .map(e => ({ employeeId: e.employeeId, name: e.name, totalLateMinutes: e.minutesLate }));
+          .map((e) => ({
+            employeeId: e.employeeId,
+            name: e.name,
+            totalLateMinutes: e.minutesLate,
+          }));
 
         return {
           summary: {
@@ -918,7 +943,10 @@ export class AttendanceService {
           };
 
           const shiftPair = record.shiftPair as ShiftPair | null;
-          if (typeof shiftPair?.minutesLate === 'number' && Number.isFinite(shiftPair.minutesLate)) {
+          if (
+            typeof shiftPair?.minutesLate === 'number' &&
+            Number.isFinite(shiftPair.minutesLate)
+          ) {
             const existingMinutes = snapshot.maxMinutesLateFromShiftPair ?? 0;
             snapshot.maxMinutesLateFromShiftPair = Math.max(
               existingMinutes,
@@ -1032,11 +1060,14 @@ export class AttendanceService {
       }),
     ]);
 
-    const byEmployee = new Map<string, {
-      firstIn: Date | null;
-      lastOut: Date | null;
-      maxMinutesLate: number | null;
-    }>();
+    const byEmployee = new Map<
+      string,
+      {
+        firstIn: Date | null;
+        lastOut: Date | null;
+        maxMinutesLate: number | null;
+      }
+    >();
 
     for (const record of records) {
       const entry = byEmployee.get(record.employeeId) || {
@@ -1047,7 +1078,10 @@ export class AttendanceService {
 
       const sp = record.shiftPair as ShiftPair | null;
       if (typeof sp?.minutesLate === 'number' && Number.isFinite(sp.minutesLate)) {
-        entry.maxMinutesLate = Math.max(entry.maxMinutesLate ?? 0, Math.max(0, Math.floor(sp.minutesLate)));
+        entry.maxMinutesLate = Math.max(
+          entry.maxMinutesLate ?? 0,
+          Math.max(0, Math.floor(sp.minutesLate)),
+        );
       }
 
       const recType = record.type.toUpperCase();
@@ -1064,7 +1098,7 @@ export class AttendanceService {
     const toLocalHHMM = (ts: Date | null): string | null => {
       if (!ts) return null;
       const utcMin = ts.getUTCHours() * 60 + ts.getUTCMinutes();
-      const localMin = ((utcMin + TIMEZONE_OFFSET_MINUTES) % 1440 + 1440) % 1440;
+      const localMin = (((utcMin + TIMEZONE_OFFSET_MINUTES) % 1440) + 1440) % 1440;
       const h = Math.floor(localMin / 60);
       const m = localMin % 60;
       return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
@@ -1091,7 +1125,11 @@ export class AttendanceService {
         const localMin = ((utcMin + TIMEZONE_OFFSET_MINUTES) % 1440) % 1440;
         const rawLate = Math.max(0, localMin - scheduledMinutes);
 
-        if (entry.maxMinutesLate !== null && entry.maxMinutesLate !== undefined && entry.maxMinutesLate > 0) {
+        if (
+          entry.maxMinutesLate !== null &&
+          entry.maxMinutesLate !== undefined &&
+          entry.maxMinutesLate > 0
+        ) {
           status = 'late';
           notes = `متأخر ${entry.maxMinutesLate} دقيقة`;
         } else if (rawLate > grace) {
@@ -1172,7 +1210,6 @@ export class AttendanceService {
     hoursPerDay?: number;
     employeeId?: string;
   }) {
-
     const {
       periodStart,
       periodEnd,
@@ -1229,10 +1266,12 @@ export class AttendanceService {
     } as const;
 
     const employees = employeeId
-      ? [await this.prisma.employee.findUnique({
-          where: { employeeId },
-          select: employeeSelect,
-        })]
+      ? [
+          await this.prisma.employee.findUnique({
+            where: { employeeId },
+            select: employeeSelect,
+          }),
+        ]
       : await this.prisma.employee.findMany({
           where: { status: 'active' },
           select: employeeSelect,
@@ -1264,7 +1303,10 @@ export class AttendanceService {
     const earlyLeaveLogs = await this.prisma.dailyAttendanceLog.findMany({
       where: {
         ...(employeeId ? { employeeId } : {}),
-        date: { gte: new Date(`${periodStart}T00:00:00.000Z`), lte: new Date(`${periodEnd}T23:59:59.999Z`) },
+        date: {
+          gte: new Date(`${periodStart}T00:00:00.000Z`),
+          lte: new Date(`${periodEnd}T23:59:59.999Z`),
+        },
         recordType: 'EARLY_LEAVE_MINUTES',
       },
       select: { employeeId: true, value: true },
@@ -1328,14 +1370,17 @@ export class AttendanceService {
           .filter((dateStr) => {
             const day = new Date(`${dateStr}T00:00:00Z`).getUTCDay();
             return day !== 5; // استثناء الجمعة فقط — السبت يوم عمل
-          })
+          }),
       );
       // أيام الحضور الفعلية = عدد الأيام الفريدة التي تم فيها تسجيل حضور
       const presentDays = datesWithCheckIn.size;
 
       // أيام الغياب = أيام العمل المنقضية - أيام الحضور الفعلية
       // نستخدم elapsedWorkDays (حتى اليوم) حتى لا نخصم مستقبلاً
-      const absentDays = Math.max(0, elapsedWorkDays - Math.min(datesWithCheckIn.size, elapsedWorkDays));
+      const absentDays = Math.max(
+        0,
+        elapsedWorkDays - Math.min(datesWithCheckIn.size, elapsedWorkDays),
+      );
 
       // ── حساب دقائق التأخير الشهرية ───────────────────────────────────────
       // نأخذ أول IN لكل يوم ونقارنه بـ scheduledStart الخاص بالموظف
@@ -1344,14 +1389,20 @@ export class AttendanceService {
       const scheduledMinutes = (schH || 8) * 60 + (schM || 0);
 
       // أول IN وآخر OUT لكل يوم
-      const firstInByDate = new Map<string, { timestamp: Date; shiftPairMinutesLate: number | null; date: string }>();
+      const firstInByDate = new Map<
+        string,
+        { timestamp: Date; shiftPairMinutesLate: number | null; date: string }
+      >();
       const lastOutByDate = new Map<string, Date>();
       for (const record of records) {
         const recType = record.type.toUpperCase();
         if (recType === 'IN') {
           if (firstInByDate.has(record.date)) continue;
           const sp = record.shiftPair as Record<string, unknown> | null;
-          const spLate = sp?.minutesLate !== null && sp?.minutesLate !== undefined ? Number(sp.minutesLate) : null;
+          const spLate =
+            sp?.minutesLate !== null && sp?.minutesLate !== undefined
+              ? Number(sp.minutesLate)
+              : null;
           firstInByDate.set(record.date, {
             timestamp: record.timestamp,
             date: record.date,
@@ -1377,7 +1428,7 @@ export class AttendanceService {
         } else {
           // timestamp stored in DB as UTC — add +3h to get local Saudi time
           const utcMinutes = timestamp.getUTCHours() * 60 + timestamp.getUTCMinutes();
-          const localMinutes = ((utcMinutes + TIMEZONE_OFFSET_MINUTES) % 1440 + 1440) % 1440;
+          const localMinutes = (((utcMinutes + TIMEZONE_OFFSET_MINUTES) % 1440) + 1440) % 1440;
           rawLate = Math.max(0, localMinutes - scheduledMinutes);
         }
         const effectiveLate = rawLate > empGracePeriod ? rawLate - empGracePeriod : 0;
@@ -1387,7 +1438,7 @@ export class AttendanceService {
       // ── حساب الإضافي من checkOut vs scheduledEnd ──────────────────────────
       const scheduledEnd = employee.scheduledEnd || '16:00';
       const [seH, seM] = scheduledEnd.split(':').map(Number);
-      const scheduledEndMinutes = ((seH || 16) * 60) + (seM || 0);
+      const scheduledEndMinutes = (seH || 16) * 60 + (seM || 0);
 
       let totalOvertimeMinutes = 0;
       let overtimeWeekendDays = 0;
@@ -1397,7 +1448,7 @@ export class AttendanceService {
 
         // timestamp stored as UTC — add +3h to get local Saudi time
         const utcOutMinutes = outTimestamp.getUTCHours() * 60 + outTimestamp.getUTCMinutes();
-        const localOutMinutes = ((utcOutMinutes + TIMEZONE_OFFSET_MINUTES) % 1440 + 1440) % 1440;
+        const localOutMinutes = (((utcOutMinutes + TIMEZONE_OFFSET_MINUTES) % 1440) + 1440) % 1440;
 
         if (isFriday) {
           if (localOutMinutes > scheduledEndMinutes) {
@@ -1456,12 +1507,13 @@ export class AttendanceService {
         totalEmployeesAffected: breakdowns.filter((b) => b.totalAttendanceDeduction > 0).length,
         totalAbsenceDeduction: Math.round(totalAbsenceDeduction * 100) / 100,
         totalDelayDeduction: Math.round(totalDelayDeduction * 100) / 100,
-        totalAttendanceDeduction: Math.round((totalAbsenceDeduction + totalDelayDeduction) * 100) / 100,
-        totalOvertimePay: Math.round(breakdowns.reduce((sum, b) => sum + b.totalOvertimePay, 0) * 100) / 100,
+        totalAttendanceDeduction:
+          Math.round((totalAbsenceDeduction + totalDelayDeduction) * 100) / 100,
+        totalOvertimePay:
+          Math.round(breakdowns.reduce((sum, b) => sum + b.totalOvertimePay, 0) * 100) / 100,
         elapsedWorkDays,
         effectivePeriodEnd,
       },
     };
   }
-
 }

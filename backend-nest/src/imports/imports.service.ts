@@ -96,7 +96,10 @@ const EMPLOYEE_HEADER_ALIASES: Record<'employeeid' | 'name' | 'email' | 'hourlyr
   ],
 };
 
-const PRODUCT_HEADER_ALIASES: Record<'sku' | 'name' | 'category' | 'unitprice' | 'costprice', string[]> = {
+const PRODUCT_HEADER_ALIASES: Record<
+  'sku' | 'name' | 'category' | 'unitprice' | 'costprice',
+  string[]
+> = {
   sku: [
     'sku',
     'productcode',
@@ -108,24 +111,8 @@ const PRODUCT_HEADER_ALIASES: Record<'sku' | 'name' | 'category' | 'unitprice' |
     'كودالصنف',
     'كودالمنتج',
   ],
-  name: [
-    'name',
-    'productname',
-    'product_name',
-    'itemname',
-    'اسم',
-    'اسمالمنتج',
-    'اسم_المنتج',
-  ],
-  category: [
-    'category',
-    'type',
-    'group',
-    'classification',
-    'التصنيف',
-    'الفئة',
-    'فئة',
-  ],
+  name: ['name', 'productname', 'product_name', 'itemname', 'اسم', 'اسمالمنتج', 'اسم_المنتج'],
+  category: ['category', 'type', 'group', 'classification', 'التصنيف', 'الفئة', 'فئة'],
   unitprice: [
     'unitprice',
     'unit_price',
@@ -325,7 +312,14 @@ export class ImportsService {
       },
     });
 
-    return { message: 'Employee import processed', jobId: job.jobId, status, totalRows, successRows, errorRows };
+    return {
+      message: 'Employee import processed',
+      jobId: job.jobId,
+      status,
+      totalRows,
+      successRows,
+      errorRows,
+    };
   }
 
   async importEmployeesAsync(file: Express.Multer.File, userId: string) {
@@ -357,7 +351,12 @@ export class ImportsService {
 
     await this.enqueueImportJob(QUEUE_JOBS.IMPORT_EMPLOYEES, { importJobRecordId: job.id, rows });
 
-    return { message: 'Employee import queued', jobId: job.jobId, status: 'queued', totalRows: rows.length };
+    return {
+      message: 'Employee import queued',
+      jobId: job.jobId,
+      status: 'queued',
+      totalRows: rows.length,
+    };
   }
 
   async importProducts(file: Express.Multer.File, userId: string) {
@@ -399,7 +398,14 @@ export class ImportsService {
       },
     });
 
-    return { message: 'Product import processed', jobId: job.jobId, status, totalRows, successRows, errorRows };
+    return {
+      message: 'Product import processed',
+      jobId: job.jobId,
+      status,
+      totalRows,
+      successRows,
+      errorRows,
+    };
   }
 
   async importProductsAsync(file: Express.Multer.File, userId: string) {
@@ -431,7 +437,12 @@ export class ImportsService {
 
     await this.enqueueImportJob(QUEUE_JOBS.IMPORT_PRODUCTS, { importJobRecordId: job.id, rows });
 
-    return { message: 'Product import queued', jobId: job.jobId, status: 'queued', totalRows: rows.length };
+    return {
+      message: 'Product import queued',
+      jobId: job.jobId,
+      status: 'queued',
+      totalRows: rows.length,
+    };
   }
 
   async retry(jobId: string, userId: string) {
@@ -449,12 +460,23 @@ export class ImportsService {
       },
     });
 
-    return { message: 'Retry initiated', originalJobId: jobId, retryJobId: retryJob.jobId, status: retryJob.status };
+    return {
+      message: 'Retry initiated',
+      originalJobId: jobId,
+      retryJobId: retryJob.jobId,
+      status: retryJob.status,
+    };
   }
 
   async processEmployeesImportJob(importJobRecordId: string, rows: ParsedRow[]) {
-    await this.prisma.importJob.update({ where: { id: importJobRecordId }, data: { status: 'processing' } });
-    const { totalRows, successRows, errorRows, errors } = await this.processEmployeesRows(rows, true);
+    await this.prisma.importJob.update({
+      where: { id: importJobRecordId },
+      data: { status: 'processing' },
+    });
+    const { totalRows, successRows, errorRows, errors } = await this.processEmployeesRows(
+      rows,
+      true,
+    );
     const status = this.jobStatus(totalRows, successRows, errorRows);
     await this.prisma.importJob.update({
       where: { id: importJobRecordId },
@@ -464,8 +486,14 @@ export class ImportsService {
   }
 
   async processProductsImportJob(importJobRecordId: string, rows: ParsedRow[]) {
-    await this.prisma.importJob.update({ where: { id: importJobRecordId }, data: { status: 'processing' } });
-    const { totalRows, successRows, errorRows, errors } = await this.processProductsRows(rows, true);
+    await this.prisma.importJob.update({
+      where: { id: importJobRecordId },
+      data: { status: 'processing' },
+    });
+    const { totalRows, successRows, errorRows, errors } = await this.processProductsRows(
+      rows,
+      true,
+    );
     const status = this.jobStatus(totalRows, successRows, errorRows);
     await this.prisma.importJob.update({
       where: { id: importJobRecordId },
@@ -547,7 +575,11 @@ export class ImportsService {
     return this.parseDelimitedRows(text, this.detectDelimiter(text));
   }
 
-  private async parseImportRowsAsync(buffer: Buffer, fileName?: string, mimeType?: string): Promise<ParseResult> {
+  private async parseImportRowsAsync(
+    buffer: Buffer,
+    fileName?: string,
+    mimeType?: string,
+  ): Promise<ParseResult> {
     const format = this.detectImportFormat(fileName, mimeType);
 
     if (format === 'excel') {
@@ -605,7 +637,9 @@ export class ImportsService {
         delimiter,
       }) as Record<string, RowParseValue>[];
     } catch {
-      throw new BadRequestException('Unable to parse delimited file. Ensure the file has valid tabular content');
+      throw new BadRequestException(
+        'Unable to parse delimited file. Ensure the file has valid tabular content',
+      );
     }
 
     const first = parsed[0] || {};
@@ -653,7 +687,9 @@ export class ImportsService {
       return { rows, headers };
     } catch (error: unknown) {
       if (error instanceof BadRequestException) throw error;
-      throw new BadRequestException('Unable to parse spreadsheet file. Ensure file content is valid');
+      throw new BadRequestException(
+        'Unable to parse spreadsheet file. Ensure file content is valid',
+      );
     }
   }
 
@@ -672,7 +708,10 @@ export class ImportsService {
 
     const sourceRows = Array.isArray(payload)
       ? payload
-      : payload && typeof payload === 'object' && 'rows' in payload && Array.isArray((payload as { rows?: unknown[] }).rows)
+      : payload &&
+          typeof payload === 'object' &&
+          'rows' in payload &&
+          Array.isArray((payload as { rows?: unknown[] }).rows)
         ? (payload as { rows: unknown[] }).rows
         : null;
 
@@ -693,7 +732,7 @@ export class ImportsService {
         .map((cells) => {
           const normalized: ParsedRow = {};
           headers.forEach((header, index) => {
-            normalized[header] = String(Array.isArray(cells) ? cells[index] ?? '' : '').trim();
+            normalized[header] = String(Array.isArray(cells) ? (cells[index] ?? '') : '').trim();
           });
           return normalized;
         })
@@ -813,7 +852,9 @@ export class ImportsService {
   }
 
   private async resolveDefaultRoleId(): Promise<string> {
-    const preferred = await this.prisma.role.findFirst({ where: { name: { in: ['staff', 'admin'] } } });
+    const preferred = await this.prisma.role.findFirst({
+      where: { name: { in: ['staff', 'admin'] } },
+    });
     if (preferred?.id) return preferred.id;
     const first = await this.prisma.role.findFirst();
     if (first?.id) return first.id;
@@ -834,14 +875,16 @@ export class ImportsService {
     const missing = Object.entries(EMPLOYEE_HEADER_ALIASES)
       .filter(([, aliases]) => !this.headerExists(headers, aliases))
       .map(([key]) => key);
-    if (missing.length > 0) throw new BadRequestException(`Missing required CSV headers: ${missing.join(', ')}`);
+    if (missing.length > 0)
+      throw new BadRequestException(`Missing required CSV headers: ${missing.join(', ')}`);
   }
 
   private assertProductsHeaders(headers: string[]) {
     const missing = Object.entries(PRODUCT_HEADER_ALIASES)
       .filter(([, aliases]) => !this.headerExists(headers, aliases))
       .map(([key]) => key);
-    if (missing.length > 0) throw new BadRequestException(`Missing required CSV headers: ${missing.join(', ')}`);
+    if (missing.length > 0)
+      throw new BadRequestException(`Missing required CSV headers: ${missing.join(', ')}`);
   }
 
   private headerExists(headers: string[], aliases: string[]) {
@@ -859,65 +902,71 @@ export class ImportsService {
       const batchResults = await Promise.all(
         batch.map(async (input, index) => {
           try {
-        const employeeId = this.value(input, EMPLOYEE_HEADER_ALIASES.employeeid);
-        const name = this.value(input, EMPLOYEE_HEADER_ALIASES.name);
-        const email = this.value(input, EMPLOYEE_HEADER_ALIASES.email);
-        const hourlyRateRaw = this.value(input, EMPLOYEE_HEADER_ALIASES.hourlyrate);
-        const currency = this.value(input, ['currency']) || 'SYP';
-        const department = this.value(input, ['department']) || 'Warehouse';
-        const scheduledStartRaw = this.value(input, ['scheduledstart', 'scheduled_start', 'start']);
-        const scheduledEndRaw = this.value(input, ['scheduledend', 'scheduled_end', 'end']);
-        const scheduledStart = scheduledStartRaw || undefined;
-        const scheduledEnd = scheduledEndRaw || undefined;
-        const status = this.value(input, ['status']) || 'active';
-        const roleIdRaw = this.value(input, ['roleid', 'role_id']);
+            const employeeId = this.value(input, EMPLOYEE_HEADER_ALIASES.employeeid);
+            const name = this.value(input, EMPLOYEE_HEADER_ALIASES.name);
+            const email = this.value(input, EMPLOYEE_HEADER_ALIASES.email);
+            const hourlyRateRaw = this.value(input, EMPLOYEE_HEADER_ALIASES.hourlyrate);
+            const currency = this.value(input, ['currency']) || 'SYP';
+            const department = this.value(input, ['department']) || 'Warehouse';
+            const scheduledStartRaw = this.value(input, [
+              'scheduledstart',
+              'scheduled_start',
+              'start',
+            ]);
+            const scheduledEndRaw = this.value(input, ['scheduledend', 'scheduled_end', 'end']);
+            const scheduledStart = scheduledStartRaw || undefined;
+            const scheduledEnd = scheduledEndRaw || undefined;
+            const status = this.value(input, ['status']) || 'active';
+            const roleIdRaw = this.value(input, ['roleid', 'role_id']);
 
-        if (!employeeId || !name || !email || !hourlyRateRaw) throw new Error('Missing required fields: employeeId, name, email, hourlyRate');
-        const normalizedEmail = email.toLowerCase();
-        if (!SIMPLE_EMAIL_REGEX.test(normalizedEmail)) {
-          throw new Error('email must be a valid email address');
-        }
-        const hourlyRate = this.parseFlexibleNumber(hourlyRateRaw);
-        if (!Number.isFinite(hourlyRate) || hourlyRate < 0) {
-          throw new Error('hourlyRate must be a finite non-negative number');
-        }
-        if (scheduledStart && !TIME_24H_REGEX.test(scheduledStart)) {
-          throw new Error('scheduledStart must be in HH:mm format');
-        }
-        if (scheduledEnd && !TIME_24H_REGEX.test(scheduledEnd)) {
-          throw new Error('scheduledEnd must be in HH:mm format');
-        }
-        if (!['active', 'inactive', 'on_leave', 'terminated'].includes(status)) throw new Error('status must be one of: active, inactive, on_leave, terminated');
+            if (!employeeId || !name || !email || !hourlyRateRaw)
+              throw new Error('Missing required fields: employeeId, name, email, hourlyRate');
+            const normalizedEmail = email.toLowerCase();
+            if (!SIMPLE_EMAIL_REGEX.test(normalizedEmail)) {
+              throw new Error('email must be a valid email address');
+            }
+            const hourlyRate = this.parseFlexibleNumber(hourlyRateRaw);
+            if (!Number.isFinite(hourlyRate) || hourlyRate < 0) {
+              throw new Error('hourlyRate must be a finite non-negative number');
+            }
+            if (scheduledStart && !TIME_24H_REGEX.test(scheduledStart)) {
+              throw new Error('scheduledStart must be in HH:mm format');
+            }
+            if (scheduledEnd && !TIME_24H_REGEX.test(scheduledEnd)) {
+              throw new Error('scheduledEnd must be in HH:mm format');
+            }
+            if (!['active', 'inactive', 'on_leave', 'terminated'].includes(status))
+              throw new Error('status must be one of: active, inactive, on_leave, terminated');
 
-        if (persist) {
-          const roleId = await this.resolveRoleId(roleIdRaw, defaultRoleId);
-          await this.prisma.employee.upsert({
-            where: { employeeId },
-            update: {
-              name,
-              email: normalizedEmail,
-              hourlyRate: new Prisma.Decimal(hourlyRate),
-              currency,
-              department,
-              scheduledStart,
-              scheduledEnd,
-              status,
-              roleId,
-            },
-            create: {
-              employeeId,
-              name,
-              email: normalizedEmail,
-              hourlyRate: new Prisma.Decimal(hourlyRate),
-              currency,
-              department,
-              scheduledStart,
-              scheduledEnd,
-              status,
-              roleId,
-            },
-          });
-        }
+            if (persist) {
+              const roleId = await this.resolveRoleId(roleIdRaw, defaultRoleId);
+              await this.prisma.employee.upsert({
+                where: { employeeId },
+                update: {
+                  name,
+                  email: normalizedEmail,
+                  hourlyRate: new Prisma.Decimal(hourlyRate),
+                  currency,
+                  department,
+                  scheduledStart,
+                  scheduledEnd,
+                  status,
+                  roleId,
+                },
+                create: {
+                  employeeId,
+                  name,
+                  email: normalizedEmail,
+                  hourlyRate: new Prisma.Decimal(hourlyRate),
+                  currency,
+                  department,
+                  scheduledStart,
+                  scheduledEnd,
+                  status,
+                  roleId,
+                },
+              });
+            }
             return null;
           } catch (error: unknown) {
             const typedError = error as RowParseError;
@@ -950,54 +999,59 @@ export class ImportsService {
       const batchResults = await Promise.all(
         batch.map(async (input, index) => {
           try {
-        const sku = this.value(input, PRODUCT_HEADER_ALIASES.sku);
-        const name = this.value(input, PRODUCT_HEADER_ALIASES.name);
-        const category = this.value(input, PRODUCT_HEADER_ALIASES.category);
-        const unitPriceRaw = this.value(input, PRODUCT_HEADER_ALIASES.unitprice);
-        const costPriceRaw = this.value(input, PRODUCT_HEADER_ALIASES.costprice);
-        const reorderLevelRaw = this.value(input, ['reorderlevel', 'reorder_level', 'reorder']);
-        const status = this.value(input, ['status']) || 'active';
-        const normalizedStatus = String(status).toLowerCase();
+            const sku = this.value(input, PRODUCT_HEADER_ALIASES.sku);
+            const name = this.value(input, PRODUCT_HEADER_ALIASES.name);
+            const category = this.value(input, PRODUCT_HEADER_ALIASES.category);
+            const unitPriceRaw = this.value(input, PRODUCT_HEADER_ALIASES.unitprice);
+            const costPriceRaw = this.value(input, PRODUCT_HEADER_ALIASES.costprice);
+            const reorderLevelRaw = this.value(input, ['reorderlevel', 'reorder_level', 'reorder']);
+            const status = this.value(input, ['status']) || 'active';
+            const normalizedStatus = String(status).toLowerCase();
 
-        if (!sku || !name || !category || !unitPriceRaw || !costPriceRaw) throw new Error('Missing required fields: sku, name, category, unitPrice, costPrice');
-        const unitPrice = this.parseFlexibleNumber(unitPriceRaw);
-        const costPrice = this.parseFlexibleNumber(costPriceRaw);
-        const reorderLevel = reorderLevelRaw ? this.parseFlexibleNumber(reorderLevelRaw) : 10;
-        if (!Number.isFinite(unitPrice) || !Number.isFinite(costPrice) || !Number.isFinite(reorderLevel)) {
-          throw new Error('unitPrice, costPrice and reorderLevel must be finite numbers');
-        }
-        if (!Number.isInteger(reorderLevel)) {
-          throw new Error('reorderLevel must be an integer number');
-        }
-        if (unitPrice < 0 || costPrice < 0 || reorderLevel < 0) {
-          throw new Error('unitPrice, costPrice and reorderLevel must be non-negative numbers');
-        }
-        if (!PRODUCT_ALLOWED_STATUSES.has(normalizedStatus)) {
-          throw new Error('status must be one of: active, inactive');
-        }
+            if (!sku || !name || !category || !unitPriceRaw || !costPriceRaw)
+              throw new Error('Missing required fields: sku, name, category, unitPrice, costPrice');
+            const unitPrice = this.parseFlexibleNumber(unitPriceRaw);
+            const costPrice = this.parseFlexibleNumber(costPriceRaw);
+            const reorderLevel = reorderLevelRaw ? this.parseFlexibleNumber(reorderLevelRaw) : 10;
+            if (
+              !Number.isFinite(unitPrice) ||
+              !Number.isFinite(costPrice) ||
+              !Number.isFinite(reorderLevel)
+            ) {
+              throw new Error('unitPrice, costPrice and reorderLevel must be finite numbers');
+            }
+            if (!Number.isInteger(reorderLevel)) {
+              throw new Error('reorderLevel must be an integer number');
+            }
+            if (unitPrice < 0 || costPrice < 0 || reorderLevel < 0) {
+              throw new Error('unitPrice, costPrice and reorderLevel must be non-negative numbers');
+            }
+            if (!PRODUCT_ALLOWED_STATUSES.has(normalizedStatus)) {
+              throw new Error('status must be one of: active, inactive');
+            }
 
-        if (persist) {
-          await this.prisma.product.upsert({
-            where: { sku },
-            update: {
-              name,
-              category,
-              unitPrice: new Prisma.Decimal(unitPrice),
-              costPrice: new Prisma.Decimal(costPrice),
-              reorderLevel,
-              status: normalizedStatus,
-            },
-            create: {
-              sku,
-              name,
-              category,
-              unitPrice: new Prisma.Decimal(unitPrice),
-              costPrice: new Prisma.Decimal(costPrice),
-              reorderLevel,
-              status: normalizedStatus,
-            },
-          });
-        }
+            if (persist) {
+              await this.prisma.product.upsert({
+                where: { sku },
+                update: {
+                  name,
+                  category,
+                  unitPrice: new Prisma.Decimal(unitPrice),
+                  costPrice: new Prisma.Decimal(costPrice),
+                  reorderLevel,
+                  status: normalizedStatus,
+                },
+                create: {
+                  sku,
+                  name,
+                  category,
+                  unitPrice: new Prisma.Decimal(unitPrice),
+                  costPrice: new Prisma.Decimal(costPrice),
+                  reorderLevel,
+                  status: normalizedStatus,
+                },
+              });
+            }
             return null;
           } catch (error: unknown) {
             const typedError = error as RowParseError;
@@ -1058,7 +1112,10 @@ export class ImportsService {
 
     const mappedRows = rows.map((row) => {
       const mapped: ParsedRow = { ...row };
-      for (const [canonical, source] of Object.entries(canonicalToSource) as [TCanonical, string][]) {
+      for (const [canonical, source] of Object.entries(canonicalToSource) as [
+        TCanonical,
+        string,
+      ][]) {
         if (!mapped[canonical] && mapped[source] !== undefined) {
           mapped[canonical] = mapped[source];
         }
@@ -1066,7 +1123,9 @@ export class ImportsService {
       return mapped;
     });
 
-    const mergedHeaders = Array.from(new Set([...normalizedHeaders, ...Object.keys(canonicalToSource)]));
+    const mergedHeaders = Array.from(
+      new Set([...normalizedHeaders, ...Object.keys(canonicalToSource)]),
+    );
     return { rows: mappedRows, headers: mergedHeaders };
   }
 
