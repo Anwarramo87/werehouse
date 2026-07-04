@@ -79,6 +79,24 @@ export class BonusesService {
     const now = new Date();
     const period = dto.period ?? `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
 
+    // If this is a permanent salary increase, skip creating bonus record
+    // The salary update is handled by the bulk-raise endpoint
+    if (dto.bonusReason === 'زيادة راتب') {
+      // Still update the employee's base salary if not using bulk-raise
+      if (dto.employeeId !== 'ALL' && dto.bonusAmount && dto.bonusAmount > 0) {
+        await this.prisma.employee.update({
+          where: { employeeId: dto.employeeId },
+          data: {
+            baseSalary: {
+              increment: new Prisma.Decimal(dto.bonusAmount),
+            },
+          },
+        });
+      }
+      await this.shortCache.invalidatePrefix('employees:stats');
+      return { message: 'Salary increased successfully', skipBonusRecord: true };
+    }
+
     const result = await this.prisma.employeeBonus.create({
       data: {
         employeeId:      dto.employeeId,
@@ -88,18 +106,6 @@ export class BonusesService {
         period,
       },
     });
-
-    // If this is a permanent salary increase, update the employee's base salary
-    if (dto.bonusReason === 'زيادة راتب' && dto.bonusAmount && dto.bonusAmount > 0 && dto.employeeId !== 'ALL') {
-      await this.prisma.employee.update({
-        where: { employeeId: dto.employeeId },
-        data: {
-          baseSalary: {
-            increment: new Prisma.Decimal(dto.bonusAmount),
-          },
-        },
-      });
-    }
 
     await this.shortCache.invalidatePrefix('employees:stats');
     return result;

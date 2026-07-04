@@ -1296,6 +1296,24 @@ export class PayrollService {
       }
     }
 
+    // ── Batch-fetch all approved paid leave requests for the period (N+1 fix) ──
+    const allPaidLeaves = await this.prisma.leaveRequest.findMany({
+      where: {
+        employeeId: { in: employeeIds },
+        status: 'APPROVED',
+        leaveType: { in: ['PAID', 'SICK', 'ADMIN', 'DEATH'] },
+        startDate: { lte: new Date(periodEnd) },
+        endDate: { gte: new Date(periodStart) },
+      },
+      select: { employeeId: true, startDate: true, endDate: true, isPaid: true, leaveType: true },
+    });
+    const leavesByEmployee = new Map<string, typeof allPaidLeaves>();
+    for (const leave of allPaidLeaves) {
+      const arr = leavesByEmployee.get(leave.employeeId) ?? [];
+      arr.push(leave);
+      leavesByEmployee.set(leave.employeeId, arr);
+    }
+
     let totalGross = new Prisma.Decimal(0);
     let totalDeductions = new Prisma.Decimal(0);
     let totalNet = new Prisma.Decimal(0);
@@ -1331,18 +1349,7 @@ export class PayrollService {
         const absenceDaysFallbackRaw = Math.max(0, workDays - attendanceDays);
 
         // Count paid approved leave days inside period to avoid double-penalizing them as absence
-        // NOTE: For now we treat PAID leave type or isPaid=true as "paid".
-        // This logic is intentionally inclusive for overlap partials.
-        const paidApprovedLeaves = await this.prisma.leaveRequest.findMany({
-          where: {
-            employeeId: employee.employeeId,
-            status: 'APPROVED',
-            leaveType: { in: ['PAID', 'SICK', 'ADMIN', 'DEATH'] },
-            startDate: { lte: new Date(periodEnd) },
-            endDate: { gte: new Date(periodStart) },
-          },
-          select: { startDate: true, endDate: true, isPaid: true, leaveType: true },
-        });
+        const paidApprovedLeaves = leavesByEmployee.get(employee.employeeId) ?? [];
 
         const paidApprovedLeaveDaysInPeriod = paidApprovedLeaves.reduce((sum, l) => {
           // inclusive overlap day count

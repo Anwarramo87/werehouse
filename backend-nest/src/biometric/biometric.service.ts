@@ -217,17 +217,24 @@ export class BiometricService {
   private async processLogs(rawLogs: RawBiometricLog[]): Promise<ProcessedAttendanceLog[]> {
     const processed: ProcessedAttendanceLog[] = [];
 
+    // N+1 fix: batch-fetch all employees for the device user IDs in this batch
+    const deviceUserIds = rawLogs.map((l) => l.deviceUserId);
+    const fallbackIds = deviceUserIds.map((id) => this.formatEmployeeId(id));
+    const employeeRecords = await this.prisma.employee.findMany({
+      where: {
+        OR: [
+          { biometricNumber: { in: deviceUserIds } },
+          { employeeId: { in: fallbackIds } },
+        ],
+      },
+      select: { employeeId: true, biometricNumber: true, scheduledStart: true, scheduledEnd: true },
+    });
+    const employeeByBiometric = new Map(employeeRecords.filter(e => e.biometricNumber != null).map(e => [e.biometricNumber!, e]));
+    const employeeByEmpId = new Map(employeeRecords.map(e => [e.employeeId, e]));
+
     for (const log of rawLogs) {
       const fallbackEmployeeId = this.formatEmployeeId(log.deviceUserId);
-
-      // Prefer the preserved biometric/device number when it exists, then
-      // fall back to the legacy EMP + device number convention.
-      const employee = await this.prisma.employee.findFirst({
-        where: {
-          OR: [{ biometricNumber: log.deviceUserId }, { employeeId: fallbackEmployeeId }],
-        },
-        select: { employeeId: true, scheduledStart: true, scheduledEnd: true },
-      });
+      const employee = employeeByBiometric.get(log.deviceUserId) ?? employeeByEmpId.get(fallbackEmployeeId);
 
       if (!employee) {
         this.logger.warn(
@@ -308,19 +315,30 @@ export class BiometricService {
       // Used to trigger real-time aggregation after the sync loop.
       const touchedEmployeeDates = new Set<string>();
 
+      // N+1 fix: batch-fetch all existing attendance records for this sync batch
+      const allDates = [...new Set(processedLogs.map(l => l.timestamp.toISOString().split('T')[0]))];
+      const allEmpIds = [...new Set(processedLogs.map(l => l.employeeId))];
+      const existingBatch = await this.prisma.attendanceRecord.findMany({
+        where: {
+          employeeId: { in: allEmpIds },
+          date: { in: allDates },
+        },
+        orderBy: { timestamp: 'asc' },
+      });
+      // Group by "employeeId|date" for O(1) lookup
+      const existingByKey = new Map<string, typeof existingBatch>();
+      for (const rec of existingBatch) {
+        const key = `${rec.employeeId}|${rec.date}`;
+        const arr = existingByKey.get(key) ?? [];
+        arr.push(rec);
+        existingByKey.set(key, arr);
+      }
+
       // Insert with smart duplicate handling
       for (const log of processedLogs) {
         try {
           const dateStr = log.timestamp.toISOString().split('T')[0];
-
-          // Get all records for this employee on this day
-          const existingRecords = await this.prisma.attendanceRecord.findMany({
-            where: {
-              employeeId: log.employeeId,
-              date: dateStr,
-            },
-            orderBy: { timestamp: 'asc' },
-          });
+          const existingRecords = existingByKey.get(`${log.employeeId}|${dateStr}`) ?? [];
 
           // Check for duplicates using smart strategy
           const duplicateCheck = await this.duplicateHandler.checkDuplicate(

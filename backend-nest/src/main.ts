@@ -89,7 +89,10 @@ async function bootstrap() {
     logger.log('Database migrations completed successfully');
   } catch (err) {
     logger.error('Database migration failed:', err);
-    process.exit(1);
+    if (process.env.NODE_ENV === 'production') {
+      process.exit(1);
+    }
+    logger.warn('Skipping migration failure in development mode — continuing startup');
   }
 
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
