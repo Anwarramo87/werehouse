@@ -98,12 +98,16 @@ export class DiscountsService {
     // Create assistance/discount record through bonuses endpoint
     const period = dto.date ? dto.date.slice(0, 7) : new Date().toISOString().slice(0, 7);
     
-    const result = await this.bonusesService.create({
+    const result: any = await this.bonusesService.create({
       employeeId: dto.employeeId,
       bonusReason: dto.notes || 'خصم',
       assistanceAmount: dto.amount,
       period,
     });
+
+    if (result?.skipBonusRecord) {
+      throw new BadRequestException(result.message || 'No discount record was created');
+    }
 
     await this.shortCache.invalidatePrefix('employees:stats');
 

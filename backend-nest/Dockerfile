@@ -30,5 +30,5 @@ COPY --from=build /out/dist ./dist
 COPY --from=build /out/prisma ./prisma
 COPY --from=build /out/prisma.config.ts ./prisma.config.ts
 
-EXPOSE 5001
+EXPOSE 5003
 CMD ["sh", "-c", "echo 'Running prisma migrate deploy...' && npx prisma migrate deploy && echo 'Starting node dist/main...' && node dist/main"]
