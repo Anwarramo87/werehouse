@@ -54,7 +54,7 @@ export class TransportationService {
         passengers: {
           where: { status: 'active' },
           orderBy: { subscriptionDate: 'asc' },
-          include: { employee: { select: { name: true } } },
+          include: { employee: { select: { name: true, status: true } } },
         },
       },
     });
@@ -66,6 +66,7 @@ export class TransportationService {
       passengers: bus.passengers.map(p => ({
         ...p,
         name: p.employee?.name || p.name,
+        employeeStatus: p.employee?.status ?? 'active',
       })),
       companyDeductionAmount: Number(
         new Prisma.Decimal(bus.totalCost.toString())
@@ -326,9 +327,6 @@ export class TransportationService {
   async removePassenger(busId: string, employeeId: string) {
     const bus = await this.prisma.bus.findFirst({
       where: { OR: [{ id: busId }, { busId }] },
-      include: { 
-        passengers: { where: { status: 'active' } }
-      },
     });
     if (!bus) throw new NotFoundException(`Bus not found: ${busId}`);
 
@@ -339,9 +337,16 @@ export class TransportationService {
       throw new NotFoundException(`Passenger ${employeeId} not found on this bus`);
     }
 
-    // إزالة الموظف من الباص
-    await this.prisma.busPassenger.delete({
-      where: { id: passenger.id },
+    // حذف الراكب وخصم المواصلات معاً في transaction واحد
+    await this.prisma.$transaction(async (tx) => {
+      await tx.busPassenger.delete({ where: { id: passenger.id } });
+
+      await tx.employeeBonus.deleteMany({
+        where: {
+          employeeId,
+          bonusReason: { contains: bus.plateNumber },
+        },
+      });
     });
 
     return { message: 'Passenger removed successfully' };

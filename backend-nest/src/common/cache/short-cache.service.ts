@@ -91,8 +91,6 @@ export class ShortCacheService implements OnModuleInit, OnModuleDestroy {
     }
 
     const now = Date.now();
-    this.pruneExpired(now);
-
     const memoryHit = this.memory.get(key);
     if (memoryHit && memoryHit.expiresAt > now) {
       try {

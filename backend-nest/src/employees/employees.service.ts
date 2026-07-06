@@ -398,9 +398,12 @@ export class EmployeesService {
           jobTitle: profession,
           profession,
           hourlyRate: new Prisma.Decimal(resolvedHourlyRate),
-          baseSalary: baseSalary !== null && baseSalary !== undefined ? new Prisma.Decimal(baseSalary) : null,
+          baseSalary:
+            baseSalary !== null && baseSalary !== undefined ? new Prisma.Decimal(baseSalary) : null,
           livingAllowance:
-            dto.livingAllowance !== null && dto.livingAllowance !== undefined ? new Prisma.Decimal(dto.livingAllowance) : null,
+            dto.livingAllowance !== null && dto.livingAllowance !== undefined
+              ? new Prisma.Decimal(dto.livingAllowance)
+              : null,
           roleId: dto.roleId || null,
           department: department.name,
           departmentId: department.id,
@@ -420,7 +423,10 @@ export class EmployeesService {
         data: {
           employeeId: dto.employeeId,
           profession,
-          baseSalary: baseSalary !== null && baseSalary !== undefined ? new Prisma.Decimal(baseSalary) : new Prisma.Decimal(0),
+          baseSalary:
+            baseSalary !== null && baseSalary !== undefined
+              ? new Prisma.Decimal(baseSalary)
+              : new Prisma.Decimal(0),
           lumpSumSalary: new Prisma.Decimal(dto.lumpSumSalary ?? 0),
           livingAllowance:
             dto.livingAllowance !== null && dto.livingAllowance !== undefined
@@ -808,22 +814,52 @@ export class EmployeesService {
 
     if (!employee) throw new NotFoundException('Employee not found');
 
+    // Check if employee is a manager of any department
+    const managedDepartment = await this.prisma.department.findFirst({
+      where: { manager: employeeId },
+    });
+
+    if (managedDepartment) {
+      throw new BadRequestException(
+        `لا يمكن إنهاء خدمة الموظف لأنهم المشرف على قسم "${managedDepartment.name}". يرجى تغيير المشرف للقسم قبل إنهاء الخدمة.`,
+      );
+    }
+
     const terminationDate =
       this.parseOptionalDate(dto.terminationDate, 'terminationDate') || new Date();
 
-    const updated = await this.prisma.employee.update({
-      where: { employeeId },
-      data: {
-        status,
-        terminationDate,
-        terminationType,
-        terminationReason: dto.terminationReason || null,
-        terminationNotes: null,
-        financialSettlementStatus: 'pending',
-        isSettled: false,
-        isFinanciallySettled: false,
-      },
-      include: this.employeeSelect(),
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const updatedEmployee = await tx.employee.update({
+        where: { employeeId },
+        data: {
+          status,
+          terminationDate,
+          terminationType,
+          terminationReason: dto.terminationReason || null,
+          terminationNotes: null,
+          financialSettlementStatus: 'pending',
+          isSettled: false,
+          isFinanciallySettled: false,
+        },
+        include: this.employeeSelect(),
+      });
+
+      // إزالة الموظف من أي باص وحذف خصم المواصلات الخاص به
+      const busPassenger = await tx.busPassenger.findFirst({
+        where: { employeeId, status: 'active' },
+        include: { bus: { select: { plateNumber: true } } },
+      });
+      if (busPassenger) {
+        await tx.busPassenger.delete({ where: { id: busPassenger.id } });
+        await tx.employeeBonus.deleteMany({
+          where: {
+            employeeId,
+            bonusReason: { contains: busPassenger.bus.plateNumber },
+          },
+        });
+      }
+
+      return updatedEmployee;
     });
 
     await this.shortCache.invalidatePrefix('employees:stats');
@@ -842,6 +878,17 @@ export class EmployeesService {
 
     if (employee.status !== 'active') {
       throw new BadRequestException('Employee is not active');
+    }
+
+    // Check if employee is a manager of any department
+    const managedDepartment = await this.prisma.department.findFirst({
+      where: { manager: dto.employeeId },
+    });
+
+    if (managedDepartment) {
+      throw new BadRequestException(
+        `لا يمكن إنهاء خدمة الموظف لأنهم المشرف على قسم "${managedDepartment.name}". يرجى تغيير المشرف للقسم قبل إنهاء الخدمة.`,
+      );
     }
 
     const terminationDate = this.parseOptionalDate(dto.terminationDate, 'terminationDate');
@@ -883,6 +930,21 @@ export class EmployeesService {
         },
       });
 
+      // إزالة الموظف من أي باص وحذف خصم المواصلات الخاص به
+      const busPassenger = await tx.busPassenger.findFirst({
+        where: { employeeId: dto.employeeId, status: 'active' },
+        include: { bus: { select: { plateNumber: true } } },
+      });
+      if (busPassenger) {
+        await tx.busPassenger.delete({ where: { id: busPassenger.id } });
+        await tx.employeeBonus.deleteMany({
+          where: {
+            employeeId: dto.employeeId,
+            bonusReason: { contains: busPassenger.bus.plateNumber },
+          },
+        });
+      }
+
       return { employee: updated, terminationRecord };
     });
 
@@ -901,7 +963,7 @@ export class EmployeesService {
     };
   }
 
-  async bulkTerminateDepartment(dto: BulkTerminateDepartmentDto, user: AuthenticatedUser) {
+  async bulkTerminateDepartment(dto: BulkTerminateDepartmentDto, _user: AuthenticatedUser) {
     const status = dto.terminationType === 'resignation' ? 'resigned' : 'terminated';
     const terminationDate =
       this.parseOptionalDate(dto.terminationDate, 'terminationDate') || new Date();
@@ -916,6 +978,19 @@ export class EmployeesService {
 
     if (employees.length === 0) {
       return { success: true, message: 'لا يوجد موظفين نشطين في هذا القسم', terminatedCount: 0 };
+    }
+
+    // Check if any of the employees is a manager of any department
+    const employeeIds = employees.map(emp => emp.employeeId);
+    const managedDepartment = await this.prisma.department.findFirst({
+      where: { manager: { in: employeeIds } },
+    });
+
+    if (managedDepartment) {
+      const managerEmployee = employees.find(emp => emp.employeeId === managedDepartment.manager);
+      throw new BadRequestException(
+        `لا يمكن إنهاء خدمة الموظفين لأن الموظف ${managerEmployee?.name} (${managedDepartment.manager}) هو المشرف على قسم ${managedDepartment.name}. يرجى تغيير المشرف للقسم أولاً.`,
+      );
     }
 
     const results = await this.prisma.$transaction(
