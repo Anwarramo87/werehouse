@@ -26,6 +26,7 @@ import { BiometricChallengeService } from './biometric-challenge.service';
 import { RefreshTokenService } from './refresh-token.service';
 import { AuthCacheService } from './auth-cache.service';
 import { toFactoryDateKey, resolveTimezoneOffsetMinutes } from '../common/utils/timezone.util';
+import { checkLeaveConflictForAttendance, ConflictWarning } from '../common/utils/leave-attendance-conflict.util';
 
 type BiometricChallengePurpose = 'REGISTER' | 'LOGIN';
 
@@ -309,11 +310,14 @@ export class AuthService {
       throw new UnauthorizedException();
     }
 
+    const payload = this.buildAuthPayload(user);
+
     if (dto.markAttendance) {
-      await this.handleAutoAttendance(user, dto);
+      const attendanceWarning = await this.handleAutoAttendance(user, dto);
+      const session = await this.createSession(user, payload);
+      return { ...session, attendanceWarning: attendanceWarning ?? undefined };
     }
 
-    const payload = this.buildAuthPayload(user);
     return this.createSession(user, payload);
   }
 
@@ -462,14 +466,12 @@ export class AuthService {
     }
   }
 
-  private async handleAutoAttendance(user: PrismaUserWithRole, dto: BiometricLoginFinishDto) {
+  private async handleAutoAttendance(user: PrismaUserWithRole, dto: BiometricLoginFinishDto): Promise<ConflictWarning | null> {
     const employee = await this.prisma.employee.findFirst({
       where: { employeeId: user.username.toUpperCase() },
     });
 
-    if (!employee) {
-      return;
-    }
+    if (!employee) return null;
 
     const now = new Date();
     const localDate = toFactoryDateKey(now, this.timezoneOffsetMinutes);
@@ -498,6 +500,8 @@ export class AuthService {
       action: 'created',
       message: 'تسجيل حضور تلقائي',
     });
+
+    return checkLeaveConflictForAttendance(this.prisma, employee.employeeId, localDate);
   }
 
   private async createSession(

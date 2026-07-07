@@ -36,6 +36,7 @@ type AggregationResult = {
   date: string;
   requiredMinutes: number;
   actualWorkedMinutes: number;
+  overtimeMinutes: number;
   calculatedDelayMinutes: number;
   delayMinutesSubtracted: number;
   grossMissingMinutes: number;
@@ -138,23 +139,29 @@ export class AttendanceAggregationService {
   }
 
   /**
-   * Calculate actual worked minutes from raw IN/OUT punch pairs for a single day.
+   * Calculate worked minutes split into two buckets:
+   *   - scheduledWorkedMinutes: time physically present WITHIN the scheduled window
+   *   - overtimeMinutes: time physically present AFTER scheduledEnd
    *
-   * Strategy:
-   *  1. Sort all punches chronologically.
-   *  2. Walk through punches pairing IN → next OUT.
-   *  3. Sum the duration of each pair in minutes.
+   * This separation prevents overtime from masking mid-day absences.
    *
-   * Falls back to shiftPair.hoursWorked data when punch pairing yields 0
-   * and shiftPair data is available.
+   * Example: schedule 08:00–16:00, punches IN 8:00 OUT 10:00, IN 12:00 OUT 18:00
+   *   Pair 1: 8:00–10:00 → 120 min scheduled, 0 overtime
+   *   Pair 2: 12:00–16:00 → 240 min scheduled, 16:00–18:00 → 120 min overtime
+   *   Result: scheduledWorked=360, overtime=120
+   *   grossMissing = 480 - 360 = 120 min (the 10:00–12:00 gap) ✅
    */
-  private calculateActualWorkedMinutes(punches: DailyPunchRecord[]): number {
-    if (punches.length === 0) return 0;
+  private calculateWorkedMinutesSplit(
+    punches: DailyPunchRecord[],
+    scheduledStartMin: number,
+    scheduledEndMin: number,
+  ): { scheduledWorkedMinutes: number; overtimeMinutes: number } {
+    if (punches.length === 0) return { scheduledWorkedMinutes: 0, overtimeMinutes: 0 };
 
-    // Sort chronologically
     const sorted = [...punches].sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
 
-    let workedMs = 0;
+    let scheduledWorkedMs = 0;
+    let overtimeMs = 0;
     let pendingIn: Date | null = null;
 
     for (const punch of sorted) {
@@ -162,28 +169,48 @@ export class AttendanceAggregationService {
       if (type === 'IN') {
         pendingIn = punch.timestamp;
       } else if (type === 'OUT' && pendingIn) {
-        workedMs += punch.timestamp.getTime() - pendingIn.getTime();
+        const inMin = this.utcTimestampToLocalMinutes(pendingIn);
+        const outMin = this.utcTimestampToLocalMinutes(punch.timestamp);
+
+        // Clamp the pair to the scheduled window for "scheduled" bucket
+        const clampedIn = Math.max(inMin, scheduledStartMin);
+        const clampedOut = Math.min(outMin, scheduledEndMin);
+        if (clampedOut > clampedIn) {
+          scheduledWorkedMs += (clampedOut - clampedIn) * 60_000;
+        }
+
+        // Overtime = time worked strictly after scheduledEnd
+        if (outMin > scheduledEndMin) {
+          const overtimeStart = Math.max(inMin, scheduledEndMin);
+          overtimeMs += (outMin - overtimeStart) * 60_000;
+        }
+
         pendingIn = null;
       }
     }
 
-    let workedMinutes = Math.round(workedMs / 60_000);
+    let scheduledWorkedMinutes = Math.round(scheduledWorkedMs / 60_000);
+    let overtimeMinutes = Math.round(overtimeMs / 60_000);
 
     // Fallback: if pairing yields 0 but shiftPair has hoursWorked, use that
-    if (workedMinutes <= 0) {
+    if (scheduledWorkedMinutes <= 0) {
       let totalFromShiftPair = 0;
       for (const punch of sorted) {
         const hw = this.extractHoursWorked(punch.shiftPair);
-        if (hw > totalFromShiftPair) {
-          totalFromShiftPair = hw;
-        }
+        if (hw > totalFromShiftPair) totalFromShiftPair = hw;
       }
       if (totalFromShiftPair > 0) {
-        workedMinutes = Math.round(totalFromShiftPair * 60);
+        scheduledWorkedMinutes = Math.min(
+          Math.round(totalFromShiftPair * 60),
+          scheduledEndMin - scheduledStartMin,
+        );
       }
     }
 
-    return Math.max(0, workedMinutes);
+    return {
+      scheduledWorkedMinutes: Math.max(0, scheduledWorkedMinutes),
+      overtimeMinutes: Math.max(0, overtimeMinutes),
+    };
   }
 
   /**
@@ -292,15 +319,20 @@ export class AttendanceAggregationService {
   ): number {
     const sorted = [...punches].sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
 
-    // Walk backwards to find the last OUT punch
+    // Find the last OUT that is NOT followed by another IN
+    // (an OUT followed by IN means the employee came back — not a final departure)
     for (let i = sorted.length - 1; i >= 0; i--) {
-      if (sorted[i].type.toUpperCase() === 'OUT') {
-        const localDepartureMin = this.utcTimestampToLocalMinutes(sorted[i].timestamp);
-        return Math.max(0, scheduledEndMin - localDepartureMin);
-      }
+      if (sorted[i].type.toUpperCase() !== 'OUT') continue;
+
+      // Check if any IN punch comes after this OUT
+      const hasInAfter = sorted.slice(i + 1).some((p) => p.type.toUpperCase() === 'IN');
+      if (hasInAfter) continue; // not the final departure
+
+      const localDepartureMin = this.utcTimestampToLocalMinutes(sorted[i].timestamp);
+      return Math.max(0, scheduledEndMin - localDepartureMin);
     }
 
-    // No OUT punch at all — entire shift is missing (handled as absence)
+    // No valid final OUT punch — handled as absence
     return 0;
   }
 
@@ -379,11 +411,16 @@ export class AttendanceAggregationService {
       return null;
     }
 
-    // ── Step 3: Calculate actual worked minutes from IN/OUT pairs ─────────────
-    const actualWorkedMinutes = this.calculateActualWorkedMinutes(punches);
+    // ── Step 3: Calculate worked minutes split into scheduled vs overtime ──────
+    const empGracePeriod = Number(employee.gracePeriodMinutes ?? 0);
+    const { scheduledWorkedMinutes, overtimeMinutes } = this.calculateWorkedMinutesSplit(
+      punches,
+      scheduledStartMin,
+      scheduledEndMin,
+    );
+    const actualWorkedMinutes = scheduledWorkedMinutes;
 
     // ── Step 4: Calculate morning delay from first IN punch ──────────────────
-    const empGracePeriod = Number(employee.gracePeriodMinutes ?? 0);
     const calculatedDelayMinutes = this.calculateDelayFromPunches(
       punches,
       scheduledStartMin,
@@ -391,7 +428,6 @@ export class AttendanceAggregationService {
     );
 
     // ── Step 4b: Calculate early leave from last OUT punch (independent) ────
-    // This avoids misattributing grace-period delay as early leave.
     const rawEarlyLeaveMinutes = this.calculateEarlyLeaveFromPunches(punches, scheduledEndMin);
 
     // ── Step 5: Fetch approved hourly leaves ────────────────────────────────
@@ -403,19 +439,17 @@ export class AttendanceAggregationService {
       // ── Step A: Gross missing minutes ────────────────────────────────────
       const grossMissingMinutes = Math.max(0, requiredMinutes - actualWorkedMinutes);
 
-      // ── Step B: Independent delay & early leave attribution ──────────────
-      // Delay = time arrived late (after grace), from first IN punch
-      // EarlyLeave = time left early, from last OUT punch
-      // Both are independently measured — no subtraction from each other.
+      // ── Step B: Delay already penalized separately ───────────────────────
+      // DELAY_MINUTES = تأخير الصباح → يُعاقب عليه بـ 1.5× في الـ payroll
+      // grossMissingMinutes = كل الوقت الناقص (فجوات داخلية + خروج مبكر + تأخير)
+      // finalMissingMinutes = الناقص بعد استثناء التأخير (لأنه مُعاقب عليه منفصلاً)
       const delayMinutesSubtracted = calculatedDelayMinutes;
 
-      // ── Step C: Cap early leave so delay+early ≤ grossMissing ────────────
-      // Edge case: rounding or edge scenarios could make the sum exceed gross.
-      const maxEarlyLeave = Math.max(0, grossMissingMinutes - calculatedDelayMinutes);
-      const cappedEarlyLeave = Math.min(rawEarlyLeaveMinutes, maxEarlyLeave);
-
-      // ── Step D: Offset by approved hourly leaves → Final Missing Minutes ─
-      const finalMissingMinutes = Math.max(0, cappedEarlyLeave - approvedLeaveMinutes);
+      // ── Step C: finalMissing = grossMissing − delay − approvedLeave ──────
+      // لا نعتمد على rawEarlyLeaveMinutes لأنه يشوف آخر OUT فقط
+      // ويفوّت الفجوات الداخلية (مثل خروج 10 ورجوع 12)
+      const netMissingAfterDelay = Math.max(0, grossMissingMinutes - calculatedDelayMinutes);
+      const finalMissingMinutes = Math.max(0, netMissingAfterDelay - approvedLeaveMinutes);
 
       // ── Step D: Clean existing calculated logs for this date ─────────────
       // Delete previously calculated logs (idempotent re-run support).
@@ -453,7 +487,7 @@ export class AttendanceAggregationService {
         logsCreated.push(`DELAY_MINUTES=${calculatedDelayMinutes}`);
       }
 
-      // ── Step F: Log EARLY_LEAVE_MINUTES (remaining penalty after delay) ──
+      // ── Step F: Log EARLY_LEAVE_MINUTES (all unexcused missing time) ──────
       if (finalMissingMinutes > 0) {
         await tx.dailyAttendanceLog.create({
           data: {
@@ -462,7 +496,7 @@ export class AttendanceAggregationService {
             recordType: DailyRecordType.EARLY_LEAVE_MINUTES,
             value: new Prisma.Decimal(finalMissingMinutes),
             source: 'calculated',
-            notes: `Auto-calculated: required=${requiredMinutes}min, worked=${actualWorkedMinutes}min, raw_early=${rawEarlyLeaveMinutes}min, leave_offset=${approvedLeaveMinutes}min → early_leave_penalty=${finalMissingMinutes}min`,
+            notes: `Auto-calculated: required=${requiredMinutes}min, worked=${actualWorkedMinutes}min, gross_missing=${grossMissingMinutes}min, delay=${calculatedDelayMinutes}min, leave_offset=${approvedLeaveMinutes}min → missing_penalty=${finalMissingMinutes}min`,
           },
         });
         logsCreated.push(`EARLY_LEAVE_MINUTES=${finalMissingMinutes}`);
@@ -516,11 +550,35 @@ export class AttendanceAggregationService {
         }
       }
 
+      // ── Step H: Log OVERTIME_MINUTES ────────────────────────────────────
+      if (overtimeMinutes > 0) {
+        await tx.dailyAttendanceLog.deleteMany({
+          where: {
+            employeeId,
+            date: dateOnly,
+            source: 'calculated',
+            recordType: DailyRecordType.OVERTIME_MINUTES,
+          },
+        });
+        await tx.dailyAttendanceLog.create({
+          data: {
+            employeeId,
+            date: dateOnly,
+            recordType: DailyRecordType.OVERTIME_MINUTES,
+            value: new Prisma.Decimal(overtimeMinutes),
+            source: 'calculated',
+            notes: `Auto-calculated overtime: worked after scheduledEnd=${scheduledEndMin}min → overtime=${overtimeMinutes}min`,
+          },
+        });
+        logsCreated.push(`OVERTIME_MINUTES=${overtimeMinutes}`);
+      }
+
       return {
         employeeId,
         date: dateStr,
         requiredMinutes,
         actualWorkedMinutes,
+        overtimeMinutes,
         calculatedDelayMinutes,
         delayMinutesSubtracted,
         grossMissingMinutes,
@@ -532,8 +590,8 @@ export class AttendanceAggregationService {
 
     this.logger.log(
       `[${employeeId}] ${dateStr}: delay=${result.calculatedDelayMinutes}min, ` +
-        `missing=${result.finalMissingMinutes}min ` +
-        `(required=${requiredMinutes}, worked=${actualWorkedMinutes}, ` +
+        `missing=${result.finalMissingMinutes}min, overtime=${result.overtimeMinutes}min ` +
+        `(required=${requiredMinutes}, scheduledWorked=${actualWorkedMinutes}, ` +
         `gross_missing=${result.grossMissingMinutes}, leave=${approvedLeaveMinutes})`,
     );
 
