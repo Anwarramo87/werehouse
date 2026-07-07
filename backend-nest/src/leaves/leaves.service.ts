@@ -6,6 +6,7 @@ import { paginatedResponse, resolvePagination } from '../common/utils/pagination
 import { BulkCreateLeaveRequestDto, CreateLeaveRequestDto } from './dto/create-leave-request.dto';
 import { UpdateLeaveRequestDto } from './dto/update-leave-request.dto';
 import { LeavesListQueryDto } from './dto/leaves-list-query.dto';
+import { checkAttendanceConflictForLeave } from '../common/utils/leave-attendance-conflict.util';
 
 const LEAVE_DELETION_ENTITY = 'leave_request';
 
@@ -422,7 +423,17 @@ export class LeavesService {
     });
 
     await this.shortCache.invalidatePrefix('employees:stats');
-    return result;
+
+    const warning = await checkAttendanceConflictForLeave(
+      this.prisma,
+      dto.employeeId,
+      data.startDate as Date,
+      data.endDate as Date,
+      data.isHourly as boolean,
+      dto.leaveType as string,
+    );
+
+    return { ...result, warning: warning ?? undefined };
   }
 
   /**
@@ -479,16 +490,29 @@ export class LeavesService {
       return records;
     });
 
+    const warningResults = await Promise.all(
+      created.map(async (record) => {
+        const buildItem = buildItems.find((b) => b.input.employeeId === record.employeeId);
+        const warning = buildItem
+          ? await checkAttendanceConflictForLeave(
+              this.prisma,
+              record.employeeId,
+              buildItem.data.startDate as Date,
+              buildItem.data.endDate as Date,
+              buildItem.data.isHourly as boolean,
+              buildItem.input.leaveType as string,
+            )
+          : null;
+        return { employeeId: record.employeeId, success: true, data: record, warning: warning ?? undefined };
+      }),
+    );
+
     return {
       message: `تم إنشاء ${created.length} طلب إجازة بنجاح`,
       total: dto.items.length,
       succeeded: created.length,
       failed: 0,
-      results: created.map((record) => ({
-        employeeId: record.employeeId,
-        success: true,
-        data: record,
-      })),
+      results: warningResults,
     };
   }
 
@@ -554,7 +578,19 @@ export class LeavesService {
     });
 
     await this.shortCache.invalidatePrefix('employees:stats');
-    return result;
+
+    const effectiveIsHourly = dto.isHourly !== undefined ? dto.isHourly : current.isHourly;
+    const effectiveLeaveType = dto.leaveType !== undefined ? dto.leaveType : current.leaveType;
+    const warning = await checkAttendanceConflictForLeave(
+      this.prisma,
+      result.employeeId,
+      result.startDate,
+      result.endDate,
+      effectiveIsHourly,
+      effectiveLeaveType as string,
+    );
+
+    return { ...result, warning: warning ?? undefined };
   }
 
   async remove(id: string, deletedBy?: string) {

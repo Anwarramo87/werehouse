@@ -7,7 +7,7 @@
 export const WORK_DAYS_PER_MONTH = 26;
 
 /** عدد ساعات الدوام اليومي */
-export const WORK_HOURS_PER_DAY = 9;
+export const WORK_HOURS_PER_DAY = 8;
 
 /** عدد دقائق الساعة */
 export const MINUTES_PER_HOUR = 60;

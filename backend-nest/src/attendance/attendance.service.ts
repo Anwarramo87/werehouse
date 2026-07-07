@@ -1,5 +1,6 @@
 import { Injectable, NotFoundException, BadRequestException, Logger } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
+import { checkLeaveConflictForAttendance } from '../common/utils/leave-attendance-conflict.util';
 import { parse as parseCsv } from 'csv-parse/sync';
 import { extname } from 'path';
 import * as ExcelJS from 'exceljs';
@@ -462,6 +463,20 @@ export class AttendanceService {
 
     const date = this.deriveDateKey(dto.timestamp, eventDate);
 
+    // ── منع تسجيل نفس النوع مرتين متتاليين في نفس اليوم ──
+    const normalizedType = dto.type.toUpperCase();
+    const lastRecord = await this.prisma.attendanceRecord.findFirst({
+      where: { employeeId: dto.employeeId, date },
+      orderBy: { timestamp: 'desc' },
+      select: { type: true },
+    });
+    if (lastRecord && lastRecord.type.toUpperCase() === normalizedType) {
+      const typeLabel = normalizedType === 'IN' ? 'دخول' : 'خروج';
+      throw new BadRequestException(
+        `تحذير: آخر بصمة مسجلة هي ${typeLabel} أيضاً — لا يمكن تسجيل ${typeLabel} مرتين متتاليتين`,
+      );
+    }
+
     const record = await this.prisma.attendanceRecord.create({
       data: {
         ...dto,
@@ -485,7 +500,8 @@ export class AttendanceService {
         ),
       );
 
-    return { message: 'Attendance record created successfully', record };
+    const warning = await checkLeaveConflictForAttendance(this.prisma, dto.employeeId, date);
+    return { message: 'Attendance record created successfully', record, warning: warning ?? undefined };
   }
 
   async upload(file: Express.Multer.File, userId?: string) {
@@ -675,7 +691,8 @@ export class AttendanceService {
         );
     }
 
-    return { message: 'Attendance record updated successfully', record: updated };
+    const warning = await checkLeaveConflictForAttendance(this.prisma, updated.employeeId, updated.date);
+    return { message: 'Attendance record updated successfully', record: updated, warning: warning ?? undefined };
   }
 
   async listDeletedHistory(query: { page?: number; limit?: number }) {

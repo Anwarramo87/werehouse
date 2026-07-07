@@ -13,6 +13,7 @@ import { AttendanceAggregationService } from './attendance-aggregation.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { DeviceApiKeyGuard } from '../common/guards/device-api-key.guard';
 import { toFactoryDateKey } from '../common/utils/timezone.util';
+import { checkLeaveConflictForAttendance } from '../common/utils/leave-attendance-conflict.util';
 
 @ApiTags('attendance')
 @Controller('attendance/public')
@@ -68,11 +69,14 @@ export class PublicAttendanceController {
         ),
       );
 
+    const warning = await checkLeaveConflictForAttendance(this.prisma, employeeId, dateKey);
+
     return {
       message: 'Check-in successful',
       employeeId,
       timestamp: record.timestamp,
       date: dateKey,
+      warning: warning ?? undefined,
     };
   }
 
@@ -153,12 +157,15 @@ export class PublicAttendanceController {
         ),
       );
 
+    const warning = await checkLeaveConflictForAttendance(this.prisma, employeeId, dateKey);
+
     return {
       message: 'Check-out successful',
       employeeId,
       timestamp: record.timestamp,
       date: dateKey,
       hoursWorked: Math.round(hoursWorked * 100) / 100,
+      warning: warning ?? undefined,
     };
   }
 

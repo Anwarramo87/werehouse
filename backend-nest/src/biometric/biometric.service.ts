@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { DuplicateHandlingService, DuplicateStrategy } from './duplicate-handling.service';
 import { AttendanceAggregationService } from '../attendance/attendance-aggregation.service';
+import { checkLeaveConflictForAttendance } from '../common/utils/leave-attendance-conflict.util';
 import ZKLib from 'zklib';
 
 interface RawBiometricLog {
@@ -405,6 +406,8 @@ export class BiometricService {
             },
           });
 
+          const leaveWarning = await checkLeaveConflictForAttendance(this.prisma, log.employeeId, dateStr);
+
           synced++;
           results.push({
             employeeId: log.employeeId,
@@ -416,6 +419,7 @@ export class BiometricService {
               earlyLeaveMinutes: log.earlyLeaveMinutes,
               overtimeMinutes: log.overtimeMinutes,
             },
+            warning: leaveWarning ?? undefined,
           });
 
           // Mark this (employeeId, date) for post-sync aggregation
