@@ -1437,8 +1437,35 @@ export class AttendanceService {
       // timezone offset: Saudi Arabia UTC+3 = 180 minutes
       const TIMEZONE_OFFSET_MINUTES = 180;
 
+      // جلب الإجازات الساعية المعتمدة للموظف في الفترة
+      const hourlyLeavesInPeriod = await this.prisma.leaveRequest.findMany({
+        where: {
+          employeeId: employee.employeeId,
+          status: 'APPROVED',
+          isHourly: true,
+          startDate: { lte: new Date(`${periodEnd}T23:59:59Z`) },
+          endDate: { gte: new Date(`${periodStart}T00:00:00Z`) },
+        },
+        select: { startDate: true, startTime: true, endTime: true },
+      });
+
+      // بناء map: date → دقائق الإجازة الساعية في بداية اليوم
+      const morningLeaveOffsetByDate = new Map<string, number>();
+      for (const leave of hourlyLeavesInPeriod) {
+        const dateStr = leave.startDate.toISOString().slice(0, 10);
+        const [lsh, lsm] = (leave.startTime || '').split(':').map(Number);
+        const [leh, lem] = (leave.endTime || '').split(':').map(Number);
+        const leaveStartMin = (lsh || 0) * 60 + (lsm || 0);
+        const leaveEndMin = (leh || 0) * 60 + (lem || 0);
+        // تُحسب فقط إذا الإجازة بدأت عند أو قبل وقت الدوام
+        if (leaveStartMin <= scheduledMinutes && leaveEndMin > scheduledMinutes) {
+          const existing = morningLeaveOffsetByDate.get(dateStr) || 0;
+          morningLeaveOffsetByDate.set(dateStr, Math.max(existing, leaveEndMin - scheduledMinutes));
+        }
+      }
+
       let totalDelayMinutes = 0;
-      for (const { timestamp, shiftPairMinutesLate } of firstInByDate.values()) {
+      for (const { timestamp, shiftPairMinutesLate, date } of firstInByDate.values()) {
         let rawLate: number;
         if (shiftPairMinutesLate !== null && shiftPairMinutesLate > 0) {
           rawLate = shiftPairMinutesLate;
@@ -1448,6 +1475,9 @@ export class AttendanceService {
           const localMinutes = (((utcMinutes + TIMEZONE_OFFSET_MINUTES) % 1440) + 1440) % 1440;
           rawLate = Math.max(0, localMinutes - scheduledMinutes);
         }
+        // طرح دقائق الإجازة الساعية الصباحية من التأخير
+        const morningOffset = morningLeaveOffsetByDate.get(date) || 0;
+        rawLate = Math.max(0, rawLate - morningOffset);
         const effectiveLate = rawLate > empGracePeriod ? rawLate - empGracePeriod : 0;
         totalDelayMinutes += effectiveLate;
       }

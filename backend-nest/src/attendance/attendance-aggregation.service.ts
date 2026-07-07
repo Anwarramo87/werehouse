@@ -420,19 +420,39 @@ export class AttendanceAggregationService {
     );
     const actualWorkedMinutes = scheduledWorkedMinutes;
 
-    // ── Step 4: Calculate morning delay from first IN punch ──────────────────
-    const calculatedDelayMinutes = this.calculateDelayFromPunches(
+    // ── Step 4: Fetch approved hourly leaves (needed before delay calc) ──────
+    const hourlyLeaves = await this.getApprovedHourlyLeaves(employeeId, dateOnly);
+    const approvedLeaveMinutes = this.calculateApprovedLeaveMinutes(hourlyLeaves);
+
+    // ── Step 4a: Effective scheduled start = scheduledStart + any hourly leave cover ─
+    // If employee has approved hourly leave at the start of the day (e.g. 08:00→10:00),
+    // their effective start shifts forward so they are NOT penalized for delay.
+    const leaveAtStart = hourlyLeaves.reduce((maxEnd, l) => {
+      const s = this.parseHHmmToMinutes(l.startTime);
+      const e = this.parseHHmmToMinutes(l.endTime);
+      if (s === null || e === null) return maxEnd;
+      // Shift start if leave begins at or before scheduledStart (covers morning)
+      if (s <= scheduledStartMin) return Math.max(maxEnd, e);
+      return maxEnd;
+    }, scheduledStartMin);
+    const effectiveScheduledStartMin = leaveAtStart;
+
+    // ── Step 4b: Calculate morning delay using effective start ───────────────
+    // Also subtract any leave minutes that cover the arrival window to handle
+    // cases where shiftPair.minutesLate was pre-calculated without leave context.
+    const rawDelayMinutes = this.calculateDelayFromPunches(
       punches,
-      scheduledStartMin,
+      effectiveScheduledStartMin,
       empGracePeriod,
     );
 
-    // ── Step 4b: Calculate early leave from last OUT punch (independent) ────
-    const rawEarlyLeaveMinutes = this.calculateEarlyLeaveFromPunches(punches, scheduledEndMin);
+    // If shiftPair.minutesLate was used (biometric pre-calc), it doesn't know
+    // about hourly leaves — subtract the leave window that covers the morning.
+    const morningLeaveOffset = Math.max(0, effectiveScheduledStartMin - scheduledStartMin);
+    const calculatedDelayMinutes = Math.max(0, rawDelayMinutes - morningLeaveOffset);
 
-    // ── Step 5: Fetch approved hourly leaves ────────────────────────────────
-    const hourlyLeaves = await this.getApprovedHourlyLeaves(employeeId, dateOnly);
-    const approvedLeaveMinutes = this.calculateApprovedLeaveMinutes(hourlyLeaves);
+    // ── Step 4c: Calculate early leave from last OUT punch (independent) ────
+    const rawEarlyLeaveMinutes = this.calculateEarlyLeaveFromPunches(punches, scheduledEndMin);
 
     // ── Step 6: Write to DailyAttendanceLog inside a $transaction ─────────────
     const result = await this.prisma.$transaction(async (tx) => {
