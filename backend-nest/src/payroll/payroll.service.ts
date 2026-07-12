@@ -606,19 +606,25 @@ export class PayrollService {
     const runDateKey = dto.periodStart.slice(0, 10).replace(/-/g, '');
     const runId = `PAY${runDateKey}-${Date.now().toString().slice(-4)}`;
 
-    const run = await this.prisma.payrollRun.create({
-      data: {
-        runId,
-        periodStart: periodStart,
-        periodEnd: periodEnd,
-        runBy: userId,
-        status: 'processing',
-        approvalStatus: 'pending',
-        totalEmployees: 0,
+    // Wrap run creation + processing in a transaction so a mid-flow failure
+    // cannot leave a partial payroll run in the database.
+    const updatedRun = await this.prisma.$transaction(
+      async (tx) => {
+        const run = await tx.payrollRun.create({
+          data: {
+            runId,
+            periodStart: this.toDateOnly(dto.periodStart),
+            periodEnd: this.toDateOnly(dto.periodEnd),
+            runBy: userId,
+            status: 'processing',
+            approvalStatus: 'pending',
+            totalEmployees: 0,
+          },
+        });
+        return this.processPayrollRun(run.id, dto, userId);
       },
-    });
-
-    const updatedRun = await this.processPayrollRun(run.id, dto, userId);
+      { timeout: 120_000 },
+    );
 
     return { message: 'Payroll calculated successfully', payrollRun: updatedRun };
   }
@@ -1118,10 +1124,12 @@ export class PayrollService {
 
   private escapeCsv(value: unknown): string {
     const text = String(value ?? '');
-    if (text.includes(',') || text.includes('"') || text.includes('\n')) {
-      return `"${text.replace(/"/g, '""')}"`;
+    // Guard against CSV/formula injection: prefix dangerous leading chars
+    const safe = /^[=+\-@\t\r]/.test(text) ? `'${text}` : text;
+    if (safe.includes(',') || safe.includes('"') || safe.includes('\n')) {
+      return `"${safe.replace(/"/g, '""')}"`;
     }
-    return text;
+    return safe;
   }
 
   async processPayrollRunJob(payload: PayrollQueuePayload) {
