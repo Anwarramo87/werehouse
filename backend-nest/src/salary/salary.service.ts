@@ -48,13 +48,23 @@ export class SalaryService {
     };
   }
 
-  /** Compute monthlySalary = baseSalary + livingAllowance (allowances no longer auto-computed) */
+  /** Compute monthlySalary = baseSalary + lumpSumSalary + livingAllowance + responsibilityAllowance + extraEffortAllowance + productionIncentive + transportAllowance */
   private withMonthlySalary<T extends {
     baseSalary: Prisma.Decimal;
+    lumpSumSalary: Prisma.Decimal;
     livingAllowance: Prisma.Decimal;
+    responsibilityAllowance: Prisma.Decimal;
+    extraEffortAllowance: Prisma.Decimal;
+    productionIncentive: Prisma.Decimal;
+    transportAllowance: Prisma.Decimal;
   }>(record: T): T & { monthlySalary: number } {
     const monthly = record.baseSalary
-      .plus(record.livingAllowance);
+      .plus(record.lumpSumSalary)
+      .plus(record.livingAllowance)
+      .plus(record.responsibilityAllowance)
+      .plus(record.extraEffortAllowance)
+      .plus(record.productionIncentive)
+      .plus(record.transportAllowance);
     return { ...record, monthlySalary: Number(monthly.toFixed(2)) };
   }
 
