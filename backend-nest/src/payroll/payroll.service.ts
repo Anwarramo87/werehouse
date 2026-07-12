@@ -606,27 +606,28 @@ export class PayrollService {
     const runDateKey = dto.periodStart.slice(0, 10).replace(/-/g, '');
     const runId = `PAY${runDateKey}-${Date.now().toString().slice(-4)}`;
 
-    // Wrap run creation + processing in a transaction so a mid-flow failure
-    // cannot leave a partial payroll run in the database.
-    const updatedRun = await this.prisma.$transaction(
-      async (tx) => {
-        const run = await tx.payrollRun.create({
-          data: {
-            runId,
-            periodStart: this.toDateOnly(dto.periodStart),
-            periodEnd: this.toDateOnly(dto.periodEnd),
-            runBy: userId,
-            status: 'processing',
-            approvalStatus: 'pending',
-            totalEmployees: 0,
-          },
-        });
-        return this.processPayrollRun(run.id, dto, userId);
+    // Create the payroll run record first
+    const run = await this.prisma.payrollRun.create({
+      data: {
+        runId,
+        periodStart: this.toDateOnly(dto.periodStart),
+        periodEnd: this.toDateOnly(dto.periodEnd),
+        runBy: userId,
+        status: 'queued',
+        approvalStatus: 'pending',
+        totalEmployees: 0,
       },
-      { timeout: 120_000 },
-    );
+    });
 
-    return { message: 'Payroll calculated successfully', payrollRun: updatedRun };
+    // Process the payroll run outside the transaction
+    try {
+      const updatedRun = await this.processPayrollRun(run.id, dto, userId);
+      return { message: 'Payroll calculated successfully', payrollRun: updatedRun };
+    } catch (error) {
+      // Mark the run as failed if processing fails
+      await this.markPayrollRunFailed(run.id, error instanceof Error ? error.message : 'Unknown error during payroll processing');
+      throw error;
+    }
   }
 
   async calculateAsync(dto: CalculatePayrollDto, userId?: string) {
@@ -645,7 +646,13 @@ export class PayrollService {
       },
     });
 
-    await this.enqueuePayrollJob({ payrollRunId: run.id, dto, userId });
+    try {
+      await this.enqueuePayrollJob({ payrollRunId: run.id, dto, userId });
+    } catch (error) {
+      // Mark the run as failed if job enqueueing fails
+      await this.markPayrollRunFailed(run.id, error instanceof Error ? error.message : 'Failed to enqueue payroll job');
+      throw error;
+    }
 
     return { message: 'Payroll calculation queued', payrollRun: run };
   }
@@ -1133,7 +1140,13 @@ export class PayrollService {
   }
 
   async processPayrollRunJob(payload: PayrollQueuePayload) {
-    return this.processPayrollRun(payload.payrollRunId, payload.dto, payload.userId);
+    try {
+      return await this.processPayrollRun(payload.payrollRunId, payload.dto, payload.userId);
+    } catch (error) {
+      // Mark the run as failed if processing fails in the job
+      await this.markPayrollRunFailed(payload.payrollRunId, error instanceof Error ? error.message : 'Unknown error during payroll job processing');
+      throw error;
+    }
   }
 
   async markPayrollRunFailed(payrollRunId: string, message: string) {
@@ -1507,6 +1520,15 @@ export class PayrollService {
         penalty.employeeId,
         (penaltiesByEmployee.get(penalty.employeeId) || 0) + Number(penalty.amount || 0),
       );
+    }
+
+    // Verify the payroll run exists before updating
+    const existingRun = await this.prisma.payrollRun.findUnique({
+      where: { id: runId },
+    });
+    
+    if (!existingRun) {
+      throw new Error(`PayrollRun with id ${runId} not found for update`);
     }
 
     await this.prisma.payrollRun.update({
