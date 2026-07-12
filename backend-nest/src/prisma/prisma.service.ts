@@ -4,10 +4,12 @@ import {
   Logger,
   OnModuleDestroy,
   OnModuleInit,
+  Optional,
 } from '@nestjs/common';
 import { Prisma, PrismaClient } from '@prisma/client';
 import { PrismaPg } from '@prisma/adapter-pg';
 import { Pool } from 'pg';
+import { MetricsService } from '../common/metrics/metrics.service';
 
 type PrismaQueryEventClient = {
   $on(eventType: 'query', callback: (event: Prisma.QueryEvent) => void): void;
@@ -26,7 +28,7 @@ export class PrismaService
   private readonly slowQueryThresholdMs: number;
   private keepaliveTimer: ReturnType<typeof setInterval> | null = null;
 
-  constructor() {
+  constructor(@Optional() private readonly metricsService?: MetricsService) {
     const pool = new Pool({
       connectionString: process.env.DATABASE_URL,
       // Keep connections alive — critical for Neon serverless
@@ -75,6 +77,7 @@ export class PrismaService
       this.logger.warn(
         `[Slow Query] ${event.duration}ms (threshold: ${this.slowQueryThresholdMs}ms) ${queryPreview}`,
       );
+      this.metricsService?.dbSlowQueriesTotal.inc();
     });
   }
 

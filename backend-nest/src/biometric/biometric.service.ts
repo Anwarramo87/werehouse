@@ -230,7 +230,7 @@ export class BiometricService {
       },
       select: { employeeId: true, biometricNumber: true, scheduledStart: true, scheduledEnd: true },
     });
-    const employeeByBiometric = new Map(employeeRecords.filter(e => e.biometricNumber != null).map(e => [e.biometricNumber!, e]));
+    const employeeByBiometric = new Map(employeeRecords.filter(e => e.biometricNumber !== null && e.biometricNumber !== undefined).map(e => [e.biometricNumber!, e]));
     const employeeByEmpId = new Map(employeeRecords.map(e => [e.employeeId, e]));
 
     for (const log of rawLogs) {

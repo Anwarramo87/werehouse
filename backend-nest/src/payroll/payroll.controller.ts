@@ -1,5 +1,6 @@
 import { Body, Controller, Delete, Get, Param, Post, Put, Query, Res, UseGuards } from '@nestjs/common';
-import { Req } from '@nestjs/common';
+import { UseInterceptors, Req } from '@nestjs/common';
+import { IdempotencyInterceptor } from '../common/interceptors/idempotency.interceptor';
 import { ApiTags, ApiCookieAuth } from '@nestjs/swagger';
 import { Request } from 'express';
 import { Response } from 'express';
@@ -68,6 +69,7 @@ export class PayrollController {
 
   @Post('calculate')
   @Permissions('run_payroll')
+  @UseInterceptors(IdempotencyInterceptor)
   calculate(@Body() dto: CalculatePayrollDto, @CurrentUser() user: AuthenticatedUser) {
     return this.payrollService.calculate(dto, user?.userId);
   }

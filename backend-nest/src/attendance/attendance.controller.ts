@@ -12,6 +12,7 @@ import {
   UseGuards,
   UseInterceptors,
 } from '@nestjs/common';
+import { IdempotencyInterceptor } from '../common/interceptors/idempotency.interceptor';
 import { ApiTags, ApiCookieAuth } from '@nestjs/swagger';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { Request } from 'express';
@@ -111,6 +112,7 @@ export class AttendanceController {
 
   @Post()
   @Permissions('edit_attendance')
+  @UseInterceptors(IdempotencyInterceptor)
   create(@Body() dto: CreateAttendanceDto) {
     return this.attendanceService.create(dto);
   }
