@@ -54,7 +54,7 @@ export class TransportationService {
         passengers: {
           where: { status: 'active' },
           orderBy: { subscriptionDate: 'asc' },
-          include: { employee: { select: { name: true, status: true } } },
+          include: { employee: { select: { name: true } } },
         },
       },
     });
@@ -66,7 +66,6 @@ export class TransportationService {
       passengers: bus.passengers.map(p => ({
         ...p,
         name: p.employee?.name || p.name,
-        employeeStatus: p.employee?.status ?? 'active',
       })),
       companyDeductionAmount: Number(
         new Prisma.Decimal(bus.totalCost.toString())
@@ -327,6 +326,9 @@ export class TransportationService {
   async removePassenger(busId: string, employeeId: string) {
     const bus = await this.prisma.bus.findFirst({
       where: { OR: [{ id: busId }, { busId }] },
+      include: { 
+        passengers: { where: { status: 'active' } }
+      },
     });
     if (!bus) throw new NotFoundException(`Bus not found: ${busId}`);
 
@@ -337,16 +339,9 @@ export class TransportationService {
       throw new NotFoundException(`Passenger ${employeeId} not found on this bus`);
     }
 
-    // حذف الراكب وخصم المواصلات معاً في transaction واحد
-    await this.prisma.$transaction(async (tx) => {
-      await tx.busPassenger.delete({ where: { id: passenger.id } });
-
-      await tx.employeeBonus.deleteMany({
-        where: {
-          employeeId,
-          bonusReason: { contains: bus.plateNumber },
-        },
-      });
+    // إزالة الموظف من الباص
+    await this.prisma.busPassenger.delete({
+      where: { id: passenger.id },
     });
 
     return { message: 'Passenger removed successfully' };
@@ -498,7 +493,41 @@ export class TransportationService {
    * Batch-calculate bus subscription deductions for multiple employees in a given month.
    * Returns: Map<employeeId, deductionAmount>
    */
-  async calculateBatchBusDeductions(employeeIds: string[], targetMonth: Date): Promise<Map<string, number>> {
+  private getWorkingDaysInRange(startDate: Date, endDate: Date): number {
+    let count = 0;
+    const current = new Date(startDate);
+    current.setUTCHours(0, 0, 0, 0); // Normalize to start of day
+
+    const end = new Date(endDate);
+    end.setUTCHours(0, 0, 0, 0); // Normalize to start of day
+
+    if (current > end) {
+      return 0;
+    }
+
+    if (current.getTime() === end.getTime()) {
+      const dayOfWeek = current.getDay();
+      // Assuming 0 = Sunday, 1 = Monday, ..., 6 = Saturday
+      // Weekends are Friday (5) and Saturday (6)
+      return (dayOfWeek !== 5 && dayOfWeek !== 6) ? 1 : 0;
+    }
+
+    while (current <= end) {
+      const dayOfWeek = current.getDay();
+      // Not Friday (5) or Saturday (6)
+      if (dayOfWeek !== 5 && dayOfWeek !== 6) {
+        count++;
+      }
+      current.setDate(current.getDate() + 1);
+    }
+    return count;
+  }
+
+  async calculateBatchBusDeductions(
+    employeeIds: string[],
+    targetMonth: Date,
+    options?: { isProvisional?: boolean; terminationDate?: Date },
+  ): Promise<Map<string, number>> {
     const result = new Map<string, number>();
     if (employeeIds.length === 0) return result;
 
@@ -543,7 +572,23 @@ export class TransportationService {
 
     // 6. Calculate prorated deduction per employee
     for (const [empId, passenger] of latestByEmployee) {
-      const activeWorkingDays = this.getActiveWorkingDays(passenger.subscriptionDate, targetMonth);
+      let activeWorkingDays: number;
+
+      if (options?.isProvisional && options.terminationDate) {
+        const year = targetMonth.getFullYear();
+        const month = targetMonth.getMonth();
+        const startOfMonth = new Date(Date.UTC(year, month, 1));
+        const endOfMonth = new Date(Date.UTC(year, month + 1, 0, 23, 59, 59, 999));
+
+        const effectiveStartDate = new Date(Math.max(startOfMonth.getTime(), passenger.subscriptionDate.getTime()));
+        const effectiveEndDate = new Date(Math.min(endOfMonth.getTime(), options.terminationDate.getTime()));
+        
+        activeWorkingDays = this.getWorkingDaysInRange(effectiveStartDate, effectiveEndDate);
+
+      } else {
+        activeWorkingDays = this.getActiveWorkingDays(passenger.subscriptionDate, targetMonth);
+      }
+      
       const finalDeduction = (baseShare / 26) * activeWorkingDays;
       if (finalDeduction > 0) {
         result.set(empId, Math.round(finalDeduction * 100) / 100);
