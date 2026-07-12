@@ -12,11 +12,17 @@ import { paginationMeta, resolvePagination } from '../common/utils/pagination.ut
 import { CalculatePayrollDto } from './dto/calculate-payroll.dto';
 import { PayrollListQueryDto } from './dto/payroll-list-query.dto';
 import { PayrollInputsQueryDto, UpsertPayrollInputDto } from './dto/payroll-input.dto';
+import {
+  BulkUpsertPayrollReceiptsDto,
+  PayrollReceiptsQueryDto,
+  UpsertPayrollReceiptDto,
+} from './dto/payroll-receipt.dto';
 import { Queue } from 'bullmq';
 import { QUEUE_JOBS, QUEUE_NAMES } from '../queues/queue.constants';
 import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
 import { TransportationService } from '../transportation/transportation.service';
 import { AttendanceAggregationService } from '../attendance/attendance-aggregation.service';
+import { AuthenticatedUser } from '../common/types/authenticated-user.types';
 import {
   PAYROLL_BATCH_SIZE,
   WORK_DAYS_PER_MONTH,
@@ -126,6 +132,30 @@ export class PayrollService {
     return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
   }
 
+  private async resolveLatestPayrollRunIdForMonth(month: string) {
+    const period = this.resolveMonthPeriod(month);
+    const latestRun = await this.prisma.payrollRun.findFirst({
+      where: {
+        periodStart: {
+          gte: period.periodStartDate,
+          lte: period.periodEndDate,
+        },
+      },
+      orderBy: { runDate: 'desc' },
+      select: { id: true },
+    });
+    return latestRun?.id ?? null;
+  }
+
+  private resolveReceiptDate(isReceived: boolean, receivedAt?: string) {
+    if (!isReceived) {
+      return null;
+    }
+
+    const effectiveDate = receivedAt?.slice(0, 10) || new Date().toISOString().slice(0, 10);
+    return this.toDateOnly(effectiveDate);
+  }
+
   private async resolvePayrollRun(runIdentifier: string) {
     const where: Prisma.PayrollRunWhereInput = this.isUuid(runIdentifier)
       ? {
@@ -198,7 +228,10 @@ export class PayrollService {
       periodEnd: this.toDateOnly(periodEnd),
       lateMinutes: Number(dto.lateMinutes ?? 0),
       earlyLeaveMinutes: Number(dto.earlyLeaveMinutes ?? 0),
-      absenceDays: Number(dto.absenceDays ?? 0),
+      absenceDays:
+        dto.absenceDays === undefined || dto.absenceDays === null
+          ? null
+          : Number(dto.absenceDays),
       sickLeaveDays: Number(dto.sickLeaveDays ?? 0),
       adminLeaveDays: Number(dto.adminLeaveDays ?? 0),
       unpaidLeaveDays: Number(dto.unpaidLeaveDays ?? 0),
@@ -206,10 +239,19 @@ export class PayrollService {
       unpaidHours: new Prisma.Decimal((dto.unpaidHours ?? 0).toString()),
       overtimeRegularMinutes: Number(dto.overtimeRegularMinutes ?? 0),
       overtimeWeekendDays: new Prisma.Decimal((dto.overtimeWeekendDays ?? 0).toString()),
-      penaltyAmount: new Prisma.Decimal((dto.penaltyAmount ?? 0).toString()),
+      penaltyAmount:
+        dto.penaltyAmount === undefined || dto.penaltyAmount === null
+          ? null
+          : new Prisma.Decimal(dto.penaltyAmount.toString()),
       clothingDeduction: new Prisma.Decimal((dto.clothingDeduction ?? 0).toString()),
-      bonusAdjustment: new Prisma.Decimal((dto.bonusAdjustment ?? 0).toString()),
-      advanceAmount: new Prisma.Decimal((dto.advanceAmount ?? 0).toString()),
+      bonusAdjustment:
+        dto.bonusAdjustment === undefined || dto.bonusAdjustment === null
+          ? null
+          : new Prisma.Decimal(dto.bonusAdjustment.toString()),
+      advanceAmount:
+        dto.advanceAmount === undefined || dto.advanceAmount === null
+          ? null
+          : new Prisma.Decimal(dto.advanceAmount.toString()),
       insuranceAmount:
         dto.insuranceAmount === undefined || dto.insuranceAmount === null
           ? null
@@ -475,11 +517,9 @@ export class PayrollService {
       }),
     ]);
 
-    const totalBonuses = bonuses
-      .filter((b) => b.bonusReason !== 'زيادة في الراتب')
-      .reduce((sum, b) => {
-        return sum.plus(this.toDecimal(b.bonusAmount)).plus(this.toDecimal(b.assistanceAmount));
-      }, new Prisma.Decimal(0));
+    const totalBonuses = bonuses.reduce((sum, b) => {
+      return sum.plus(this.toDecimal(b.bonusAmount)).plus(this.toDecimal(b.assistanceAmount));
+    }, new Prisma.Decimal(0));
 
     const totalAdvances = advances.reduce((sum, a) => {
       const installment = this.toDecimal(a.installmentAmount).toNumber();
@@ -497,6 +537,23 @@ export class PayrollService {
     const employeeSalary = await this.prisma.employeeSalary.findUnique({ where: { employeeId } });
     const insuranceDeduction = this.toDecimal(employeeSalary?.insuranceAmount);
 
+    // Calculate absenceDays for diagnostic logging (prorated earned salary already handles financial impact)
+    const attendanceInRecords = await this.prisma.attendanceRecord.findMany({
+      where: {
+        employeeId,
+        type: 'IN',
+        date: {
+          gte: periodStart.toISOString().slice(0, 10),
+          lte: terminationDate.toISOString().slice(0, 10),
+        },
+      },
+      select: { date: true },
+    });
+    const uniqueDates = new Set(attendanceInRecords.map((r) => r.date));
+    const attendanceDays = uniqueDates.size;
+    const absenceDays = Math.max(0, workDays - attendanceDays);
+    const absencePenalty = new Prisma.Decimal(0); // Force absencePenalty to 0 for provisional settlement
+
     // 5. Bus subscription deduction (prorated for the partial month up to termination date)
     let busDeduction = 0;
     if (this.transportationService) {
@@ -504,6 +561,7 @@ export class PayrollService {
         const batchResult = await this.transportationService.calculateBatchBusDeductions(
           [employeeId],
           terminationDate,
+          { isProvisional: true, terminationDate: terminationDate }, // Pass options for provisional settlement
         );
         busDeduction = batchResult.get(employeeId) ?? 0;
       } catch (err) {
@@ -516,9 +574,13 @@ export class PayrollService {
     const totalDeductions = totalAdvances
       .plus(totalPenalties)
       .plus(insuranceDeduction)
-      .plus(new Prisma.Decimal(busDeduction));
+      .plus(new Prisma.Decimal(busDeduction))
+      .plus(absencePenalty);
 
     // TEMP DIAGNOSTIC LOG
+    this.logger.log(`[PROVISIONAL] empId=${employeeId} termDate=${terminationDateStr} termEndOfDay=${terminationEndOfDay.toISOString()}`);
+    this.logger.log(`[PROVISIONAL] advances=${JSON.stringify(advances.map(a => ({id:a.id,totalAmount:a.totalAmount.toString(),installment:a.installmentAmount.toString(),remaining:a.remainingAmount.toString(),issueDate:a.issueDate})))}`);
+    this.logger.log(`[PROVISIONAL] totalAdvances=${totalAdvances.toString()} totalPenalties=${totalPenalties.toString()} insurance=${insuranceDeduction.toString()} busDeduction=${busDeduction} absenceDays=${absenceDays} absencePenalty=${absencePenalty.toString()}`);
     this.logger.log(
       `[PROVISIONAL] empId=${employeeId} termDate=${terminationDateStr} termEndOfDay=${terminationEndOfDay.toISOString()}`,
     );
@@ -546,30 +608,47 @@ export class PayrollService {
   }
 
   async calculate(dto: CalculatePayrollDto, userId?: string) {
+    const periodStart = this.toDateOnly(dto.periodStart);
+    const periodEnd = this.toDateOnly(dto.periodEnd);
+
+    // Check for an existing payroll run for the given period
+    const existingRun = await this.prisma.payrollRun.findFirst({
+      where: {
+        periodStart: periodStart,
+        periodEnd: periodEnd,
+      },
+    });
+
+    if (existingRun) {
+      this.logger.log(`Deleting existing payroll run ${existingRun.runId} for period ${dto.periodStart} - ${dto.periodEnd}`);
+      await this.deletePayrollRun(existingRun.id, userId);
+    }
+
     const runDateKey = dto.periodStart.slice(0, 10).replace(/-/g, '');
     const runId = `PAY${runDateKey}-${Date.now().toString().slice(-4)}`;
 
-    // Wrap run creation + processing in a transaction so a mid-flow failure
-    // cannot leave a partial payroll run in the database.
-    const updatedRun = await this.prisma.$transaction(
-      async (tx) => {
-        const run = await tx.payrollRun.create({
-          data: {
-            runId,
-            periodStart: this.toDateOnly(dto.periodStart),
-            periodEnd: this.toDateOnly(dto.periodEnd),
-            runBy: userId,
-            status: 'processing',
-            approvalStatus: 'pending',
-            totalEmployees: 0,
-          },
-        });
-        return this.processPayrollRun(run.id, dto, userId);
+    // Create the payroll run record first
+    const run = await this.prisma.payrollRun.create({
+      data: {
+        runId,
+        periodStart: this.toDateOnly(dto.periodStart),
+        periodEnd: this.toDateOnly(dto.periodEnd),
+        runBy: userId,
+        status: 'queued',
+        approvalStatus: 'pending',
+        totalEmployees: 0,
       },
-      { timeout: 120_000 },
-    );
+    });
 
-    return { message: 'Payroll calculated successfully', payrollRun: updatedRun };
+    // Process the payroll run outside the transaction
+    try {
+      const updatedRun = await this.processPayrollRun(run.id, dto, userId);
+      return { message: 'Payroll calculated successfully', payrollRun: updatedRun };
+    } catch (error) {
+      // Mark the run as failed if processing fails
+      await this.markPayrollRunFailed(run.id, error instanceof Error ? error.message : 'Unknown error during payroll processing');
+      throw error;
+    }
   }
 
   async calculateAsync(dto: CalculatePayrollDto, userId?: string) {
@@ -588,7 +667,13 @@ export class PayrollService {
       },
     });
 
-    await this.enqueuePayrollJob({ payrollRunId: run.id, dto, userId });
+    try {
+      await this.enqueuePayrollJob({ payrollRunId: run.id, dto, userId });
+    } catch (error) {
+      // Mark the run as failed if job enqueueing fails
+      await this.markPayrollRunFailed(run.id, error instanceof Error ? error.message : 'Failed to enqueue payroll job');
+      throw error;
+    }
 
     return { message: 'Payroll calculation queued', payrollRun: run };
   }
@@ -781,6 +866,167 @@ export class PayrollService {
     };
   }
 
+  async listReceipts(query: PayrollReceiptsQueryDto) {
+    const period = this.resolveMonthPeriod(query.month);
+    const latestRunId = await this.resolveLatestPayrollRunIdForMonth(query.month);
+    const data = await this.prisma.payrollReceipt.findMany({
+      where: {
+        month: query.month,
+        ...(query.employeeId ? { employeeId: query.employeeId } : {}),
+      },
+      orderBy: { employeeId: 'asc' },
+    });
+
+    return {
+      month: query.month,
+      period: {
+        startDate: period.periodStart,
+        endDate: period.periodEnd,
+      },
+      latestRunId,
+      data,
+    };
+  }
+
+  async upsertReceipt(employeeId: string, dto: UpsertPayrollReceiptDto, user?: AuthenticatedUser) {
+    this.resolveMonthPeriod(dto.month);
+
+    const employee = await this.prisma.employee.findUnique({
+      where: { employeeId },
+      select: { employeeId: true },
+    });
+
+    if (!employee) {
+      throw new NotFoundException('Employee not found');
+    }
+
+    if (!dto.isReceived) {
+      await this.prisma.payrollReceipt.deleteMany({
+        where: {
+          employeeId,
+          month: dto.month,
+        },
+      });
+
+      return {
+        success: true,
+        data: {
+          employeeId,
+          month: dto.month,
+          isReceived: false,
+          receivedAt: null,
+        },
+      };
+    }
+
+    const payrollRunId = await this.resolveLatestPayrollRunIdForMonth(dto.month);
+    const receipt = await this.prisma.payrollReceipt.upsert({
+      where: {
+        employeeId_month: {
+          employeeId,
+          month: dto.month,
+        },
+      },
+      update: {
+        payrollRunId,
+        isReceived: true,
+        receivedAt: this.resolveReceiptDate(true, dto.receivedAt),
+        receivedBy: user?.userId || user?.username || 'system',
+      },
+      create: {
+        employeeId,
+        month: dto.month,
+        payrollRunId,
+        isReceived: true,
+        receivedAt: this.resolveReceiptDate(true, dto.receivedAt),
+        receivedBy: user?.userId || user?.username || 'system',
+      },
+    });
+
+    return {
+      success: true,
+      data: receipt,
+    };
+  }
+
+  async bulkUpsertReceipts(dto: BulkUpsertPayrollReceiptsDto, user?: AuthenticatedUser) {
+    this.resolveMonthPeriod(dto.month);
+
+    const uniqueEmployeeIds = Array.from(new Set(dto.employeeIds.filter(Boolean)));
+    if (uniqueEmployeeIds.length === 0) {
+      throw new BadRequestException('At least one employeeId is required');
+    }
+
+    const existingEmployees = await this.prisma.employee.findMany({
+      where: { employeeId: { in: uniqueEmployeeIds } },
+      select: { employeeId: true },
+    });
+    const existingEmployeeIdSet = new Set(existingEmployees.map((employee) => employee.employeeId));
+    const missingEmployeeIds = uniqueEmployeeIds.filter((employeeId) => !existingEmployeeIdSet.has(employeeId));
+
+    if (missingEmployeeIds.length > 0) {
+      throw new NotFoundException(`Employees not found: ${missingEmployeeIds.join(', ')}`);
+    }
+
+    if (!dto.isReceived) {
+      const deleted = await this.prisma.payrollReceipt.deleteMany({
+        where: {
+          month: dto.month,
+          employeeId: { in: uniqueEmployeeIds },
+        },
+      });
+
+      return {
+        success: true,
+        count: uniqueEmployeeIds.length,
+        deletedCount: deleted.count,
+        data: uniqueEmployeeIds.map((employeeId) => ({
+          employeeId,
+          month: dto.month,
+          isReceived: false,
+          receivedAt: null,
+        })),
+      };
+    }
+
+    const payrollRunId = await this.resolveLatestPayrollRunIdForMonth(dto.month);
+    const receivedAt = this.resolveReceiptDate(true, dto.receivedAt);
+    const actorId = user?.userId || user?.username || 'system';
+
+    const data = await this.prisma.$transaction(
+      uniqueEmployeeIds.map((employeeId) =>
+        this.prisma.payrollReceipt.upsert({
+          where: {
+            employeeId_month: {
+              employeeId,
+              month: dto.month,
+            },
+          },
+          update: {
+            payrollRunId,
+            isReceived: true,
+            receivedAt,
+            receivedBy: actorId,
+          },
+          create: {
+            employeeId,
+            month: dto.month,
+            payrollRunId,
+            isReceived: true,
+            receivedAt,
+            receivedBy: actorId,
+          },
+        }),
+      ),
+    );
+
+    return {
+      success: true,
+      count: data.length,
+      data,
+    };
+  }
+
   async anomalies(runId: string) {
     const run = await this.resolvePayrollRun(runId);
     const anomalies = await this.prisma.payrollItem.findMany({
@@ -946,7 +1192,13 @@ export class PayrollService {
   }
 
   async processPayrollRunJob(payload: PayrollQueuePayload) {
-    return this.processPayrollRun(payload.payrollRunId, payload.dto, payload.userId);
+    try {
+      return await this.processPayrollRun(payload.payrollRunId, payload.dto, payload.userId);
+    } catch (error) {
+      // Mark the run as failed if processing fails in the job
+      await this.markPayrollRunFailed(payload.payrollRunId, error instanceof Error ? error.message : 'Unknown error during payroll job processing');
+      throw error;
+    }
   }
 
   async markPayrollRunFailed(payrollRunId: string, message: string) {
@@ -1281,8 +1533,6 @@ export class PayrollService {
 
     const bonusesByEmployee = new Map<string, { bonus: number; deductions: number }>();
     for (const bonus of bonuses) {
-      // Exclude permanent salary raises — these are already applied to baseSalary
-      if (bonus.bonusReason === 'زيادة في الراتب') continue;
       const current = bonusesByEmployee.get(bonus.employeeId) || { bonus: 0, deductions: 0 };
       // المكافآت (bonusAmount + assistanceAmount) تُضاف للراتب
       current.bonus += Number(bonus.bonusAmount || 0);
@@ -1314,6 +1564,15 @@ export class PayrollService {
         penalty.employeeId,
         (penaltiesByEmployee.get(penalty.employeeId) || 0) + Number(penalty.amount || 0),
       );
+    }
+
+    // Verify the payroll run exists before updating
+    const existingRun = await this.prisma.payrollRun.findUnique({
+      where: { id: runId },
+    });
+    
+    if (!existingRun) {
+      throw new Error(`PayrollRun with id ${runId} not found for update`);
     }
 
     await this.prisma.payrollRun.update({
@@ -1352,24 +1611,6 @@ export class PayrollService {
       }
     }
 
-    // ── Batch-fetch all approved paid leave requests for the period (N+1 fix) ──
-    const allPaidLeaves = await this.prisma.leaveRequest.findMany({
-      where: {
-        employeeId: { in: employeeIds },
-        status: 'APPROVED',
-        leaveType: { in: ['PAID', 'SICK', 'ADMIN', 'DEATH'] },
-        startDate: { lte: new Date(periodEnd) },
-        endDate: { gte: new Date(periodStart) },
-      },
-      select: { employeeId: true, startDate: true, endDate: true, isPaid: true, leaveType: true },
-    });
-    const leavesByEmployee = new Map<string, typeof allPaidLeaves>();
-    for (const leave of allPaidLeaves) {
-      const arr = leavesByEmployee.get(leave.employeeId) ?? [];
-      arr.push(leave);
-      leavesByEmployee.set(leave.employeeId, arr);
-    }
-
     let totalGross = new Prisma.Decimal(0);
     let totalDeductions = new Prisma.Decimal(0);
     let totalNet = new Prisma.Decimal(0);
@@ -1406,7 +1647,18 @@ export class PayrollService {
         const absenceDaysFallbackRaw = Math.max(0, workDays - attendanceDays);
 
         // Count paid approved leave days inside period to avoid double-penalizing them as absence
-        const paidApprovedLeaves = leavesByEmployee.get(employee.employeeId) ?? [];
+        // NOTE: For now we treat PAID leave type or isPaid=true as "paid".
+        // This logic is intentionally inclusive for overlap partials.
+        const paidApprovedLeaves = await this.prisma.leaveRequest.findMany({
+          where: {
+            employeeId: employee.employeeId,
+            status: 'APPROVED',
+            leaveType: { in: ['PAID', 'SICK', 'ADMIN', 'DEATH'] },
+            startDate: { lte: new Date(periodEnd) },
+            endDate: { gte: new Date(periodStart) },
+          },
+          select: { startDate: true, endDate: true, isPaid: true, leaveType: true },
+        });
 
         const paidApprovedLeaveDaysInPeriod = paidApprovedLeaves.reduce((sum, l) => {
           // inclusive overlap day count
@@ -1430,6 +1682,28 @@ export class PayrollService {
         );
         const penaltiesTotal = this.toDecimal(penaltiesByEmployee.get(employee.employeeId) || 0);
 
+        // ── FIX (Bug #2 — Missing Bonuses), root cause closed at the schema level ──
+        // `PayrollInput.bonusAdjustment` is now a genuinely nullable column
+        // (see migration 20260712000000_make_payroll_input_overrides_nullable).
+        // `input?.bonusAdjustment` is `null` for a row that was never given an
+        // explicit override, so `??` correctly falls back to the computed sum
+        // from EmployeeBonus (bonusAmount + assistanceAmount). An explicit `0`
+        // override is now honored too, since it's distinguishable from "unset".
+        const bonusAdjustment = this.toDecimal(input?.bonusAdjustment ?? bonusAmount);
+
+        // ── FIX (Bug #1 — Ghost / Double Deductions) ────────────────────────
+        // totalDeductions must ONLY contain PURE FINANCIAL deductions:
+        // advanceAmount + explicit financial penalties (+ clothing/insurance/
+        // bus subscription). Time/attendance-based penalties (delay minutes,
+        // early-leave minutes) are already netted out of `attendanceCalculatedSalary`
+        // by computeEarnedSalaryForPeriod() above. They must NEVER be summed
+        // into totalDeductions again — doing so double-discounts the employee.
+        // penaltyAmount/advanceAmount are now nullable too, so the same
+        // plain `??` correctly falls back to the computed EmployeePenalty /
+        // EmployeeAdvance totals instead of silently masking them.
+        const penaltyAmountFinal = this.toDecimal(input?.penaltyAmount ?? penaltiesTotal);
+        const advanceAmount = this.toDecimal(input?.advanceAmount ?? advancesInstallments);
+
         // العقوبات فقط (بدون assistanceAmount لأنها مكافآت)
         const penaltyAmount = this.toDecimal(input?.penaltyAmount ?? penaltiesTotal);
         const clothingDeduction = this.toDecimal(
@@ -1441,18 +1715,6 @@ export class PayrollService {
           input?.insuranceAmount ?? salaryRecord?.insuranceAmount ?? 0,
         );
 
-        const lateMinutes = this.resolveAttendanceValue(
-          input?.lateMinutes,
-          lateMinutesByEmployee.get(employee.employeeId) || 0,
-          includeAttendanceDeductions,
-        );
-        // EARLY_LEAVE_MINUTES: Prefer PayrollInput override, fallback to DailyAttendanceLog aggregation
-        const earlyLeaveMinutesComputed = earlyLeaveMinutesByEmployee.get(employee.employeeId) || 0;
-        const earlyLeaveMinutes = this.resolveAttendanceValue(
-          input?.earlyLeaveMinutes,
-          earlyLeaveMinutesComputed,
-          includeAttendanceDeductions,
-        );
         const absenceDays = this.resolveAttendanceValue(
           input?.absenceDays,
           absenceDaysFallback,
@@ -1486,6 +1748,8 @@ export class PayrollService {
         );
 
         // If in future PayrollInput adds overtimeWeekendMinutes, we can switch to minutes-based pay.
+
+
 
         const g3 = baseSalary
           .plus(livingAllowance)
@@ -1522,25 +1786,33 @@ export class PayrollService {
               .times(this.toDecimal(Math.max(0, WORK_DAYS_PER_MONTH - leaveTotal)))
           : transportAllowanceBase;
 
-        const grossPay = g3
-          .plus(overtimeWeekendPay)
-          .plus(overtimeRegularPay)
+        // Base Gross = Attendance_Calculated_Salary.
+        // This already encapsulates base salary, attendance days, late penalties, early leave penalties, and overtime.
+        const attendanceCalculatedSalary = await this.computeEarnedSalaryForPeriod(
+          employee.employeeId,
+          this.toDateOnly(periodStart),
+          this.toDateOnly(periodEnd),
+          workDays,
+          hoursPerDayEmp,
+        );
+
+        // Final Gross Pay = Attendance_Calculated_Salary + other bonuses (bonusAdjustment) + transportAllowance
+        const grossPay = attendanceCalculatedSalary
           .plus(bonusAdjustment)
           .plus(transportAllowance);
-        const penaltyTotal = penaltyAmount.plus(clothingDeduction);
 
+        // Other Deductions: penalties (from employeePenalty), clothing deduction, advances, insurance, bus subscription
+        // NOTE: penaltyAmountFinal / advanceAmount were already resolved above via
+        // resolveDecimalOverride() — do NOT recompute them here from the raw
+        // `input?.field ?? ...` pattern, that reintroduces the masking bug.
+        const busDeductionAmount = this.toDecimal(busDeductionsByEmployee.get(employee.employeeId) ?? 0);
         // ── Bus subscription deduction ──
         const busDeductionAmount = this.toDecimal(
           busDeductionsByEmployee.get(employee.employeeId) ?? 0,
         );
 
-        const employeeDeductions = latePenalty
-          .plus(earlyLeavePenalty)
-          .plus(absencePenalty)
-          .plus(sickLeavePenalty)
-          .plus(unpaidLeavePenalty)
-          .plus(unpaidHoursPenalty)
-          .plus(penaltyTotal)
+        const employeeDeductions = penaltyAmountFinal
+          .plus(clothingDeduction)
           .plus(advanceAmount)
           .plus(insuranceAmount)
           .plus(busDeductionAmount);
@@ -1559,6 +1831,9 @@ export class PayrollService {
         if (attendanceDays === 0) {
           anomalies.push('No attendance records in selected period');
         }
+
+        if (penaltiesTotal.greaterThan(0)) {
+          anomalies.push(`Penalties applied: ${penaltiesTotal.toFixed(2)}`);
         if (absenceDays > 0) {
           anomalies.push(`Absence days deducted: ${absenceDays}`);
         }
@@ -1582,6 +1857,16 @@ export class PayrollService {
         if (busDeductionAmount.greaterThan(0)) {
           anomalies.push(`Bus subscription deducted: ${busDeductionAmount.toFixed(2)}`);
         }
+        // Informational only — these minutes are already netted inside
+        // attendanceCalculatedSalary and are intentionally NOT part of totalDeductions.
+        const lateMinutesForPeriod = lateMinutesByEmployee.get(employee.employeeId) || 0;
+        const earlyLeaveMinutesForPeriod = earlyLeaveMinutesByEmployee.get(employee.employeeId) || 0;
+        if (includeAttendanceDeductions && lateMinutesForPeriod > 0) {
+          anomalies.push(`Delay minutes (already netted in attendance salary): ${lateMinutesForPeriod}`);
+        }
+        if (includeAttendanceDeductions && earlyLeaveMinutesForPeriod > 0) {
+          anomalies.push(`Early-leave minutes (already netted in attendance salary): ${earlyLeaveMinutesForPeriod}`);
+        }
         if (netPay.lessThan(0)) {
           anomalies.push('Net pay is negative after deductions');
         }
@@ -1591,21 +1876,24 @@ export class PayrollService {
         totalNet = totalNet.plus(netPayRounded);
         processedEmployees += 1;
 
+        const hourlyWage = this.toDecimal(employee.hourlyRate ?? 0); // Calculate hourlyWage here
+
         items.push({
           payrollRunId: runId,
           employeeId: employee.employeeId,
           employeeName: employee.name,
           department: employee.department,
+          attendanceBasedSalary: attendanceCalculatedSalary,
           hoursWorked: new Prisma.Decimal(hoursWorked),
           hourlyRate: hourlyWage,
           grossPay,
+          totalBonuses: bonusAdjustment,
           totalDeductions: employeeDeductions,
           netPay,
           netPayRounded,
           roundingDifference,
           netPayWithAdvance,
-          earlyLeaveMinutes: earlyLeaveMinutes,
-          earlyLeaveDeduction: earlyLeavePenalty,
+
           anomalies,
         });
       }
