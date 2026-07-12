@@ -26,32 +26,8 @@ import { BiometricChallengeService } from './biometric-challenge.service';
 import { RefreshTokenService } from './refresh-token.service';
 import { AuthCacheService } from './auth-cache.service';
 import { toFactoryDateKey, resolveTimezoneOffsetMinutes } from '../common/utils/timezone.util';
-import { checkLeaveConflictForAttendance, ConflictWarning } from '../common/utils/leave-attendance-conflict.util';
 
 type BiometricChallengePurpose = 'REGISTER' | 'LOGIN';
-
-type PrismaUserWithRole = {
-  id: string;
-  username: string;
-  email: string | null;
-  passwordHash: string;
-  failedLoginAttempts: number;
-  lockoutUntil: Date | null;
-  lastLogin: Date | null;
-  status: string;
-  roleId: string | null;
-  role: { name: string; permissions: string[] } | null;
-};
-
-type JwtPayload = {
-  userId: string;
-  username?: string;
-  email?: string;
-  role?: string;
-  permissions?: string[];
-  exp?: number;
-  iat?: number;
-};
 
 type SessionResult = {
   token: string;
@@ -116,26 +92,22 @@ export class AuthService {
 
     let user = await this.prisma.user.findFirst({
       where: { username: normalizedUsername },
-      include: { role: true },
     });
 
     if (!user) {
       user = await this.prisma.user.findFirst({
         where: { email: normalizedUsername },
-        include: { role: true },
       });
     }
 
+    // Check lockout BEFORE password comparison to prevent brute-force on locked accounts
     if (user && this.isAccountLocked(user.lockoutUntil)) {
       throw new UnauthorizedException('الحساب مقفل حالياً');
     }
 
     const isPasswordCorrect = user
       ? await bcrypt.compare(dto.password, user.passwordHash)
-      : await bcrypt.compare(
-          dto.password,
-          '$2a$10$n7.T/aVvE.R.v.v.v.v.v.v.v.v.v.v.v.v.v.v.v.v.v.v.v.v.',
-        );
+      : await bcrypt.compare(dto.password, '$2a$10$n7.T/aVvE.R.v.v.v.v.v.v.v.v.v.v.v.v.v.v.v.v.v.v.v.v.');
 
     if (!user || !isPasswordCorrect) {
       if (user) {
@@ -149,8 +121,13 @@ export class AuthService {
       data: { failedLoginAttempts: 0, lockoutUntil: null, lastLogin: new Date() },
     });
 
-    const payload = this.buildAuthPayload(user);
-    return this.createSession(user, payload);
+    // Explicitly fetch roles or use cached roles to build payload
+    const allRoles = await this.getRoles();
+    const userRole = allRoles.find((role) => role.id === user.roleId);
+    const userWithRole = { ...user, role: userRole };
+
+    const payload = this.buildAuthPayload(userWithRole);
+    return this.createSession(userWithRole, payload);
   }
 
   async register(dto: RegisterDto) {
@@ -169,9 +146,7 @@ export class AuthService {
 
     const role =
       (await this.prisma.role.findUnique({ where: { name: 'staff' } })) ??
-      (await this.prisma.role.create({
-        data: { name: 'staff', permissions: ['view_attendance'] },
-      }));
+      (await this.prisma.role.create({ data: { name: 'staff', permissions: ['view_attendance'] } }));
 
     const hash = await bcrypt.hash(dto.password, this.bcryptRounds());
     const user = await this.prisma.user.create({
@@ -184,19 +159,12 @@ export class AuthService {
   }
 
   async me(userId: string) {
-    const user = await this.prisma.user.findUnique({
-      where: { id: userId },
-      include: { role: true },
-    });
+    const user = await this.prisma.user.findUnique({ where: { id: userId }, include: { role: true } });
     if (!user) {
       throw new UnauthorizedException();
     }
 
-    return {
-      ...this.toPublicAuthUser(user),
-      email: user.email,
-      permissions: user.role?.permissions || [],
-    };
+    return { ...this.toPublicAuthUser(user), email: user.email, permissions: user.role?.permissions || [] };
   }
 
   async startBiometricRegistration(userId: string, dto: BiometricRegisterStartDto) {
@@ -250,9 +218,7 @@ export class AuthService {
       throw new UnauthorizedException('المستخدم غير موجود');
     }
 
-    const credentials = await this.biometricCredentialModel().findMany({
-      where: { userId: user.id },
-    });
+    const credentials = await this.biometricCredentialModel().findMany({ where: { userId: user.id } });
     const challengeId = randomBytes(16).toString('hex');
     const challengeBase64 = randomBytes(BIOMETRIC_CHALLENGE_BYTES).toString('base64url');
 
@@ -265,11 +231,7 @@ export class AuthService {
       expiresAt: Date.now() + BIOMETRIC_CHALLENGE_TTL_SECONDS * 1000,
     });
 
-    return {
-      challengeId,
-      challengeBase64,
-      allowedKeyIds: credentials.map((credential: { keyId: string }) => credential.keyId),
-    };
+    return { challengeId, challengeBase64, allowedKeyIds: credentials.map((credential: { keyId: string }) => credential.keyId) };
   }
 
   async finishBiometricLogin(dto: BiometricLoginFinishDto) {
@@ -293,31 +255,23 @@ export class AuthService {
     const isValid = this.verifyBiometricSignature(
       challenge.challengeBase64,
       dto.signatureBase64,
-      Buffer.isBuffer(credential.publicKeyDer)
-        ? credential.publicKeyDer
-        : Buffer.from(credential.publicKeyDer),
+      credential.publicKeyDer,
     );
 
     if (!isValid) {
       throw new UnauthorizedException('توقيع البصمة غير صالح');
     }
 
-    const user = await this.prisma.user.findUnique({
-      where: { id: challenge.userId },
-      include: { role: true },
-    });
+    const user = await this.prisma.user.findUnique({ where: { id: challenge.userId }, include: { role: true } });
     if (!user) {
       throw new UnauthorizedException();
     }
 
-    const payload = this.buildAuthPayload(user);
-
     if (dto.markAttendance) {
-      const attendanceWarning = await this.handleAutoAttendance(user, dto);
-      const session = await this.createSession(user, payload);
-      return { ...session, attendanceWarning: attendanceWarning ?? undefined };
+      await this.handleAutoAttendance(user, dto);
     }
 
+    const payload = this.buildAuthPayload(user);
     return this.createSession(user, payload);
   }
 
@@ -346,17 +300,18 @@ export class AuthService {
 
   async listUsers() {
     const users = await this.prisma.user.findMany({ include: { role: true } });
-    return {
-      users: users.map((user) => ({
-        ...this.toPublicAuthUser(user),
-        email: user.email,
-        status: user.status,
-      })),
-    };
+    return { users: users.map((user) => ({ ...this.toPublicAuthUser(user), email: user.email, status: user.status })) };
   }
 
   async getRoles() {
-    return this.prisma.role.findMany();
+    const cachedRoles = await this.authCache.getRoles();
+    if (cachedRoles) {
+      return cachedRoles;
+    }
+
+    const roles = await this.prisma.role.findMany();
+    await this.authCache.setRoles(roles);
+    return roles;
   }
 
   async revokeToken(token: string) {
@@ -386,13 +341,10 @@ export class AuthService {
     return this.createSession(user, this.buildAuthPayload(user));
   }
 
-  async rotateSessionIfNeeded(user: JwtPayload): Promise<string | null> {
+  async rotateSessionIfNeeded(user: any) {
     const now = Math.floor(Date.now() / 1000);
-    if (user?.exp && user.userId && user.exp - now < AUTO_REFRESH_THRESHOLD_SECONDS) {
-      const dbUser = await this.prisma.user.findUnique({
-        where: { id: user.userId },
-        include: { role: true },
-      });
+    if (user?.exp && user.exp - now < AUTO_REFRESH_THRESHOLD_SECONDS) {
+      const dbUser = await this.prisma.user.findUnique({ where: { id: user.userId }, include: { role: true } });
       if (dbUser) {
         await this.authCache.invalidateUser(dbUser.id);
         return this.jwtService.signAsync(this.buildAuthPayload(dbUser));
@@ -405,16 +357,14 @@ export class AuthService {
   async ensureAdminBootstrap() {
     const adminRole =
       (await this.prisma.role.findUnique({ where: { name: 'admin' } })) ??
-      (await this.prisma.role.create({
-        data: { name: 'admin', permissions: AuthService.ADMIN_PERMISSIONS },
-      }));
+      (await this.prisma.role.create({ data: { name: 'admin', permissions: AuthService.ADMIN_PERMISSIONS } }));
 
     const password = this.config.get<string>('ADMIN_BOOTSTRAP_PASSWORD');
-    if (!password) {
-      throw new Error('ADMIN_BOOTSTRAP_PASSWORD must be set in all environments');
+    if (!password && this.config.get('NODE_ENV') === 'production') {
+      throw new Error('ADMIN_BOOTSTRAP_PASSWORD must be set in production');
     }
 
-    const hash = await bcrypt.hash(password, this.bcryptRounds());
+    const hash = await bcrypt.hash(password || 'password123', this.bcryptRounds());
     const adminUsername = this.config.get('ADMIN_USERNAME', 'admin');
     const existingAdmin = await this.prisma.user.findUnique({ where: { username: adminUsername } });
     if (!existingAdmin) {
@@ -433,9 +383,7 @@ export class AuthService {
   async ensureSuperadminBootstrap() {
     const adminRole =
       (await this.prisma.role.findUnique({ where: { name: 'admin' } })) ??
-      (await this.prisma.role.create({
-        data: { name: 'admin', permissions: AuthService.ADMIN_PERMISSIONS },
-      }));
+      (await this.prisma.role.create({ data: { name: 'admin', permissions: AuthService.ADMIN_PERMISSIONS } }));
 
     const username = this.config.get<string>('SUPERADMIN_USERNAME', 'superadmin');
     const email = this.config.get<string>('SUPERADMIN_EMAIL', 'superadmin@warehouse.local');
@@ -445,13 +393,7 @@ export class AuthService {
       throw new Error('SUPERADMIN_PASSWORD must be set in production');
     }
 
-    if (!password) {
-      throw new Error(
-        'SUPERADMIN_PASSWORD must be set (required for non-production environments as well)',
-      );
-    }
-
-    const hash = await bcrypt.hash(password, this.bcryptRounds());
+    const hash = await bcrypt.hash(password || 'SuperAdmin@2026!', this.bcryptRounds());
     const existingSuperadmin = await this.prisma.user.findUnique({ where: { username } });
     if (!existingSuperadmin) {
       await this.prisma.user.create({
@@ -466,12 +408,14 @@ export class AuthService {
     }
   }
 
-  private async handleAutoAttendance(user: PrismaUserWithRole, dto: BiometricLoginFinishDto): Promise<ConflictWarning | null> {
+  private async handleAutoAttendance(user: any, dto: BiometricLoginFinishDto) {
     const employee = await this.prisma.employee.findFirst({
       where: { employeeId: user.username.toUpperCase() },
     });
 
-    if (!employee) return null;
+    if (!employee) {
+      return;
+    }
 
     const now = new Date();
     const localDate = toFactoryDateKey(now, this.timezoneOffsetMinutes);
@@ -485,13 +429,10 @@ export class AuthService {
       },
     });
 
-    const attendanceTypeRaw = typeof attendance.type === 'string' ? attendance.type : 'IN';
-    const attendanceType: 'IN' | 'OUT' = attendanceTypeRaw === 'OUT' ? 'OUT' : 'IN';
-
     this.realtimeGateway.emitAttendanceUpdate({
       employeeId: employee.employeeId,
       employeeName: employee.name,
-      type: attendanceType,
+      type: attendance.type as any,
       timestamp: attendance.timestamp.toISOString(),
       date: attendance.date,
       time: now.toLocaleTimeString('ar-SY'),
@@ -500,14 +441,9 @@ export class AuthService {
       action: 'created',
       message: 'تسجيل حضور تلقائي',
     });
-
-    return checkLeaveConflictForAttendance(this.prisma, employee.employeeId, localDate);
   }
 
-  private async createSession(
-    user: PrismaUserWithRole,
-    payload: Record<string, unknown>,
-  ): Promise<SessionResult> {
+  private async createSession(user: any, payload: Record<string, unknown>): Promise<SessionResult> {
     const token = await this.jwtService.signAsync(payload);
     const refreshToken = await this.refreshTokens.issue(user.id);
 
@@ -520,18 +456,17 @@ export class AuthService {
     };
   }
 
-  private buildAuthPayload(user: PrismaUserWithRole) {
+  private buildAuthPayload(user: any) {
     return {
       userId: user.id,
       username: user.username,
-      // JWT payload treats email as optional
-      email: user.email ?? undefined,
+      email: user.email,
       role: user.role?.name || 'staff',
       permissions: user.role?.permissions || [],
     };
   }
 
-  private toPublicAuthUser(user: PrismaUserWithRole) {
+  private toPublicAuthUser(user: any) {
     return { id: user.id, username: user.username, role: user.role?.name || 'staff' };
   }
 
@@ -543,7 +478,7 @@ export class AuthService {
     return !!lockoutUntil && lockoutUntil.getTime() > Date.now();
   }
 
-  private async registerFailedLoginAttempt(user: PrismaUserWithRole) {
+  private async registerFailedLoginAttempt(user: any) {
     const attempts = (user.failedLoginAttempts || 0) + 1;
 
     if (attempts >= DEFAULT_MAX_LOGIN_ATTEMPTS) {
@@ -563,11 +498,7 @@ export class AuthService {
     return { locked: false };
   }
 
-  private verifyBiometricSignature(
-    challengeBase64: string,
-    signatureBase64: string,
-    publicKeyDer: Buffer,
-  ) {
+  private verifyBiometricSignature(challengeBase64: string, signatureBase64: string, publicKeyDer: Buffer) {
     try {
       const publicKey = createPublicKey({ key: publicKeyDer, format: 'der', type: 'spki' });
       const challenge = Buffer.from(challengeBase64, 'base64url');
@@ -590,6 +521,6 @@ export class AuthService {
   }
 
   private biometricCredentialModel() {
-    return this.prisma.biometricCredential;
+    return (this.prisma as any).biometricCredential;
   }
 }
