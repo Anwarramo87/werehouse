@@ -1,6 +1,11 @@
-import { Logger } from '@nestjs/common';
-import { WebSocketGateway, WebSocketServer } from '@nestjs/websockets';
-import { Server } from 'socket.io';
+import { Logger, UseGuards } from '@nestjs/common';
+import {
+  OnGatewayConnection,
+  WebSocketGateway,
+  WebSocketServer,
+} from '@nestjs/websockets';
+import { Server, Socket } from 'socket.io';
+import { WsJwtGuard } from './ws-jwt.guard';
 
 export type AttendanceUpdateEventPayload = {
   employeeId: string;
@@ -41,6 +46,7 @@ const resolveSocketCorsOrigin = () => {
   return process.env.NODE_ENV === 'production' ? false : true;
 };
 
+@UseGuards(WsJwtGuard)
 @WebSocketGateway({
   namespace: '/realtime',
   cors: {
@@ -48,11 +54,21 @@ const resolveSocketCorsOrigin = () => {
     credentials: true,
   },
 })
-export class RealtimeGateway {
+export class RealtimeGateway implements OnGatewayConnection {
   private readonly logger = new Logger(RealtimeGateway.name);
 
   @WebSocketServer()
   server!: Server;
+
+  handleConnection(client: Socket) {
+    const user = client.data?.user as { userId?: string; role?: string } | undefined;
+    if (!user?.userId) {
+      // Guard already disconnected the socket; this is a safety net
+      client.disconnect(true);
+      return;
+    }
+    this.logger.log(`WS client connected: socket=${client.id} userId=${user.userId} role=${user.role}`);
+  }
 
   emitAttendanceUpdate(payload: AttendanceUpdateEventPayload) {
     if (!this.server) {

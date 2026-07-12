@@ -34,6 +34,7 @@ import { DepartmentsModule } from './departments';
 import { BiometricModule } from './biometric/biometric.module';
 import { TrashModule } from './trash/trash.module';
 import { BackupModule } from './backup/backup.module';
+import { MetricsModule } from './common/metrics/metrics.module';
 
 function parseBooleanEnv(value: string | undefined): boolean | undefined {
   if (value === undefined) {
@@ -157,6 +158,7 @@ const queueInfraModules = queuesEnabled
           then: Joi.string().min(16).required(),
           otherwise: Joi.string().allow('').default(''),
         }),
+        DEVICE_AUTH_ENFORCED: Joi.boolean().default(true),
         APP_TIMEZONE_OFFSET_MINUTES: Joi.number().min(-720).max(840).default(180),
         TRUST_PROXY: Joi.when('NODE_ENV', {
           is: 'production',
@@ -191,6 +193,7 @@ const queueInfraModules = queuesEnabled
     }),
     ...queueInfraModules,
     WinstonModule.forRoot(winstonConfig),
+    MetricsModule,
     ShortCacheModule,
     EmployeeAccessModule,
     PrismaModule,

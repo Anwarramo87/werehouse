@@ -13,15 +13,15 @@ export class DeviceApiKeyGuard implements CanActivate {
   constructor(private readonly config: ConfigService) {}
 
   canActivate(context: ExecutionContext): boolean {
-    const nodeEnv = this.config.get<string>('NODE_ENV', 'development');
+    const enforced = this.config.get<boolean>('DEVICE_AUTH_ENFORCED', true);
     const configuredKey = this.config.get<string>('DEVICE_API_KEY', '').trim();
 
-    if (nodeEnv !== 'production') {
+    if (!enforced) {
       return true;
     }
 
     if (!configuredKey) {
-      throw new UnauthorizedException('Device API is disabled in production');
+      throw new UnauthorizedException('Device API key is not configured');
     }
 
     const request = context.switchToHttp().getRequest<Request>();

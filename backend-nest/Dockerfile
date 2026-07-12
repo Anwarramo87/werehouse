@@ -31,4 +31,7 @@ COPY --from=build /out/prisma ./prisma
 COPY --from=build /out/prisma.config.ts ./prisma.config.ts
 
 EXPOSE 5003
-CMD ["sh", "-c", "echo 'Running prisma migrate deploy...' && npx prisma migrate deploy && echo 'Starting node dist/main...' && node dist/main"]
+# Migrations must run as a separate pre-deploy step before starting the app:
+#   docker run --rm <image> npm run migrate:deploy
+# Then start the long-running process without migrations:
+CMD ["node", "dist/main"]
