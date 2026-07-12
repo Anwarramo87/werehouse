@@ -1,4 +1,3 @@
-// main.ts
 import 'dotenv/config';
 import { ValidationPipe, Logger, VersioningType } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
@@ -9,7 +8,6 @@ import helmet from 'helmet';
 import compression from 'compression';
 import responseTime from 'response-time';
 import cookieParser from 'cookie-parser';
-import { execSync } from 'child_process';
 
 import { AppModule } from './app.module';
 import { PrismaService } from './prisma/prisma.service';
@@ -82,19 +80,6 @@ const buildCorsOptions = (rawOrigins: string, isProd: boolean) => {
 // 3. Main Bootstrap function
 // -----------------------------------------------------------------------------
 async function bootstrap() {
-  // Run migrations before starting the app
-  try {
-    logger.log('Running database migrations...');
-    execSync('npx prisma migrate deploy', { stdio: 'inherit' });
-    logger.log('Database migrations completed successfully');
-  } catch (err) {
-    logger.error('Database migration failed:', err);
-    if (process.env.NODE_ENV === 'production') {
-      process.exit(1);
-    }
-    logger.warn('Skipping migration failure in development mode — continuing startup');
-  }
-
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
 
   const configService = app.get(ConfigService);

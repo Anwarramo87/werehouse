@@ -21,6 +21,16 @@ const config: Config = {
   collectCoverageFrom: ['**/*.(t|j)s'],
   coverageDirectory: '../coverage',
   testEnvironment: 'node',
+  // Coverage threshold — ratchet this upward over time as test coverage improves.
+  // Starting at a realistic baseline that reflects current coverage.
+  coverageThreshold: {
+    global: {
+      statements: 50,
+      branches: 50,
+      functions: 50,
+      lines: 50,
+    },
+  },
 };
 
 export default config;
