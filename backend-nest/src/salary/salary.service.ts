@@ -4,11 +4,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { UpsertSalaryDto } from './dto/upsert-salary.dto';
 import { CalculateAllowancesDto } from './dto/calculate-allowances.dto';
 import { BulkRaiseDto } from './dto/bulk-raise.dto';
-import {
-  buildEmployeeSalaryMirror,
-  resolveSalary,
-} from '../common/utils/salary-resolution.util';
-
+import { buildEmployeeSalaryMirror, resolveSalary } from '../common/utils/salary-resolution.util';
 
 @Injectable()
 export class SalaryService {
@@ -22,49 +18,40 @@ export class SalaryService {
    * are always 0 unless explicitly provided in the salary record.
    */
   calculateAllowances(dto: CalculateAllowancesDto) {
-    const salary          = new Prisma.Decimal(dto.salary.toString());
-    const lumpSumSalary   = new Prisma.Decimal(dto.lumpSumSalary.toString());
+    const salary = new Prisma.Decimal(dto.salary.toString());
+    const lumpSumSalary = new Prisma.Decimal(dto.lumpSumSalary.toString());
     const livingAllowance = new Prisma.Decimal(dto.livingAllowance.toString());
 
     return {
-      salary:          salary.toFixed(4),
-      lumpSumSalary:   lumpSumSalary.toFixed(4),
+      salary: salary.toFixed(4),
+      lumpSumSalary: lumpSumSalary.toFixed(4),
       livingAllowance: livingAllowance.toFixed(4),
-      difference:              '0.0000',
+      difference: '0.0000',
       responsibilityAllowance: '0.0000',
-      extraEffortAllowance:    '0.0000',
-      productionIncentives:    '0.0000',
+      extraEffortAllowance: '0.0000',
+      productionIncentives: '0.0000',
       differenceRounded: 0,
       responsibilityRounded: 0,
       extraEffortRounded: 0,
       productionRounded: 0,
       verification: {
-        sum:          '0.0000',
+        sum: '0.0000',
         isExact: true,
-        ratiosSum:    '0.00',
+        ratiosSum: '0.00',
         ratiosSumIs1: false,
         message: 'البدلات لم تعد تُحسب تلقائياً — أدخل القيم يدوياً إذا لزم الأمر',
       },
     };
   }
 
-  /** Compute monthlySalary = baseSalary + lumpSumSalary + livingAllowance + responsibilityAllowance + extraEffortAllowance + productionIncentive + transportAllowance */
-  private withMonthlySalary<T extends {
-    baseSalary: Prisma.Decimal;
-    lumpSumSalary: Prisma.Decimal;
-    livingAllowance: Prisma.Decimal;
-    responsibilityAllowance: Prisma.Decimal;
-    extraEffortAllowance: Prisma.Decimal;
-    productionIncentive: Prisma.Decimal;
-    transportAllowance: Prisma.Decimal;
-  }>(record: T): T & { monthlySalary: number } {
-    const monthly = record.baseSalary
-      .plus(record.lumpSumSalary)
-      .plus(record.livingAllowance)
-      .plus(record.responsibilityAllowance)
-      .plus(record.extraEffortAllowance)
-      .plus(record.productionIncentive)
-      .plus(record.transportAllowance);
+  /** Compute monthlySalary = baseSalary + livingAllowance */
+  private withMonthlySalary<
+    T extends {
+      baseSalary: Prisma.Decimal;
+      livingAllowance: Prisma.Decimal;
+    },
+  >(record: T): T & { monthlySalary: number } {
+    const monthly = record.baseSalary.plus(record.livingAllowance);
     return { ...record, monthlySalary: Number(monthly.toFixed(2)) };
   }
 
@@ -80,26 +67,30 @@ export class SalaryService {
   }
 
   async upsert(employeeId: string, dto: UpsertSalaryDto) {
-    const baseSalary      = new Prisma.Decimal(dto.baseSalary.toString());
-    const lumpSumSalary   = new Prisma.Decimal((dto.lumpSumSalary ?? 0).toString());
+    const baseSalary = new Prisma.Decimal(dto.baseSalary.toString());
+    const lumpSumSalary = new Prisma.Decimal((dto.lumpSumSalary ?? 0).toString());
     const livingAllowance = new Prisma.Decimal((dto.livingAllowance ?? 0).toString());
 
     // Allowances are no longer auto-computed — always default to 0.
     // Only use manually-provided values if explicitly passed in the DTO.
-    const responsibilityAllowance = new Prisma.Decimal((dto.responsibilityAllowance ?? 0).toString());
-    const extraEffortAllowance    = new Prisma.Decimal((dto.extraEffortAllowance ?? dto.extraEffort ?? 0).toString());
-    const productionIncentive     = new Prisma.Decimal((dto.productionIncentive ?? 0).toString());
+    const responsibilityAllowance = new Prisma.Decimal(
+      (dto.responsibilityAllowance ?? 0).toString(),
+    );
+    const extraEffortAllowance = new Prisma.Decimal(
+      (dto.extraEffortAllowance ?? dto.extraEffort ?? 0).toString(),
+    );
+    const productionIncentive = new Prisma.Decimal((dto.productionIncentive ?? 0).toString());
 
     const data = {
-      profession:             dto.profession ?? null,
+      profession: dto.profession ?? null,
       baseSalary,
       lumpSumSalary,
       livingAllowance,
       responsibilityAllowance,
       extraEffortAllowance,
       productionIncentive,
-      insuranceAmount:        new Prisma.Decimal((dto.insuranceAmount ?? dto.insurances ?? 0).toString()),
-      transportAllowance:     new Prisma.Decimal((dto.transportAllowance ?? 0).toString()),
+      insuranceAmount: new Prisma.Decimal((dto.insuranceAmount ?? dto.insurances ?? 0).toString()),
+      transportAllowance: new Prisma.Decimal((dto.transportAllowance ?? 0).toString()),
     };
 
     const record = await this.prisma.employeeSalary.upsert({
@@ -175,7 +166,7 @@ export class SalaryService {
         );
       }
     }
-    
+
     await this.prisma.$transaction(transactionOperations);
     const updates = salaryRecords;
 

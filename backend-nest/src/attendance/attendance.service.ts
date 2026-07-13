@@ -67,6 +67,71 @@ const ATTENDANCE_IMPORT_EXTENSIONS = new Set([
   '.ods',
 ]);
 
+/** تحويل timestamp (UTC مخزّن) إلى دقائق بالتوقيت المحلي السعودي (+3) */
+function toLocalMinutes(timestamp: Date | string): number {
+  const d = typeof timestamp === 'string' ? new Date(timestamp) : timestamp;
+  const utc = d.getUTCHours() * 60 + d.getUTCMinutes();
+  return (((utc + 180) % 1440) + 1440) % 1440;
+}
+
+/**
+ * حساب دقائق العمل الفعلية من سجلات البصمة الخام (IN/OUT) ليوم واحد أو أكثر.
+ * نزوّج كل IN مع أقرب OUT تليه: IN→OUT→IN→OUT تعطي (OUT₁−IN₁)+(OUT₂−IN₂).
+ * الفجوة بين OUT وIN التالية (وقت غياب داخل الدوام) لا تُحتسب — بلا أجر.
+ */
+function computeWorkedMinutes(
+  records: Array<{ type: string; timestamp: Date | string }>,
+): number {
+  const dayMap = new Map<string, Array<{ type: string; min: number }>>();
+  for (const r of records) {
+    const type = (r.type || '').toUpperCase();
+    if (type !== 'IN' && type !== 'OUT') continue;
+    const d = typeof r.timestamp === 'string' ? new Date(r.timestamp) : r.timestamp;
+    const date = d.toISOString().slice(0, 10);
+    const arr = dayMap.get(date) ?? [];
+    arr.push({ type, min: toLocalMinutes(d) });
+    dayMap.set(date, arr);
+  }
+
+  let total = 0;
+  for (const arr of dayMap.values()) {
+    arr.sort((a, b) => a.min - b.min);
+    let pendingIn: number | null = null;
+    for (const p of arr) {
+      if (p.type === 'IN') {
+        if (pendingIn === null) pendingIn = p.min;
+      } else {
+        if (pendingIn !== null) {
+          total += Math.max(0, p.min - pendingIn);
+          pendingIn = null;
+        }
+      }
+    }
+  }
+  return total;
+}
+
+/**
+ * دقائق الإجازة المرضية الجزئية (منتصف اليوم) المدفوعة بنصف الأجر.
+ * يخص فقط إجازة SICK بساعات (isHourly) تبدأ بعد بداية الدوام،
+ * حيث تُحتسب الساعات من وقت بدء الإجازة حتى نهاية الدوام بنصف التكلفة.
+ */
+function computeSickRemainderMinutes(
+  sickLeaves: Array<{ startTime?: string | null; isHourly?: boolean | null }>,
+  scheduledStartMin: number,
+  scheduledEndMin: number,
+): number {
+  let total = 0;
+  for (const l of sickLeaves) {
+    if (!l.isHourly) continue;
+    const [sh, sm] = (l.startTime || '').split(':').map(Number);
+    const startMin = (sh || 0) * 60 + (sm || 0);
+    if (!(startMin > scheduledStartMin)) continue; // إجازة يوم كامل تُعالَج عبر sickLeaveDays
+    total += Math.max(0, scheduledEndMin - startMin);
+  }
+  return total;
+}
+
 @Injectable()
 export class AttendanceService {
   private readonly logger = new Logger(AttendanceService.name);
@@ -1298,6 +1363,54 @@ export class AttendanceService {
       throw new BadRequestException('No active employees found');
     }
 
+    // جلب الإجازات المعتمدة للفترة لاستبعاد أيام الإجازة من أيام الحضور.
+    // يوم إجازة معتمدة (مرضية/إدارية/وفاة/بدون أجر) له بصمة دخول (IN) يُحتسب
+    // حضوراً خطأً فيضاعف عدد الأيام (مثال: عمل يومين + يوم مرضي ببصمة → 3 أيام).
+    const leaveWhere: Prisma.LeaveRequestWhereInput = {
+      status: 'APPROVED',
+      startDate: { lte: new Date(`${periodEnd}T23:59:59Z`) },
+      endDate: { gte: new Date(`${periodStart}T00:00:00Z`) },
+    };
+    if (employeeId) leaveWhere.employeeId = employeeId;
+    const approvedLeaves = await this.prisma.leaveRequest.findMany({
+      where: leaveWhere,
+      select: { employeeId: true, startDate: true, endDate: true },
+    });
+    const periodStartUtc = new Date(`${periodStart}T00:00:00Z`);
+    const periodEndUtc = new Date(`${periodEnd}T23:59:59Z`);
+    const leaveDatesByEmployee = new Map<string, Set<string>>();
+    for (const leave of approvedLeaves) {
+      const start = leave.startDate < periodStartUtc ? periodStartUtc : new Date(leave.startDate);
+      const end = leave.endDate > periodEndUtc ? periodEndUtc : new Date(leave.endDate);
+      const cur = new Date(start);
+      while (cur <= end) {
+        const d = cur.toISOString().slice(0, 10);
+        if (!leaveDatesByEmployee.has(leave.employeeId)) {
+          leaveDatesByEmployee.set(leave.employeeId, new Set<string>());
+        }
+        leaveDatesByEmployee.get(leave.employeeId)!.add(d);
+        cur.setUTCDate(cur.getUTCDate() + 1);
+      }
+    }
+
+    // جلب الإجازات المرضية بساعات (isHourly) لحساب باقي اليوم بنصف الأجر
+    const sickLeaves = await this.prisma.leaveRequest.findMany({
+      where: {
+        status: 'APPROVED',
+        leaveType: 'SICK',
+        isHourly: true,
+        startDate: { lte: new Date(`${periodEnd}T23:59:59Z`) },
+        endDate: { gte: new Date(`${periodStart}T00:00:00Z`) },
+      },
+      select: { employeeId: true, startDate: true, endDate: true, startTime: true, isHourly: true },
+    });
+    const sickLeavesByEmployee = new Map<string, typeof sickLeaves>();
+    for (const l of sickLeaves) {
+      const arr = sickLeavesByEmployee.get(l.employeeId) ?? [];
+      arr.push(l);
+      sickLeavesByEmployee.set(l.employeeId, arr);
+    }
+
     // جلب جميع سجلات الحضور للفترة دفعة واحدة لتحسين الأداء
     const allRecords = await this.prisma.attendanceRecord.findMany({
       where: {
@@ -1380,13 +1493,17 @@ export class AttendanceService {
 
       // ── حساب أيام الحضور الفعلية ─────────────────────────────────────────
       // نحسب الأيام الفريدة التي وُجد فيها سجل IN (استثناء الجمعة فقط — السبت يوم عمل)
+      // مع استبعاد أيام الإجازة المعتمدة حتى لو وُجدت فيها بصمة دخول (راجع الأعلى)
+      const employeeLeaveDates = leaveDatesByEmployee.get(employee.employeeId);
       const datesWithCheckIn = new Set(
         records
           .filter((r) => r.type.toUpperCase() === 'IN')
           .map((r) => r.date)
           .filter((dateStr) => {
             const day = new Date(`${dateStr}T00:00:00Z`).getUTCDay();
-            return day !== 5; // استثناء الجمعة فقط — السبت يوم عمل
+            if (day === 5) return false; // استثناء الجمعة فقط — السبت يوم عمل
+            if (employeeLeaveDates && employeeLeaveDates.has(dateStr)) return false; // استبعاد يوم إجازة
+            return true;
           }),
       );
       // أيام الحضور الفعلية = عدد الأيام الفريدة التي تم فيها تسجيل حضور
@@ -1487,6 +1604,45 @@ export class AttendanceService {
       const [seH, seM] = scheduledEnd.split(':').map(Number);
       const scheduledEndMinutes = (seH || 16) * 60 + (seM || 0);
 
+      // آخر خروج (OUT) لكل يوم — لحساب باقي يوم الإجازة المرضية منتصف اليوم
+      const lastOutMinutesByDate = new Map<string, number>();
+      for (const r of records) {
+        if ((r.type || '').toUpperCase() !== 'OUT') continue;
+        const ts = typeof r.timestamp === 'string' ? new Date(r.timestamp) : r.timestamp;
+        const date = ts.toISOString().slice(0, 10);
+        const min = toLocalMinutes(ts);
+        const prev = lastOutMinutesByDate.get(date);
+        if (prev === undefined || min > prev) lastOutMinutesByDate.set(date, min);
+      }
+
+      // دقائق العمل الفعلية (من أزواج IN/OUT)
+      const workedMinutes = computeWorkedMinutes(records);
+
+      // الإجازة المرضية:
+      //  - يوم فيه حضور (بصمة خروج) ← إجازة منتصف اليوم: باقي الوقت حتى نهاية
+      //    الدوام يُحتسب بنصف الأجر (الساعات قبل الخروج بأجر كامل عبر workedMinutes).
+      //  - يوم بلا حضور ← إجازة مرضية كاملة (يوم كامل بنصف الأجر).
+      const employeeSickLeaves = sickLeavesByEmployee.get(employee.employeeId) || [];
+      let sickRemainderMinutes = 0;
+      let fullSickDays = 0;
+      for (const l of employeeSickLeaves) {
+        const start = l.startDate < periodStartUtc ? periodStartUtc : new Date(l.startDate);
+        const end = l.endDate > periodEndUtc ? periodEndUtc : new Date(l.endDate);
+        const cur = new Date(start);
+        while (cur <= end) {
+          const d = cur.toISOString().slice(0, 10);
+          const lastOut = lastOutMinutesByDate.get(d);
+          if (lastOut !== undefined) {
+            // إجازة منتصف اليوم: باقي اليوم بعد آخر بصمة خروج بنصف الأجر
+            sickRemainderMinutes += Math.max(0, scheduledEndMinutes - lastOut);
+          } else {
+            // إجازة مرضية كاملة (بلا حضور) — يوم كامل بنصف الأجر
+            fullSickDays += 1;
+          }
+          cur.setUTCDate(cur.getUTCDate() + 1);
+        }
+      }
+
       let totalOvertimeMinutes = 0;
       let overtimeWeekendDays = 0;
       for (const [date, outTimestamp] of lastOutByDate.entries()) {
@@ -1527,6 +1683,9 @@ export class AttendanceService {
         employeeId: employee.employeeId,
         employeeName: employee.name,
         presentDays,
+        workedMinutes,
+        sickRemainderMinutes,
+        sickLeaveDays: fullSickDays,
         absentDays,
         absenceDeduction: Math.round(absenceDeduction * 100) / 100,
         delayMinutes: totalDelayMinutes,

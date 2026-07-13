@@ -32,11 +32,22 @@ export class PrismaService
     const pool = new Pool({
       connectionString: process.env.DATABASE_URL,
       // Keep connections alive — critical for Neon serverless
-      max: 10,
-      idleTimeoutMillis: 30_000,
+      // Neon terminates idle connections aggressively, so we keep a small pool,
+      // disable idle-based eviction, and recycle connections before Neon kills them.
+      max: 5,
+      idleTimeoutMillis: 0, // never close on idle; rely on maxLifetime instead
+      maxLifetimeSeconds: 120, // recycle every 2 min, well under Neon's idle limit
       connectionTimeoutMillis: 30_000, // Increased from 10s to 30s for Neon cold starts
       keepAlive: true,
       keepAliveInitialDelayMillis: 10_000,
+      allowExitOnIdle: false,
+      application_name: 'backend-nest',
+    });
+
+    // Swallow pool-level errors so a single dead socket doesn't crash the process
+    // or surface as an unhandledRejection. The pool auto-discards failed sockets.
+    pool.on('error', (err: Error) => {
+      this.logger.warn(`[PrismaService] Pool connection error: ${err.message}`);
     });
 
     super({
