@@ -19,13 +19,11 @@ import { GlobalExceptionFilter } from './common/filters/global-exception.filter'
 const logger = new Logger('Bootstrap');
 
 process.on('uncaughtException', (err) => {
-  logger.error('Uncaught Exception:', err);
-  process.exit(1);
+  logger.error('Uncaught Exception (process kept alive):', err);
 });
 
 process.on('unhandledRejection', (reason) => {
-  logger.error('Unhandled Rejection:', reason);
-  process.exit(1);
+  logger.error('Unhandled Rejection (process kept alive):', reason);
 });
 
 // -----------------------------------------------------------------------------
