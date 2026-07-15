@@ -21,6 +21,10 @@ import { checkLeaveConflictForAttendance } from '../common/utils/leave-attendanc
 export class PublicAttendanceController {
   private readonly logger = new Logger(PublicAttendanceController.name);
 
+  // Block only accidental double-scans (two identical punches within this window).
+  // Legitimate repeated IN/OUT punches (e.g. multiple shifts, hours apart) are always allowed.
+  private static readonly ANTI_DOUBLE_SCAN_MS = 60_000; // 1 minute
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly aggregationService: AttendanceAggregationService,
@@ -38,16 +42,20 @@ export class PublicAttendanceController {
     const dateKey = toFactoryDateKey();
     const now = new Date();
 
-    const existingIn = await this.prisma.attendanceRecord.findFirst({
-      where: {
-        employeeId,
-        type: 'IN',
-        date: dateKey,
-      },
+    // Allow multiple check-ins per day (multiple shifts / re-entries).
+    // Only block an accidental double-scan: two consecutive IN punches within a short window.
+    const lastRecord = await this.prisma.attendanceRecord.findFirst({
+      where: { employeeId, date: dateKey },
+      orderBy: { timestamp: 'desc' },
     });
 
-    if (existingIn) {
-      throw new BadRequestException('Employee already checked in today');
+    if (lastRecord && lastRecord.type.toUpperCase() === 'IN') {
+      const gapMs = now.getTime() - new Date(lastRecord.timestamp).getTime();
+      if (gapMs < PublicAttendanceController.ANTI_DOUBLE_SCAN_MS) {
+        throw new BadRequestException(
+          'Double check-in detected — please wait a moment before scanning again',
+        );
+      }
     }
 
     const record = await this.prisma.attendanceRecord.create({
@@ -92,24 +100,28 @@ export class PublicAttendanceController {
     const dateKey = toFactoryDateKey();
     const now = new Date();
 
-    const existingOut = await this.prisma.attendanceRecord.findFirst({
-      where: {
-        employeeId,
-        type: 'OUT',
-        date: dateKey,
-      },
+    // Block only accidental double-scans: two consecutive OUT punches within a short window.
+    const lastRecord = await this.prisma.attendanceRecord.findFirst({
+      where: { employeeId, date: dateKey },
+      orderBy: { timestamp: 'desc' },
     });
 
-    if (existingOut) {
-      throw new BadRequestException('Employee already checked out today');
+    if (lastRecord && lastRecord.type.toUpperCase() === 'OUT') {
+      const gapMs = now.getTime() - new Date(lastRecord.timestamp).getTime();
+      if (gapMs < PublicAttendanceController.ANTI_DOUBLE_SCAN_MS) {
+        throw new BadRequestException(
+          'Double check-out detected — please wait a moment before scanning again',
+        );
+      }
     }
 
+    // Pair this check-out with the most recent check-in of the day.
+    // We intentionally allow several OUTs after one IN (e.g. a forgotten re-check-in
+    // or a double end-of-day scan): every OUT is stored and the salary calc pairs each
+    // IN with the LAST OUT before the next IN.
     const existingIn = await this.prisma.attendanceRecord.findFirst({
-      where: {
-        employeeId,
-        type: 'IN',
-        date: dateKey,
-      },
+      where: { employeeId, type: 'IN', date: dateKey },
+      orderBy: { timestamp: 'desc' },
     });
 
     if (!existingIn) {
