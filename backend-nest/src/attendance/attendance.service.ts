@@ -82,30 +82,35 @@ function toLocalMinutes(timestamp: Date | string): number {
 function computeWorkedMinutes(
   records: Array<{ type: string; timestamp: Date | string }>,
 ): number {
-  const dayMap = new Map<string, Array<{ type: string; min: number }>>();
+  // Group punches by UTC date, separating IN and OUT minute values.
+  const dayMap = new Map<string, { ins: number[]; outs: number[] }>();
   for (const r of records) {
     const type = (r.type || '').toUpperCase();
     if (type !== 'IN' && type !== 'OUT') continue;
     const d = typeof r.timestamp === 'string' ? new Date(r.timestamp) : r.timestamp;
     const date = d.toISOString().slice(0, 10);
-    const arr = dayMap.get(date) ?? [];
-    arr.push({ type, min: toLocalMinutes(d) });
-    dayMap.set(date, arr);
+    const bucket = dayMap.get(date) ?? { ins: [], outs: [] };
+    if (type === 'IN') bucket.ins.push(toLocalMinutes(d));
+    else bucket.outs.push(toLocalMinutes(d));
+    dayMap.set(date, bucket);
   }
 
   let total = 0;
-  for (const arr of dayMap.values()) {
-    arr.sort((a, b) => a.min - b.min);
-    let pendingIn: number | null = null;
-    for (const p of arr) {
-      if (p.type === 'IN') {
-        if (pendingIn === null) pendingIn = p.min;
-      } else {
-        if (pendingIn !== null) {
-          total += Math.max(0, p.min - pendingIn);
-          pendingIn = null;
-        }
+  for (const { ins, outs } of dayMap.values()) {
+    ins.sort((a, b) => a - b);
+    outs.sort((a, b) => a - b);
+    // Each IN is paired with the LAST OUT that occurs after it but before the next IN.
+    // This correctly handles multiple shifts (IN→OUT→IN→OUT) AND a single IN followed by
+    // several OUTs (e.g. a missed re-check-in or a double end-of-day scan): the employee is
+    // counted as present from the first IN until the final OUT of that segment.
+    for (let i = 0; i < ins.length; i++) {
+      const inMin = ins[i];
+      const nextIn = i + 1 < ins.length ? ins[i + 1] : Infinity;
+      let pairedOut: number | null = null;
+      for (const o of outs) {
+        if (o > inMin && o < nextIn) pairedOut = o; // keep the last matching OUT
       }
+      if (pairedOut !== null) total += Math.max(0, pairedOut - inMin);
     }
   }
   return total;
@@ -528,18 +533,32 @@ export class AttendanceService {
 
     const date = this.deriveDateKey(dto.timestamp, eventDate);
 
-    // ── منع تسجيل نفس النوع مرتين متتاليين في نفس اليوم ──
+    // ── التحقق من التسلسل المنطقي للبصمات: نمنع IN→IN أو OUT→OUT المباشر ──
+    // نسمح بالورديات المتعددة (IN→OUT→IN→OUT) لكن نمنع التسلسل الخاطئ (IN→IN بدون OUT بينهما)
     const normalizedType = dto.type.toUpperCase();
     const lastRecord = await this.prisma.attendanceRecord.findFirst({
       where: { employeeId: dto.employeeId, date },
       orderBy: { timestamp: 'desc' },
-      select: { type: true },
+      select: { type: true, timestamp: true },
     });
+    
     if (lastRecord && lastRecord.type.toUpperCase() === normalizedType) {
-      const typeLabel = normalizedType === 'IN' ? 'دخول' : 'خروج';
-      throw new BadRequestException(
-        `تحذير: آخر بصمة مسجلة هي ${typeLabel} أيضاً — لا يمكن تسجيل ${typeLabel} مرتين متتاليتين`,
-      );
+      // نفس النوع متتالي — نتحقق: هل توجد بصمة معاكسة بين آخر بصمة والبصمة الجديدة؟
+      // لكن هنا المشكلة: البصمة الجديدة لسه ما انأنشأت، فمنقدرش نتحقق منها
+      // الحل: نسمح بالتسجيل ونخلي aggregation يعالج التناقضات
+      // أو: نرفض فقط إذا الفرق الزمني قصير جداً (< 30 دقيقة) = خطأ واضح
+      const newTimestamp = eventDate.getTime();
+      const lastTimestamp = lastRecord.timestamp.getTime();
+      const diffMinutes = Math.abs(newTimestamp - lastTimestamp) / 60000;
+      
+      if (diffMinutes < 30) {
+        // بصمتين من نفس النوع بفرق أقل من 30 دقيقة = خطأ واضح
+        const typeLabel = normalizedType === 'IN' ? 'دخول' : 'خروج';
+        throw new BadRequestException(
+          `تحذير: آخر بصمة ${typeLabel} كانت قبل ${Math.round(diffMinutes)} دقيقة فقط — يُرجى تسجيل ${normalizedType === 'IN' ? 'خروج' : 'دخول'} أولاً`,
+        );
+      }
+      // إذا كان الفرق أكثر من 30 دقيقة، نسمح (قد يكون وردية ثانية)
     }
 
     const record = await this.prisma.attendanceRecord.create({
@@ -1355,12 +1374,12 @@ export class AttendanceService {
           }),
         ]
       : await this.prisma.employee.findMany({
-          where: { status: 'active' },
+          where: { status: { in: ['active', 'resigned', 'terminated'] } },
           select: employeeSelect,
         });
 
     if (!employees.length) {
-      throw new BadRequestException('No active employees found');
+      throw new BadRequestException('No employees found');
     }
 
     // جلب الإجازات المعتمدة للفترة لاستبعاد أيام الإجازة من أيام الحضور.
@@ -1374,22 +1393,38 @@ export class AttendanceService {
     if (employeeId) leaveWhere.employeeId = employeeId;
     const approvedLeaves = await this.prisma.leaveRequest.findMany({
       where: leaveWhere,
-      select: { employeeId: true, startDate: true, endDate: true },
+      select: { employeeId: true, startDate: true, endDate: true, leaveType: true },
     });
     const periodStartUtc = new Date(`${periodStart}T00:00:00Z`);
     const periodEndUtc = new Date(`${periodEnd}T23:59:59Z`);
     const leaveDatesByEmployee = new Map<string, Set<string>>();
+    const unpaidLeaveDaysByEmployee = new Map<string, number>();
     for (const leave of approvedLeaves) {
       const start = leave.startDate < periodStartUtc ? periodStartUtc : new Date(leave.startDate);
       const end = leave.endDate > periodEndUtc ? periodEndUtc : new Date(leave.endDate);
       const cur = new Date(start);
+      let dayCount = 0;
       while (cur <= end) {
         const d = cur.toISOString().slice(0, 10);
-        if (!leaveDatesByEmployee.has(leave.employeeId)) {
-          leaveDatesByEmployee.set(leave.employeeId, new Set<string>());
+        const dayOfWeek = cur.getUTCDay();
+        // استثناء الجمعة فقط (5 = Friday)
+        if (dayOfWeek !== 5) {
+          if (!leaveDatesByEmployee.has(leave.employeeId)) {
+            leaveDatesByEmployee.set(leave.employeeId, new Set<string>());
+          }
+          leaveDatesByEmployee.get(leave.employeeId)!.add(d);
+          // حساب أيام الإجازة بدون أجر (UNPAID)
+          if (leave.leaveType === 'UNPAID') {
+            dayCount++;
+          }
         }
-        leaveDatesByEmployee.get(leave.employeeId)!.add(d);
         cur.setUTCDate(cur.getUTCDate() + 1);
+      }
+      if (leave.leaveType === 'UNPAID' && dayCount > 0) {
+        unpaidLeaveDaysByEmployee.set(
+          leave.employeeId,
+          (unpaidLeaveDaysByEmployee.get(leave.employeeId) || 0) + dayCount,
+        );
       }
     }
 
@@ -1428,8 +1463,44 @@ export class AttendanceService {
       },
     });
 
+    // ── حساب دقائق العمل الناقصة مباشرة من البصمات (IN/OUT pairs per day) ──
+    // هاد يضمن الدقة مع الورديات المتعددة بدون الاعتماد على DailyAttendanceLog
+    const computeMissingMinutesFromPunches = (
+      dayRecords: Array<{ type: string; timestamp: Date }>,
+      schedStartMin: number,
+      schedEndMin: number,
+      delayAlreadyPenalized: number,
+    ): number => {
+      const requiredMin = Math.max(0, schedEndMin - schedStartMin);
+      if (requiredMin <= 0 || dayRecords.length === 0) return 0;
+
+      const sorted = [...dayRecords].sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
+      let scheduledWorkedMs = 0;
+      let pendingIn: Date | null = null;
+
+      for (const punch of sorted) {
+        const type = punch.type.toUpperCase();
+        if (type === 'IN') {
+          pendingIn = punch.timestamp;
+        } else if (type === 'OUT' && pendingIn) {
+          const inMin = toLocalMinutes(pendingIn);
+          const outMin = toLocalMinutes(punch.timestamp);
+          const clampedIn = Math.max(inMin, schedStartMin);
+          const clampedOut = Math.min(outMin, schedEndMin);
+          if (clampedOut > clampedIn) scheduledWorkedMs += (clampedOut - clampedIn) * 60_000;
+          pendingIn = null;
+        }
+      }
+
+      const scheduledWorkedMinutes = Math.round(scheduledWorkedMs / 60_000);
+      const grossMissing = Math.max(0, requiredMin - scheduledWorkedMinutes);
+      // نطرح التأخير الصباحي لأنه يُعاقب عليه منفصلاً بـ 1.5×
+      return Math.max(0, grossMissing - delayAlreadyPenalized);
+    };
+
     // ── Aggregate EARLY_LEAVE_MINUTES from DailyAttendanceLog for the period ──
     // This picks up real-time calculated penalties written by the aggregation engine.
+    // نستخدمها كـ fallback فقط إذا حسابنا المباشر يعطي صفر.
     const earlyLeaveLogs = await this.prisma.dailyAttendanceLog.findMany({
       where: {
         ...(employeeId ? { employeeId } : {}),
@@ -1439,16 +1510,14 @@ export class AttendanceService {
         },
         recordType: 'EARLY_LEAVE_MINUTES',
       },
-      select: { employeeId: true, value: true },
+      select: { employeeId: true, date: true, value: true },
     });
-    const earlyLeaveMinutesByEmployee = new Map<string, number>();
+    const earlyLeaveLogsByEmployeeDate = new Map<string, number>();
     for (const log of earlyLeaveLogs) {
+      const key = `${log.employeeId}::${log.date instanceof Date ? log.date.toISOString().slice(0, 10) : String(log.date).slice(0, 10)}`;
       const minutes = Number(log.value ?? 0);
       if (!Number.isFinite(minutes) || minutes <= 0) continue;
-      earlyLeaveMinutesByEmployee.set(
-        log.employeeId,
-        (earlyLeaveMinutesByEmployee.get(log.employeeId) || 0) + minutes,
-      );
+      earlyLeaveLogsByEmployeeDate.set(key, (earlyLeaveLogsByEmployeeDate.get(key) || 0) + minutes);
     }
 
     // تجميع السجلات حسب الموظف
@@ -1599,10 +1668,56 @@ export class AttendanceService {
         totalDelayMinutes += effectiveLate;
       }
 
-      // ── حساب الإضافي من checkOut vs scheduledEnd ──────────────────────────
+      // ── حساب earlyLeaveMinutes مباشرة من البصمات لكل يوم ──────────────────
+      // هاد يضمن دقة الحساب مع الورديات المتعددة (IN→OUT→IN→OUT)
       const scheduledEnd = employee.scheduledEnd || '16:00';
       const [seH, seM] = scheduledEnd.split(':').map(Number);
       const scheduledEndMinutes = (seH || 16) * 60 + (seM || 0);
+      const schedStartMin = scheduledMinutes;
+      const schedEndMin = scheduledEndMinutes;
+
+      // نجمع دقائق كل يوم على حدة بعد طرح تأخير ذلك اليوم
+      const recordsByDate = new Map<string, Array<{ type: string; timestamp: Date }>>();
+      for (const r of records) {
+        const arr = recordsByDate.get(r.date) ?? [];
+        arr.push({ type: r.type, timestamp: r.timestamp });
+        recordsByDate.set(r.date, arr);
+      }
+
+      let directMissingMinutes = 0;
+      for (const [date, dayRecords] of recordsByDate.entries()) {
+        // تأخير هذا اليوم تحديداً
+        const dayDelayInfo = [...firstInByDate.values()].find((x) => x.date === date);
+        const dayDelay = dayDelayInfo
+          ? (() => {
+              let rawLate: number;
+              if (dayDelayInfo.shiftPairMinutesLate !== null && dayDelayInfo.shiftPairMinutesLate > 0) {
+                rawLate = dayDelayInfo.shiftPairMinutesLate;
+              } else {
+                const utcMin = dayDelayInfo.timestamp.getUTCHours() * 60 + dayDelayInfo.timestamp.getUTCMinutes();
+                const localMin = (((utcMin + TIMEZONE_OFFSET_MINUTES) % 1440) + 1440) % 1440;
+                rawLate = Math.max(0, localMin - schedStartMin);
+              }
+              rawLate = Math.max(0, rawLate - (morningLeaveOffsetByDate.get(date) || 0));
+              return rawLate > empGracePeriod ? rawLate - empGracePeriod : 0;
+            })()
+          : 0;
+
+        // حساب الدقائق الناقصة مباشرة من أزواج البصمات
+        const missingFromPunches = computeMissingMinutesFromPunches(
+          dayRecords,
+          schedStartMin,
+          schedEndMin,
+          dayDelay,
+        );
+
+        // استخدام DailyAttendanceLog كـ fallback إذا كان الحساب المباشر صفر وكان في log
+        const logKey = `${employee.employeeId}::${date}`;
+        const loggedMissing = earlyLeaveLogsByEmployeeDate.get(logKey) || 0;
+        directMissingMinutes += missingFromPunches > 0 ? missingFromPunches : loggedMissing;
+      }
+
+      const totalEarlyLeaveMinutes = directMissingMinutes;
 
       // آخر خروج (OUT) لكل يوم — لحساب باقي يوم الإجازة المرضية منتصف اليوم
       const lastOutMinutesByDate = new Map<string, number>();
@@ -1615,8 +1730,12 @@ export class AttendanceService {
         if (prev === undefined || min > prev) lastOutMinutesByDate.set(date, min);
       }
 
-      // دقائق العمل الفعلية (من أزواج IN/OUT)
-      const workedMinutes = computeWorkedMinutes(records);
+      // الراتب بالساعات: أساس الدفع = الدقائق التعاقدية لأيام الحضور الفعلية
+      // (presentDays × hoursPerDay × 60). ثم تخصم دقائق الخروج المبكر/التأخير عبر
+      // earlyLeaveDeduction/lateDeduction (كما في النموذج اليومي). هذا يتفادى
+      // احتساب دقائق الدوام المفقودة مرتين (مرة باستبعادها من workedMinutes ومرة
+      // أخرى عبر الخصم). الدقائق الفعلية تُحسب عبر computeWorkedMinutes عند الحاجة.
+      const workedMinutes = presentDays * empHoursPerDay * 60;
 
       // الإجازة المرضية:
       //  - يوم فيه حضور (بصمة خروج) ← إجازة منتصف اليوم: باقي الوقت حتى نهاية
@@ -1690,7 +1809,7 @@ export class AttendanceService {
         absenceDeduction: Math.round(absenceDeduction * 100) / 100,
         delayMinutes: totalDelayMinutes,
         delayDeduction: Math.round(delayDeduction * 100) / 100,
-        earlyLeaveMinutes: earlyLeaveMinutesByEmployee.get(employee.employeeId) || 0,
+        earlyLeaveMinutes: totalEarlyLeaveMinutes,
         totalAttendanceDeduction: Math.round((absenceDeduction + delayDeduction) * 100) / 100,
         overtimeMinutes: totalOvertimeMinutes,
         overtimeWeekendDays,

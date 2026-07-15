@@ -342,7 +342,7 @@ export class DailyLogsService {
     // - default: exclude terminated/resigned only
     // - do NOT force status=active, otherwise reports hide employees.
     const employees = await this.prisma.employee.findMany({
-      where: { status: { notIn: ['terminated', 'resigned'] } },
+      where: { status: { in: ['active', 'resigned', 'terminated'] } },
       select: {
         employeeId: true,
         name: true,

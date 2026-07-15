@@ -451,8 +451,7 @@ export class AttendanceAggregationService {
     const morningLeaveOffset = Math.max(0, effectiveScheduledStartMin - scheduledStartMin);
     const calculatedDelayMinutes = Math.max(0, rawDelayMinutes - morningLeaveOffset);
 
-    // ── Step 4c: Calculate early leave from last OUT punch (independent) ────
-    const rawEarlyLeaveMinutes = this.calculateEarlyLeaveFromPunches(punches, scheduledEndMin);
+    // ── Step 4c: (unused — missing minutes computed via grossMissingMinutes below) ──
 
     // ── Step 6: Write to DailyAttendanceLog inside a $transaction ─────────────
     const result = await this.prisma.$transaction(async (tx) => {
@@ -633,7 +632,7 @@ export class AttendanceAggregationService {
     results: AggregationResult[];
   }> {
     const employees = await this.prisma.employee.findMany({
-      where: { status: 'active' },
+      where: { status: { in: ['active', 'resigned', 'terminated'] } },
       select: { employeeId: true },
     });
 
