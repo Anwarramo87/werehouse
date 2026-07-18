@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { Global, Module } from '@nestjs/common';
 import { JwtModule } from '@nestjs/jwt';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { StringValue } from 'ms';
@@ -8,6 +8,7 @@ import { TokenRevocationService } from '../auth/token-revocation.service';
 import { PrismaModule } from '../prisma/prisma.module';
 import { JWT_DEFAULT_EXPIRE } from '../common/constants/auth.constants';
 
+@Global()
 @Module({
   imports: [
     ConfigModule,

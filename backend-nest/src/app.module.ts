@@ -3,6 +3,7 @@ import { APP_GUARD } from '@nestjs/core';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import * as Joi from 'joi';
 import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
+import { ScheduleModule } from '@nestjs/schedule';
 import { BullModule } from '@nestjs/bullmq';
 import { WinstonModule } from 'nest-winston';
 import { winstonConfig } from './common/logger/winston.config';
@@ -30,6 +31,7 @@ import { DashboardModule } from './dashboard/dashboard.module';
 import { DiscountsModule } from './discounts/discounts.module';
 import { PenaltiesModule } from './penalties/penalties.module';
 import { LeavesModule } from './leaves/leaves.module';
+import { NotificationsModule } from './notifications/notifications.module';
 import { DepartmentsModule } from './departments';
 import { BiometricModule } from './biometric/biometric.module';
 import { TrashModule } from './trash/trash.module';
@@ -191,6 +193,7 @@ const queueInfraModules = queuesEnabled
         },
       ],
     }),
+    ScheduleModule.forRoot(),
     ...queueInfraModules,
     WinstonModule.forRoot(winstonConfig),
     MetricsModule,
@@ -220,6 +223,7 @@ const queueInfraModules = queuesEnabled
     LeavesModule,
     TrashModule,
     BackupModule,
+    NotificationsModule,
   ],
   providers: [
     {

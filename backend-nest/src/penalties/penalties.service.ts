@@ -2,6 +2,7 @@ import { BadRequestException, Injectable, NotFoundException } from '@nestjs/comm
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { ShortCacheService } from '../common/cache/short-cache.service';
+import { NotificationsService } from '../notifications/notifications.service';
 import { CreatePenaltyDto } from './dto/create-penalty.dto';
 import { UpdatePenaltyDto } from './dto/update-penalty.dto';
 import { PenaltiesListQueryDto } from './dto/penalties-list-query.dto';
@@ -13,6 +14,7 @@ export class PenaltiesService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly shortCache: ShortCacheService,
+    private readonly notifications: NotificationsService,
   ) {}
 
   private async assertEmployeeExists(employeeId: string) {
@@ -87,6 +89,17 @@ export class PenaltiesService {
         reason: dto.reason ?? null,
         issueDate,
       },
+    });
+
+    this.notifications.create({
+      type: 'PENALTY',
+      severity: 'DANGER',
+      title: 'خصم / جزاء جديد',
+      message: `تم تسجيل خصم على الموظف ${dto.employeeId} بقيمة ${dto.amount}${dto.reason ? ` (${dto.reason})` : ''}.`,
+      employeeId: dto.employeeId,
+      entityType: 'penalty',
+      entityId: result.id,
+      metadata: { amount: dto.amount, category: dto.category, reason: dto.reason },
     });
 
     await this.shortCache.invalidatePrefix('employees:stats');

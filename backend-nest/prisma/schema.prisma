@@ -706,3 +706,66 @@ model AuditLog {
   @@index([action, createdAt])
   @@map("audit_logs")
 }
+
+enum NotificationType {
+  CHECK_IN
+  CHECK_OUT
+  BONUS
+  PENALTY
+  ADVANCE
+  LEAVE
+  TERMINATION
+  RESIGNATION
+  LATE
+  ABSENT
+}
+
+enum NotificationSeverity {
+  INFO
+  SUCCESS
+  WARNING
+  DANGER
+}
+
+model Notification {
+  id           String               @id @default(uuid()) @db.Uuid
+  type         NotificationType
+  severity     NotificationSeverity @default(INFO)
+
+  /// عنوان الإشعار (بالعربية)
+  title        String
+  /// نص الإشعار (بالعربية)
+  message      String
+
+  /// الموظف المرتبط بالحدث (إن وجد)
+  employeeId   String?
+  employeeName String?
+
+  /// نوع الكيان المصدر: bonus | penalty | advance | leave | attendance | employee
+  entityType   String?
+  /// معرّف السجل المصدر
+  entityId     String?
+
+  /// بيانات إضافية حرة (JSON)
+  metadata     Json?
+
+  /// مفتاح إلغاء التكرار (يستخدمه تنبيه الغياب لمنع التكرار في نفس اليوم)
+  dedupeKey    String?              @unique
+
+  isRead       Boolean              @default(false)
+  readAt       DateTime?
+
+  /// تجاهل نهائي (زر "تجاهل" لتنبيهات الغياب/التأخير)
+  isDismissed  Boolean              @default(false)
+  dismissedAt  DateTime?
+  dismissedBy  String?
+
+  createdAt    DateTime             @default(now())
+  updatedAt    DateTime             @updatedAt
+
+  @@index([isRead, createdAt])
+  @@index([isDismissed, type])
+  @@index([type, createdAt])
+  @@index([employeeId])
+  @@map("notifications")
+}

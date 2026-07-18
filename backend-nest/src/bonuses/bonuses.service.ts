@@ -3,6 +3,7 @@ import { Prisma } from '@prisma/client';
 import { paginatedResponse, resolvePagination } from '../common/utils/pagination.util';
 import { PrismaService } from '../prisma/prisma.service';
 import { ShortCacheService } from '../common/cache/short-cache.service';
+import { NotificationsService } from '../notifications/notifications.service';
 import { CreateBonusDto } from './dto/create-bonus.dto';
 import { UpdateBonusDto } from './dto/update-bonus.dto';
 import { BonusesListQueryDto } from './dto/bonuses-list-query.dto';
@@ -14,6 +15,7 @@ export class BonusesService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly shortCache: ShortCacheService,
+    private readonly notifications: NotificationsService,
   ) {}
 
   private toHistoryPayload(value: unknown): Prisma.InputJsonValue {
@@ -94,6 +96,15 @@ export class BonusesService {
         });
       }
       await this.shortCache.invalidatePrefix('employees:stats');
+      this.notifications.create({
+        type: 'BONUS',
+        severity: 'SUCCESS',
+        title: 'زيادة راتب',
+        message: `تمت زيادة راتب الموظف ${dto.employeeId} بمقدار ${dto.bonusAmount ?? 0}.`,
+        employeeId: dto.employeeId,
+        entityType: 'bonus',
+        metadata: { bonusAmount: dto.bonusAmount, reason: dto.bonusReason },
+      });
       return { message: 'Salary increased successfully', skipBonusRecord: true };
     }
 
@@ -105,6 +116,19 @@ export class BonusesService {
         assistanceAmount: new Prisma.Decimal(dto.assistanceAmount ?? 0),
         period,
       },
+    });
+
+    const totalReward = (dto.bonusAmount ?? 0) + (dto.assistanceAmount ?? 0);
+    this.notifications.create({
+      type: 'BONUS',
+      severity: 'SUCCESS',
+      title: 'منحة / مكافأة جديدة',
+      message: `تم منح الموظف ${dto.employeeId} مكافأة بقيمة ${totalReward}${dto.bonusReason ? ` (${dto.bonusReason})` : ''}.`,
+      employeeId: dto.employeeId,
+      employeeName: result.employeeId,
+      entityType: 'bonus',
+      entityId: result.id,
+      metadata: { bonusAmount: dto.bonusAmount, assistanceAmount: dto.assistanceAmount, reason: dto.bonusReason },
     });
 
     await this.shortCache.invalidatePrefix('employees:stats');

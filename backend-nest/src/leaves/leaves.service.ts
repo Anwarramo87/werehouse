@@ -2,6 +2,7 @@ import { BadRequestException, Injectable, NotFoundException } from '@nestjs/comm
 import { Prisma, LeaveRequestStatus, LeaveRequestType } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { ShortCacheService } from '../common/cache/short-cache.service';
+import { NotificationsService } from '../notifications/notifications.service';
 import { paginatedResponse, resolvePagination } from '../common/utils/pagination.util';
 import { BulkCreateLeaveRequestDto, CreateLeaveRequestDto } from './dto/create-leave-request.dto';
 import { UpdateLeaveRequestDto } from './dto/update-leave-request.dto';
@@ -58,9 +59,22 @@ export class LeavesService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly shortCache: ShortCacheService,
+    private readonly notifications: NotificationsService,
   ) {}
 
   // ── Helpers ────────────────────────────────────────────────────────────────
+
+  private leaveTypeLabel(type: string): string {
+    const map: Record<string, string> = {
+      PAID: 'مدفوعة',
+      UNPAID: 'غير مدفوعة',
+      SICK: 'مرضية',
+      ADMIN: 'إدارية',
+      DEATH: 'وفاة',
+      OTHER: 'أخرى',
+    };
+    return map[type] ?? type ?? 'غير معروفة';
+  }
 
   private async assertEmployeeExists(employeeId: string) {
     const employee = await this.prisma.employee.findUnique({ where: { employeeId } });
@@ -423,6 +437,24 @@ export class LeavesService {
     });
 
     await this.shortCache.invalidatePrefix('employees:stats');
+
+    const employeeName = (result as any).employee?.name ?? dto.employeeId;
+    this.notifications.create({
+      type: 'LEAVE',
+      severity: 'INFO',
+      title: 'طلب إجازة جديد',
+      message: `سجّل ${employeeName} طلب إجازة (${this.leaveTypeLabel(dto.leaveType as string)}).`,
+      employeeId: dto.employeeId,
+      employeeName,
+      entityType: 'leave',
+      entityId: result.id,
+      metadata: {
+        leaveType: dto.leaveType,
+        startDate: data.startDate,
+        endDate: data.endDate,
+        isPaid: (result as any).isPaid,
+      },
+    });
 
     const warning = await checkAttendanceConflictForLeave(
       this.prisma,
