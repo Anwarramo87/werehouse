@@ -1538,6 +1538,7 @@ export class AttendanceService {
       delayDeduction: number;
       earlyLeaveMinutes: number;
       overtimeMinutes: number;
+      /** دقائق الجمعة الفعلية (تُضرب × 2 في الراتب) — بدلاً من عدد الأيام */
       overtimeWeekendDays: number;
       overtimePay: number;
       totalAttendanceDeduction: number;
@@ -1763,7 +1764,19 @@ export class AttendanceService {
       }
 
       let totalOvertimeMinutes = 0;
-      let overtimeWeekendDays = 0;
+      // دقائق الجمعة الفعلية — يُحسب كل دقيقة داومها الموظف يوم الجمعة بمعدل 2×
+      // بغض النظر عن scheduledEnd: نص يوم جمعة = نص اليوم × 2
+      let weekendWorkedMinutes = 0;
+
+      // نحتاج أيضاً لأول IN لكل يوم جمعة لحساب الدقائق الفعلية
+      const firstInByDateForWeekend = new Map<string, Date>();
+      for (const record of records) {
+        if ((record.type || '').toUpperCase() !== 'IN') continue;
+        if (!firstInByDateForWeekend.has(record.date)) {
+          firstInByDateForWeekend.set(record.date, record.timestamp);
+        }
+      }
+
       for (const [date, outTimestamp] of lastOutByDate.entries()) {
         const dayOfWeek = new Date(`${date}T00:00:00Z`).getUTCDay();
         const isFriday = dayOfWeek === 5;
@@ -1773,8 +1786,12 @@ export class AttendanceService {
         const localOutMinutes = (((utcOutMinutes + TIMEZONE_OFFSET_MINUTES) % 1440) + 1440) % 1440;
 
         if (isFriday) {
-          if (localOutMinutes > scheduledEndMinutes) {
-            overtimeWeekendDays += 1;
+          // دقائق الجمعة = من أول IN حتى آخر OUT (الدقائق الفعلية فقط)
+          const firstInTs = firstInByDateForWeekend.get(date);
+          if (firstInTs) {
+            const utcInMinutes = firstInTs.getUTCHours() * 60 + firstInTs.getUTCMinutes();
+            const localInMinutes = (((utcInMinutes + TIMEZONE_OFFSET_MINUTES) % 1440) + 1440) % 1440;
+            weekendWorkedMinutes += Math.max(0, localOutMinutes - localInMinutes);
           }
         } else {
           const overtime = Math.max(0, localOutMinutes - scheduledEndMinutes);
@@ -1788,13 +1805,14 @@ export class AttendanceService {
       const dailyRate = effectiveHourlyRate * empHoursPerDay;
       const minuteRate = dailyRate / (empHoursPerDay * 60);
       const OVERTIME_MULTIPLIER = 1.5; // معدل 1.5× للإضافي والتأخير
+      const WEEKEND_RATE = 2.0;        // معدل 2× لكل دقيقة يوم الجمعة
 
       const absenceDeduction = absentDays * dailyRate;
       const delayDeduction = totalDelayMinutes * minuteRate * OVERTIME_MULTIPLIER;
 
-      // الإضافي المالي: عادي + جمعة (كلهم 1.5×)
+      // الإضافي: أيام الأسبوع 1.5× / الجمعة 2× على الدقائق الفعلية
       const overtimePay = totalOvertimeMinutes * minuteRate * OVERTIME_MULTIPLIER;
-      const weekendOvertimePay = overtimeWeekendDays * dailyRate * OVERTIME_MULTIPLIER;
+      const weekendOvertimePay = weekendWorkedMinutes * minuteRate * WEEKEND_RATE;
 
       const totalOvertimePayValue = overtimePay + weekendOvertimePay;
 
@@ -1812,7 +1830,9 @@ export class AttendanceService {
         earlyLeaveMinutes: totalEarlyLeaveMinutes,
         totalAttendanceDeduction: Math.round((absenceDeduction + delayDeduction) * 100) / 100,
         overtimeMinutes: totalOvertimeMinutes,
-        overtimeWeekendDays,
+        // overtimeWeekendDays الآن = دقائق الجمعة الفعلية (ليس عدد الأيام)
+        // الفرونت يستخدمها مباشرة في calcEarnedSalaryHourly كـ minuteRate × 2
+        overtimeWeekendDays: weekendWorkedMinutes,
         overtimePay: Math.round(overtimePay * 100) / 100,
         weekendOvertimePay: Math.round(weekendOvertimePay * 100) / 100,
         totalOvertimePay: Math.round(totalOvertimePayValue * 100) / 100,

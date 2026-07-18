@@ -592,12 +592,23 @@ export class PayrollService {
       }
     }
     let weekdayOvertimeMinutes = 0;
-    let weekendOvertimeDays = 0;
+    // weekendOvertimeMinutes = الدقائق الفعلية يوم الجمعة (من أول IN لآخر OUT)
+    let weekendOvertimeMinutes = 0;
+    // نحتاج أول IN لكل يوم جمعة
+    const firstInByDate = new Map<string, Date>();
+    for (const r of inRecords) {
+      if (!firstInByDate.has(r.date)) firstInByDate.set(r.date, r.timestamp);
+    }
     for (const [dateStr, outTs] of lastOutByDate) {
       const dow = new Date(`${dateStr}T00:00:00Z`).getUTCDay();
       const localOutMin = toLocalMinutesFromTimestamp(outTs);
       if (dow === 5) {
-        if (localOutMin > scheduledEndMin) weekendOvertimeDays += 1;
+        // الجمعة: كل دقيقة فعلية من أول IN حتى آخر OUT تُحسب بـ 2×
+        const firstInTs = firstInByDate.get(dateStr);
+        if (firstInTs) {
+          const localInMin = toLocalMinutesFromTimestamp(firstInTs);
+          weekendOvertimeMinutes += Math.max(0, localOutMin - localInMin);
+        }
       } else {
         weekdayOvertimeMinutes += Math.max(0, localOutMin - scheduledEndMin);
       }
@@ -621,9 +632,10 @@ export class PayrollService {
     const overtimePay = minuteWage
       .times(new Prisma.Decimal(1.5))
       .times(this.toDecimal(weekdayOvertimeMinutes));
-    const weekendOvertimePay = dailyWage
-      .times(new Prisma.Decimal(1.5))
-      .times(this.toDecimal(weekendOvertimeDays));
+    // الجمعة: كل دقيقة فعلية × 2 (minuteWage × 2 × weekendOvertimeMinutes)
+    const weekendOvertimePay = minuteWage
+      .times(new Prisma.Decimal(WEEKEND_MULTIPLIER))
+      .times(this.toDecimal(weekendOvertimeMinutes));
 
     const lateDeduction = minuteWage
       .times(this.toDecimal(totalDelayMinutes))
@@ -642,7 +654,7 @@ export class PayrollService {
     this.logger.log(
       `[EARNED] ${employeeId} ${periodStart.toISOString().slice(0, 10)}→${endDate.toISOString().slice(0, 10)} ` +
         `g3=${g3.toFixed(2)} presentDays=${presentDays} delay=${totalDelayMinutes}min early=${totalEarlyLeaveMinutes}min ` +
-        `otWeekday=${weekdayOvertimeMinutes}min otWeekendDays=${weekendOvertimeDays} net=${netEarned.toFixed(2)}`,
+        `otWeekday=${weekdayOvertimeMinutes}min otFridayMinutes=${weekendOvertimeMinutes} net=${netEarned.toFixed(2)}`,
     );
 
     return netEarned;
