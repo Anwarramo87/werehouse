@@ -105,7 +105,6 @@ export class DashboardService {
       salaryAggregate,
       absentEmployees,
       allActiveWithSalaries,
-      monthAttendanceGrouped,
     ] = await Promise.all([
       this.prisma.employee.count({ where: { status: 'active' } }),
 
@@ -194,14 +193,6 @@ export class DashboardService {
               transportAllowance: true,
             },
           },
-        },
-      }),
-
-      this.prisma.attendanceRecord.groupBy({
-        by: ['employeeId', 'date'],
-        where: {
-          type: 'IN',
-          date: { gte: monthStart, lte: monthEnd },
         },
       }),
     ]);
@@ -346,20 +337,14 @@ export class DashboardService {
       sumProductionIncentive +
       sumTransport;
 
-    const attendanceDaysMap = new Map<string, number>();
-    for (const row of monthAttendanceGrouped) {
-      attendanceDaysMap.set(row.employeeId, (attendanceDaysMap.get(row.employeeId) ?? 0) + 1);
-    }
-
     let totalReceivedSalaries = 0;
     for (const emp of allActiveWithSalaries) {
       const empTotalSalary = this.employeeTotalSalary(emp, emp.employeeSalary);
       if (empTotalSalary <= 0) continue;
 
-      const workDays = emp.workDaysInPeriod || STANDARD_WORKING_DAYS;
-      const attendedDays = attendanceDaysMap.get(emp.employeeId) ?? 0;
-      totalReceivedSalaries +=
-        empTotalSalary * Math.min(attendedDays, workDays) / workDays;
+      // إجمالي المقبوض = مجموع الرواتب الشهرية الكاملة المستحقة
+      // (رقم ثابت لا يتأثر بعدد أيام الحضور الفعلية)
+      totalReceivedSalaries += empTotalSalary;
     }
 
     return {

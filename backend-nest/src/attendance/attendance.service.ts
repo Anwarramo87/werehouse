@@ -11,6 +11,7 @@ import { UpdateAttendanceDto } from './dto/update-attendance.dto';
 import { AttendanceListQueryDto } from './dto/attendance-list-query.dto';
 import { ShortCacheService } from '../common/cache/short-cache.service';
 import { RealtimeGateway } from '../realtime/realtime.gateway';
+import { NotificationsService } from '../notifications/notifications.service';
 import { AttendanceAggregationService } from './attendance-aggregation.service';
 import { toFactoryDateKey } from '../common/utils/timezone.util';
 import { resolveSalary } from '../common/utils/salary-resolution.util';
@@ -146,6 +147,7 @@ export class AttendanceService {
     private readonly shortCache: ShortCacheService,
     private readonly realtimeGateway: RealtimeGateway,
     private readonly aggregationService: AttendanceAggregationService,
+    private readonly notifications: NotificationsService,
   ) {}
 
   private async invalidateAttendanceDashboardCaches() {
@@ -188,6 +190,7 @@ export class AttendanceService {
       const type = record.type.toUpperCase() === 'OUT' ? 'OUT' : 'IN';
       const arabicAction = action === 'updated' ? 'تحديث' : 'تسجيل';
       const arabicMovement = type === 'IN' ? 'دخول' : 'خروج';
+      const time = this.toTimeHHmm(record.timestamp);
 
       this.realtimeGateway.emitAttendanceUpdate({
         employeeId: record.employeeId,
@@ -195,11 +198,24 @@ export class AttendanceService {
         type,
         timestamp: record.timestamp.toISOString(),
         date: record.date,
-        time: this.toTimeHHmm(record.timestamp),
+        time,
         source: 'biometric',
         status: 'success',
         action,
         message: `تم ${arabicAction} ${arabicMovement} ${employeeName}`,
+      });
+
+      // مصدر واحد لإنشاء إشعار الحضور — يضمن تغطية كل المسارات (يدوي/تعديل/جهاز)
+      this.notifications.create({
+        type: type === 'OUT' ? 'CHECK_OUT' : 'CHECK_IN',
+        severity: 'INFO',
+        title: type === 'OUT' ? 'تسجيل خروج' : 'تسجيل دخول',
+        message: `قام ${employeeName} ب${arabicMovement} (${time}).`,
+        employeeId: record.employeeId,
+        employeeName,
+        entityType: 'attendance',
+        entityId: record.id,
+        metadata: { type, date: record.date },
       });
     } catch {
       // Realtime emission failures must never block attendance writes

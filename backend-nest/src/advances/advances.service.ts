@@ -2,6 +2,7 @@ import { BadRequestException, Injectable, NotFoundException } from '@nestjs/comm
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { ShortCacheService } from '../common/cache/short-cache.service';
+import { NotificationsService } from '../notifications/notifications.service';
 import { CreateAdvanceDto } from './dto/create-advance.dto';
 import { UpdateAdvanceDto } from './dto/update-advance.dto';
 
@@ -12,6 +13,7 @@ export class AdvancesService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly shortCache: ShortCacheService,
+    private readonly notifications: NotificationsService,
   ) {}
 
   // --- Helpers ---
@@ -77,6 +79,17 @@ export class AdvancesService {
         notes: dto.notes ?? null,
         issueDate,
       },
+    });
+
+    this.notifications.create({
+      type: 'ADVANCE',
+      severity: 'WARNING',
+      title: 'سلفة جديدة',
+      message: `تم منح الموظف ${dto.employeeId} سلفة بقيمة ${totalAmount}${dto.notes ? ` (${dto.notes})` : ''}.`,
+      employeeId: dto.employeeId,
+      entityType: 'advance',
+      entityId: result.id,
+      metadata: { totalAmount: totalAmount.toString(), advanceType: dto.advanceType },
     });
 
     await this.shortCache.invalidatePrefix('employees:stats');

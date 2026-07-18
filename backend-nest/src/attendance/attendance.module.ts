@@ -9,9 +9,10 @@ import { PrismaModule } from '../prisma/prisma.module';
 import { AttendanceAggregationService } from './attendance-aggregation.service';
 import { AttendanceAggregationController } from './attendance-aggregation.controller';
 import { DeviceApiKeyGuard } from '../common/guards/device-api-key.guard';
+import { NotificationsModule } from '../notifications/notifications.module';
 
 @Module({
-  imports: [RealtimeModule, PrismaModule],
+  imports: [RealtimeModule, PrismaModule, NotificationsModule],
   controllers: [
     AttendanceController,
     DailyLogsController,
