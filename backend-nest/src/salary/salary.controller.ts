@@ -7,6 +7,8 @@ import { Permissions } from '../common/decorators/permissions.decorator';
 import { UpsertSalaryDto } from './dto/upsert-salary.dto';
 import { CalculateAllowancesDto } from './dto/calculate-allowances.dto';
 import { BulkRaiseDto } from './dto/bulk-raise.dto';
+import { CurrentUser } from '../common/decorators/current-user.decorator';
+import { AuthenticatedUser } from '../common/types/authenticated-user.types';
 
 @ApiTags('salary')
 @ApiCookieAuth()
@@ -54,7 +56,7 @@ export class SalaryController {
 
   @Delete(':employeeId')
   @Permissions('manage_salary')
-  remove(@Param('employeeId') employeeId: string) {
-    return this.salaryService.remove(employeeId);
+  remove(@Param('employeeId') employeeId: string, @CurrentUser() user: AuthenticatedUser) {
+    return this.salaryService.remove(employeeId, user?.userId);
   }
 }

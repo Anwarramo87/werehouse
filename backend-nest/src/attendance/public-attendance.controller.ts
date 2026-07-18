@@ -11,9 +11,15 @@ import {
 import { ApiTags, ApiOperation } from '@nestjs/swagger';
 import { AttendanceAggregationService } from './attendance-aggregation.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { NotificationsService } from '../notifications/notifications.service';
 import { DeviceApiKeyGuard } from '../common/guards/device-api-key.guard';
 import { toFactoryDateKey } from '../common/utils/timezone.util';
 import { checkLeaveConflictForAttendance } from '../common/utils/leave-attendance-conflict.util';
+
+function formatTimeHHmm(value: Date): string {
+  const d = value instanceof Date ? value : new Date(value);
+  return d.toLocaleTimeString('ar', { hour: '2-digit', minute: '2-digit', hour12: false });
+}
 
 @ApiTags('attendance')
 @Controller('attendance/public')
@@ -28,7 +34,20 @@ export class PublicAttendanceController {
   constructor(
     private readonly prisma: PrismaService,
     private readonly aggregationService: AttendanceAggregationService,
+    private readonly notifications: NotificationsService,
   ) {}
+
+  private async safeGetEmployeeName(employeeId: string): Promise<string> {
+    try {
+      const employee = await this.prisma.employee.findUnique({
+        where: { employeeId },
+        select: { name: true },
+      });
+      return employee?.name || employeeId;
+    } catch {
+      return employeeId;
+    }
+  }
 
   @Post('check-in')
   @ApiOperation({ summary: 'Check-in an employee' })
@@ -67,6 +86,19 @@ export class PublicAttendanceController {
         source: 'device',
         verified: true,
       },
+    });
+
+    const employeeName = await this.safeGetEmployeeName(employeeId);
+    this.notifications.create({
+      type: 'CHECK_IN',
+      severity: 'INFO',
+      title: 'تسجيل دخول',
+      message: `قام ${employeeName} بالدخول (${formatTimeHHmm(now)}).`,
+      employeeId,
+      employeeName,
+      entityType: 'attendance',
+      entityId: record.id,
+      metadata: { type: 'IN', date: dateKey, source: 'device' },
     });
 
     this.aggregationService
@@ -159,6 +191,19 @@ export class PublicAttendanceController {
       });
 
       return outRecord;
+    });
+
+    const employeeName = await this.safeGetEmployeeName(employeeId);
+    this.notifications.create({
+      type: 'CHECK_OUT',
+      severity: 'INFO',
+      title: 'تسجيل خروج',
+      message: `قام ${employeeName} بالخروج (${formatTimeHHmm(now)}).`,
+      employeeId,
+      employeeName,
+      entityType: 'attendance',
+      entityId: record.id,
+      metadata: { type: 'OUT', date: dateKey, source: 'device' },
     });
 
     this.aggregationService

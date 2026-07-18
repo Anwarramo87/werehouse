@@ -6,6 +6,8 @@ import { CalculateAllowancesDto } from './dto/calculate-allowances.dto';
 import { BulkRaiseDto } from './dto/bulk-raise.dto';
 import { buildEmployeeSalaryMirror, resolveSalary } from '../common/utils/salary-resolution.util';
 
+const SALARY_DELETION_ENTITY = 'salary';
+
 @Injectable()
 export class SalaryService {
   constructor(private readonly prisma: PrismaService) {}
@@ -114,10 +116,91 @@ export class SalaryService {
     return record;
   }
 
-  async remove(employeeId: string) {
-    await this.getByEmployee(employeeId);
-    await this.prisma.employeeSalary.delete({ where: { employeeId } });
-    return { message: 'Salary record deleted' };
+  async remove(employeeId: string, deletedBy?: string) {
+    const record = await this.prisma.employeeSalary.findUnique({ where: { employeeId } });
+    if (!record) throw new NotFoundException(`No salary record for employee ${employeeId}`);
+
+    // نقل السجل إلى سلة المهملات (حذف ناعم) بدلاً من الحذف النهائي
+    await this.prisma.$transaction(async (tx) => {
+      await tx.deletedRecordHistory.create({
+        data: {
+          entityType: SALARY_DELETION_ENTITY,
+          recordId: record.employeeId,
+          payload: {
+            id: record.id,
+            employeeId: record.employeeId,
+            profession: record.profession,
+            baseSalary: record.baseSalary.toString(),
+            lumpSumSalary: record.lumpSumSalary.toString(),
+            livingAllowance: record.livingAllowance.toString(),
+            responsibilityAllowance: record.responsibilityAllowance.toString(),
+            extraEffortAllowance: record.extraEffortAllowance.toString(),
+            productionIncentive: record.productionIncentive.toString(),
+            insuranceAmount: record.insuranceAmount.toString(),
+            transportAllowance: record.transportAllowance.toString(),
+          },
+          deletedBy: deletedBy || null,
+        },
+      });
+
+      await tx.employeeSalary.delete({ where: { employeeId } });
+    });
+
+    return { message: 'تم نقل بيانات الراتب إلى سلة المهملات' };
+  }
+
+  /**
+   * استعادة سجل راتب من سلة المهملات (يُستدعى من TrashService)
+   */
+  async restoreSalary(historyId: string, restoredBy?: string) {
+    const history = await this.prisma.deletedRecordHistory.findFirst({
+      where: { id: historyId, entityType: SALARY_DELETION_ENTITY, restoredAt: null },
+    });
+    if (!history) throw new NotFoundException('History record not found or already restored');
+
+    const p = history.payload as Record<string, string | null | undefined>;
+
+    const employee = await this.prisma.employee.findUnique({ where: { employeeId: String(p.employeeId) } });
+    if (!employee) {
+      throw new NotFoundException(`لا يمكن الاستعادة — الموظف ${p.employeeId} غير موجود`);
+    }
+
+    return this.prisma.$transaction(async (tx) => {
+      await tx.employeeSalary.upsert({
+        where: { employeeId: String(p.employeeId) },
+        create: {
+          id: p.id ?? undefined,
+          employeeId: String(p.employeeId),
+          profession: (p.profession as string) ?? null,
+          baseSalary: new Prisma.Decimal(p.baseSalary ?? '0'),
+          lumpSumSalary: new Prisma.Decimal(p.lumpSumSalary ?? '0'),
+          livingAllowance: new Prisma.Decimal(p.livingAllowance ?? '0'),
+          responsibilityAllowance: new Prisma.Decimal(p.responsibilityAllowance ?? '0'),
+          extraEffortAllowance: new Prisma.Decimal(p.extraEffortAllowance ?? '0'),
+          productionIncentive: new Prisma.Decimal(p.productionIncentive ?? '0'),
+          insuranceAmount: new Prisma.Decimal(p.insuranceAmount ?? '0'),
+          transportAllowance: new Prisma.Decimal(p.transportAllowance ?? '0'),
+        },
+        update: {
+          profession: (p.profession as string) ?? null,
+          baseSalary: new Prisma.Decimal(p.baseSalary ?? '0'),
+          lumpSumSalary: new Prisma.Decimal(p.lumpSumSalary ?? '0'),
+          livingAllowance: new Prisma.Decimal(p.livingAllowance ?? '0'),
+          responsibilityAllowance: new Prisma.Decimal(p.responsibilityAllowance ?? '0'),
+          extraEffortAllowance: new Prisma.Decimal(p.extraEffortAllowance ?? '0'),
+          productionIncentive: new Prisma.Decimal(p.productionIncentive ?? '0'),
+          insuranceAmount: new Prisma.Decimal(p.insuranceAmount ?? '0'),
+          transportAllowance: new Prisma.Decimal(p.transportAllowance ?? '0'),
+        },
+      });
+
+      await tx.deletedRecordHistory.update({
+        where: { id: historyId },
+        data: { restoredAt: new Date(), restoredBy: restoredBy || null },
+      });
+
+      return { message: 'تمت استعادة بيانات الراتب بنجاح' };
+    });
   }
 
   /**
