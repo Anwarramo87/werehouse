@@ -6,6 +6,7 @@ import { BonusesService } from '../bonuses/bonuses.service';
 import { LeavesService } from '../leaves/leaves.service';
 import { EmployeesService } from '../employees/employees.service';
 import { AttendanceService } from '../attendance/attendance.service';
+import { SalaryService } from '../salary/salary.service';
 
 @Injectable()
 export class TrashService {
@@ -17,6 +18,7 @@ export class TrashService {
     private readonly leavesService: LeavesService,
     private readonly employeesService: EmployeesService,
     private readonly attendanceService: AttendanceService,
+    private readonly salaryService: SalaryService,
   ) {}
 
   async list(query: {
@@ -97,6 +99,8 @@ export class TrashService {
         return this.employeesService.restoreEmployee(historyId, restoredBy);
       case 'attendance':
         return this.attendanceService.restore(historyId, restoredBy);
+      case 'salary':
+        return this.salaryService.restoreSalary(historyId, restoredBy);
       default:
         throw new NotFoundException(`Unknown entity type: ${history.entityType}`);
     }
@@ -108,6 +112,19 @@ export class TrashService {
     });
 
     if (!history) throw new NotFoundException('History record not found');
+
+    // للراتب: التأكد من حذف السجل الفعلي نهائياً (تجنب السجلات اليتيمة)
+    if (history.entityType === 'salary') {
+      const p = history.payload as Record<string, string | null | undefined>;
+      const employeeId = p?.employeeId;
+      if (employeeId) {
+        await this.prisma.employeeSalary
+          .deleteMany({ where: { employeeId } })
+          .catch(() => {
+            /* السجل可能已经 حُذف عند نقله للسلة — تجاهل الخطأ */
+          });
+      }
+    }
 
     await this.prisma.deletedRecordHistory.delete({
       where: { id: historyId },

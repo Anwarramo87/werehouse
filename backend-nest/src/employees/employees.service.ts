@@ -11,6 +11,7 @@ import { CreateEmployeeDto } from './dto/create-employee.dto';
 import { UpdateEmployeeDto } from './dto/update-employee.dto';
 import { EmployeesListQueryDto } from './dto/employees-list-query.dto';
 import { ShortCacheService } from '../common/cache/short-cache.service';
+import { NotificationsService } from '../notifications/notifications.service';
 import { EmployeeProfileQueryDto } from './dto/employee-profile-query.dto';
 import { TerminateEmployeeDto } from './dto/terminate-employee.dto';
 import { TerminateEmployeeBodyDto } from './dto/terminate-employee-body.dto';
@@ -39,6 +40,7 @@ export class EmployeesService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly shortCache: ShortCacheService,
+    private readonly notifications: NotificationsService,
   ) {}
 
   private normalizeOptionalString(value?: string | null) {
@@ -863,6 +865,18 @@ export class EmployeesService {
     });
 
     await this.shortCache.invalidatePrefix('employees:stats');
+
+    const isResignation = terminationType === 'resignation';
+    this.notifications.create({
+      type: isResignation ? 'RESIGNATION' : 'TERMINATION',
+      severity: 'WARNING',
+      title: isResignation ? 'استقالة موظف' : 'إنهاء خدمة موظف',
+      message: `تم ${isResignation ? 'قبول استقالة' : 'إنهاء خدمة'} الموظف ${employee.name} (${employeeId}).${dto.terminationReason ? ` السبب: ${dto.terminationReason}` : ''}`,
+      employeeId,
+      employeeName: employee.name,
+      entityType: 'employee',
+      metadata: { terminationType, terminationReason: dto.terminationReason },
+    });
 
     return { message: successMessage, employee: updated };
   }
