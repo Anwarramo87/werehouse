@@ -867,7 +867,7 @@ export class EmployeesService {
     await this.shortCache.invalidatePrefix('employees:stats');
 
     const isResignation = terminationType === 'resignation';
-    this.notifications.create({
+    void this.notifications.create({
       type: isResignation ? 'RESIGNATION' : 'TERMINATION',
       severity: 'WARNING',
       title: isResignation ? 'استقالة موظف' : 'إنهاء خدمة موظف',

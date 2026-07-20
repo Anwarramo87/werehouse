@@ -81,7 +81,7 @@ export class AdvancesService {
       },
     });
 
-    this.notifications.create({
+    void this.notifications.create({
       type: 'ADVANCE',
       severity: 'WARNING',
       title: 'سلفة جديدة',

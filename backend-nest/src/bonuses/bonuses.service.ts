@@ -96,7 +96,7 @@ export class BonusesService {
         });
       }
       await this.shortCache.invalidatePrefix('employees:stats');
-      this.notifications.create({
+      void this.notifications.create({
         type: 'BONUS',
         severity: 'SUCCESS',
         title: 'زيادة راتب',
@@ -119,7 +119,7 @@ export class BonusesService {
     });
 
     const totalReward = (dto.bonusAmount ?? 0) + (dto.assistanceAmount ?? 0);
-    this.notifications.create({
+    void this.notifications.create({
       type: 'BONUS',
       severity: 'SUCCESS',
       title: 'منحة / مكافأة جديدة',

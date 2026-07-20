@@ -9,6 +9,7 @@ import { InjectQueue } from '@nestjs/bullmq';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { paginationMeta, resolvePagination } from '../common/utils/pagination.util';
+import { toFactoryDateKey } from '../common/utils/timezone.util';
 import { CalculatePayrollDto } from './dto/calculate-payroll.dto';
 import { PayrollListQueryDto } from './dto/payroll-list-query.dto';
 import { PayrollInputsQueryDto, UpsertPayrollInputDto } from './dto/payroll-input.dto';
@@ -363,15 +364,21 @@ export class PayrollService {
     }
 
     // جلب سجلات البصمة (IN/OUT) وأيام الإجازات لحساب الراتب على أساس الساعات
-    const periodStartStr = periodStart.toISOString().slice(0, 10);
-    const endDateStr = endDate.toISOString().slice(0, 10);
+    // NOTE: AttendanceRecord.date is stored in FACTORY-LOCAL time (+3h) via
+    // toFactoryDateKey(). The period bounds (periodStart/endDate) are UTC
+    // Date objects. Comparing a factory-local stored string against a UTC
+    // YYYY-MM-DD range silently drops punches that fall on period boundaries
+    // (e.g. a holiday on the 1st/31st), zeroing otherLeaveWorkedPay. We widen
+    // the fetch window by ±1 factory day and normalize keys to factory-local.
+    const fetchStart = toFactoryDateKey(new Date(periodStart.getTime() - 24 * 60 * 60 * 1000));
+    const fetchEnd = toFactoryDateKey(new Date(endDate.getTime() + 24 * 60 * 60 * 1000));
     const [inRecords, outRecords, sickHourlyLeaves, periodLeaves] = await Promise.all([
       this.prisma.attendanceRecord.findMany({
-        where: { employeeId, type: 'IN', date: { gte: periodStartStr, lte: endDateStr } },
+        where: { employeeId, type: 'IN', date: { gte: fetchStart, lte: fetchEnd } },
         select: { date: true, timestamp: true },
       }),
       this.prisma.attendanceRecord.findMany({
-        where: { employeeId, type: 'OUT', date: { gte: periodStartStr, lte: endDateStr } },
+        where: { employeeId, type: 'OUT', date: { gte: fetchStart, lte: fetchEnd } },
         select: { date: true, timestamp: true },
       }),
       this.prisma.leaveRequest.findMany({
@@ -392,7 +399,7 @@ export class PayrollService {
           startDate: { lte: endDate },
           endDate: { gte: periodStart },
         },
-        select: { leaveType: true, startDate: true, endDate: true, isHourly: true },
+        select: { leaveType: true, startDate: true, endDate: true, isHourly: true, notes: true },
       }),
     ]);
 
@@ -497,6 +504,7 @@ export class PayrollService {
       startDate: Date;
       endDate: Date;
       isHourly?: boolean | null;
+      notes?: string | null;
     }>;
     totalDelayMinutes: number;
     totalEarlyLeaveMinutes: number;
@@ -614,6 +622,104 @@ export class PayrollService {
       }
     }
 
+    // ── OTHER leave days: reward ONLY actual worked minutes × multiplier ──
+    // "أخرى" (OTHER) = public-holiday leave. The multiplier applies STRICTLY
+    // to hours the employee actually worked (punched IN/OUT) on the holiday.
+    // If the employee did not punch in, extra pay = 0 (Fix 2/3 already waive
+    // the absence deduction, so their normal day is covered).
+    //
+    // FIX: include BOTH hourly and non-hourly OTHER leaves. The previous
+    // `!l.isHourly` guard silently dropped any OTHER leave flagged as hourly
+    // (the frontend "إجازة ساعية" entry also uses backendType === 'OTHER'),
+    // which produced a permanent 0 even with valid punches. We now read the
+    // multiplier regardless of the isHourly flag.
+    const otherLeaves = periodLeaves.filter((l) => l.leaveType === 'OTHER');
+    let otherLeaveWorkedPay = new Prisma.Decimal(0);
+
+    // ── DEBUG OTHER LEAVE PIPELINE (entry point) ────────────────────────────
+    console.log(`=== [DEBUG OTHER LEAVE PIPELINE] ===`);
+    console.log(`Total periodLeaves: ${periodLeaves.length}`);
+    console.log(
+      `All leave types/status: ${JSON.stringify(
+        periodLeaves.map((l) => ({ t: l.leaveType, s: (l as { status?: string }).status, h: l.isHourly })),
+      )}`,
+    );
+    console.log(`OTHER leaves found: ${otherLeaves.length}`);
+    for (const ol of otherLeaves) {
+      console.log(
+        `  OTHER leave -> startDate=${ol.startDate} endDate=${ol.endDate} isHourly=${ol.isHourly} notes=${JSON.stringify(ol.notes)}`,
+      );
+    }
+    // ── END DEBUG ───────────────────────────────────────────────────────────
+    // Factory-local YYYY-MM-DD formatter — MUST match the stored
+    // AttendanceRecord.date key (which is produced by toFactoryDateKey, +3h).
+    // Using plain UTC components here caused the lookup key to mismatch the
+    // punch map on day-boundary cases, silently zeroing otherLeaveWorkedPay.
+    const toYmd = (d: Date): string => toFactoryDateKey(d);
+    for (const otherLeave of otherLeaves) {
+      const leaveStart = otherLeave.startDate > periodStart ? otherLeave.startDate : periodStart;
+      const leaveEnd = otherLeave.endDate < endDate ? otherLeave.endDate : endDate;
+      // iterate calendar days in LOCAL time (avoids UTC ±1 day drift)
+      let cur = new Date(leaveStart);
+      const endBound = new Date(leaveEnd);
+      while (cur <= endBound) {
+        // normalize lookup key to clean YYYY-MM-DD matching the map keys
+        const dateStr = toYmd(cur);
+        const firstInTs = firstInByDate.get(dateStr);
+        const lastOutTs = lastOutByDate.get(dateStr);
+
+        // ── DEBUG OTHER LEAVE MULTIPLIER ──────────────────────────────────
+        const dateKey = dateStr;
+        const leave = otherLeave;
+        const notesStrDebug = (leave && (leave as { notes?: string | null }).notes) || '';
+        // Robust match: tolerate optional whitespace after the colon,
+        // and also scan the reason field as a fallback source.
+        const reasonStrDebug =
+          (leave && (leave as { reason?: string | null }).reason) || '';
+        const multiplierMatchDebug =
+          /__multiplier:\s*([12])/.exec(notesStrDebug) ||
+          /__multiplier:\s*([12])/.exec(reasonStrDebug);
+        const multiplier = multiplierMatchDebug ? Number(multiplierMatchDebug[1]) : 1;
+        console.log(`=== [DEBUG OTHER LEAVE MULTIPLIER] ===`);
+        console.log(`Date Key: ${dateKey}`);
+        console.log(`Is Hourly Leave?: ${leave.isHourly}`);
+        console.log(`Raw Notes Content: ${notesStrDebug}`);
+        console.log(`Extracted Multiplier: ${multiplier}`);
+        console.log(`Punch In Found: ${firstInByDate.get(dateKey)}, Punch Out Found: ${lastOutByDate.get(dateKey)}`);
+        // ── END DEBUG ─────────────────────────────────────────────────────
+
+        // determine worked minutes: prefer actual punches; for hourly OTHER
+        // leaves with no punches, fall back to the leave's own time window.
+        let actualWorkedMinutes = 0;
+        if (firstInTs && lastOutTs) {
+          const localIn = toLocalMinutesFromTimestamp(firstInTs);
+          const localOut = toLocalMinutesFromTimestamp(lastOutTs);
+          actualWorkedMinutes = Math.max(0, localOut - localIn);
+        } else if (otherLeave.isHourly) {
+          const hourly = otherLeave as { startTime?: string | null; endTime?: string | null };
+          if (hourly.startTime && hourly.endTime) {
+            const [sh, sm] = hourly.startTime.split(':').map(Number);
+            const [eh, em] = hourly.endTime.split(':').map(Number);
+            actualWorkedMinutes = Math.max(0, (eh * 60 + em) - (sh * 60 + sm));
+          }
+        }
+
+        console.log(`Calculated Minutes: ${actualWorkedMinutes}`);
+
+        if (actualWorkedMinutes > 0) {
+          // قراءة المعامل من notes: __multiplier:1 أو __multiplier:2
+          // fallback safely to 1 if notes missing or regex mismatch
+          otherLeaveWorkedPay = otherLeaveWorkedPay.plus(
+            minuteWage.times(new Prisma.Decimal(actualWorkedMinutes)).times(new Prisma.Decimal(multiplier)),
+          );
+        }
+        console.log(`Resulting Pay: ${otherLeaveWorkedPay}`);
+
+        // advance exactly one local calendar day
+        cur = new Date(cur.getFullYear(), cur.getMonth(), cur.getDate() + 1);
+      }
+    }
+
     // ── Earned salary (formula matches frontend calcEarnedSalaryHourly) ─────
     // workedPay = minuteRate × contractualWorkedMinutes
     // + sickRemainderPay, fullSickPay, paidLeavePay
@@ -646,13 +752,14 @@ export class PayrollService {
       earnedBase
         .plus(overtimePay)
         .plus(weekendOvertimePay)
+        .plus(otherLeaveWorkedPay)   // إجازة "أخرى": دقائق فعلية × المعامل (1 أو 2)
         .minus(lateDeduction)
         .minus(earlyLeaveDeduction)
         .toNumber(),
     ));
 
     this.logger.log(
-      `[EARNED] ${employeeId} ${periodStart.toISOString().slice(0, 10)}→${endDate.toISOString().slice(0, 10)} ` +
+      `[EARNED] ${employeeId} ${(typeof periodStart === 'string' ? periodStart : periodStart.toISOString()).slice(0, 10)}→${(typeof endDate === 'string' ? endDate : endDate.toISOString()).slice(0, 10)} ` +
         `g3=${g3.toFixed(2)} presentDays=${presentDays} delay=${totalDelayMinutes}min early=${totalEarlyLeaveMinutes}min ` +
         `otWeekday=${weekdayOvertimeMinutes}min otFridayMinutes=${weekendOvertimeMinutes} net=${netEarned.toFixed(2)}`,
     );
@@ -807,6 +914,8 @@ export class PayrollService {
       earnedSalary: earnedSalary.toFixed(2),
       bonuses: totalBonuses.toFixed(2),
       deductions: totalDeductions.toFixed(2),
+      /** خصم الباص منفصلاً لعرضه في واجهة التصفية */
+      busDeduction: busDeduction.toFixed ? busDeduction.toFixed(2) : String(busDeduction),
       provisionalTotal: provisionalFinalSalary.toFixed(2),
       currency: employee.currency ?? 'SYP',
     };
@@ -1584,6 +1693,7 @@ export class PayrollService {
           isHourly: true,
           isPaid: true,
           startTime: true,
+          notes: true,
         },
       }),
       this.prisma.payrollInput.findMany({
@@ -1742,6 +1852,7 @@ export class PayrollService {
         isHourly: boolean | null;
         isPaid: boolean | null;
         startTime: string | null;
+        notes: string | null;
       }>
     >();
     for (const leave of approvedLeaves) {
@@ -1753,6 +1864,7 @@ export class PayrollService {
         isHourly: leave.isHourly ?? null,
         isPaid: leave.isPaid ?? null,
         startTime: leave.startTime ?? null,
+        notes: leave.notes ?? null,
       });
       periodLeavesByEmployee.set(leave.employeeId, arr);
     }
@@ -1958,10 +2070,16 @@ export class PayrollService {
           input?.transportAllowanceOverride ?? salaryRecord?.transportAllowance ?? 0,
         );
 
-        // Count paid approved leave days inside period (from pre-fetched map)
+        // Count paid approved leave days inside period (from pre-fetched map).
+        // OTHER (non-hourly) = public-holiday paid leave — count it so those days
+        // are excluded from the absence fallback (they are paid via otherLeaveWorkedPay).
         const paidApprovedLeaves = (
           periodLeavesByEmployee.get(employee.employeeId) || []
-        ).filter((l) => ['PAID', 'SICK', 'ADMIN', 'DEATH'].includes(l.leaveType));
+        ).filter(
+          (l) =>
+            ['PAID', 'SICK', 'ADMIN', 'DEATH'].includes(l.leaveType) ||
+            (l.leaveType === 'OTHER' && !l.isHourly),
+        );
 
         const paidApprovedLeaveDaysInPeriod = paidApprovedLeaves.reduce((sum, l) => {
           const overlapStart =
@@ -2194,6 +2312,8 @@ export class PayrollService {
           netPayRounded,
           roundingDifference,
           netPayWithAdvance,
+          // خصم الباص منفصلاً ليُعرض بالأزرق في الواجهة (منفصل عن باقي الخصومات)
+          busDeduction: busDeductionAmount,
           anomalies,
         });
       }
