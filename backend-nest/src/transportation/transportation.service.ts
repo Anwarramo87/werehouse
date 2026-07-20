@@ -174,13 +174,6 @@ export class TransportationService {
     });
     if (!bus) throw new NotFoundException(`Bus not found: ${busId}`);
 
-    // تحقق من السعة
-    if (bus._count.passengers >= bus.capacity) {
-      throw new BadRequestException(
-        `Bus is at full capacity (${bus.capacity} passengers)`,
-      );
-    }
-
     // تحقق من وجود الموظف
     const employee = await this.prisma.employee.findUnique({
       where: { employeeId: dto.employeeId },
@@ -204,39 +197,55 @@ export class TransportationService {
       );
     }
 
-    // تحقق من عدم التكرار
-    const existing = await this.prisma.busPassenger.findUnique({
-      where: { busId_employeeId: { busId: bus.id, employeeId: dto.employeeId } },
-    });
-    
-    let passenger;
+    // تحقق السعة + إضافة الراكب داخل transaction ذرّي (Serializable) لمنع
+    // تجاوز السعة عند وصول عدة طلبات متوازية (race condition): نعيد عدّ الركاب
+    // النشطين *داخل* الـ transaction قبل الكتابة، فينجح طلب واحد فقط ويفشل الباقي.
     let isNewPassenger = false;
-    
-    if (existing) {
-      if (existing.status === 'active') {
-        throw new ConflictException(`Employee ${dto.employeeId} is already on this bus`);
-      }
-      // إعادة تفعيل إذا كان غير نشط
-      passenger = await this.prisma.busPassenger.update({
-        where: { id: existing.id },
-        data: {
-          status: 'active',
-          name: dto.name,
-          subscriptionDate: dto.subscriptionDate ? new Date(dto.subscriptionDate) : new Date(),
-        },
-      });
-      isNewPassenger = true;
-    } else {
-      passenger = await this.prisma.busPassenger.create({
-        data: {
-          busId: bus.id,
-          employeeId: dto.employeeId,
-          name: dto.name,
-          subscriptionDate: dto.subscriptionDate ? new Date(dto.subscriptionDate) : new Date(),
-        },
-      });
-      isNewPassenger = true;
-    }
+    const passenger = await this.prisma.$transaction(
+      async (tx) => {
+        const activeCount = await tx.busPassenger.count({
+          where: { busId: bus.id, status: 'active' },
+        });
+
+        const existing = await tx.busPassenger.findUnique({
+          where: { busId_employeeId: { busId: bus.id, employeeId: dto.employeeId } },
+        });
+
+        // الراكب النشط الموجود مسبقاً لا يزيد العدد؛ غير ذلك نتحقق من السعة
+        const willIncreaseCount = !existing || existing.status !== 'active';
+        if (willIncreaseCount && activeCount >= bus.capacity) {
+          throw new BadRequestException(
+            `Bus is at full capacity (${bus.capacity} passengers)`,
+          );
+        }
+
+        if (existing) {
+          if (existing.status === 'active') {
+            throw new ConflictException(`Employee ${dto.employeeId} is already on this bus`);
+          }
+          isNewPassenger = true;
+          return tx.busPassenger.update({
+            where: { id: existing.id },
+            data: {
+              status: 'active',
+              name: dto.name,
+              subscriptionDate: dto.subscriptionDate ? new Date(dto.subscriptionDate) : new Date(),
+            },
+          });
+        }
+
+        isNewPassenger = true;
+        return tx.busPassenger.create({
+          data: {
+            busId: bus.id,
+            employeeId: dto.employeeId,
+            name: dto.name,
+            subscriptionDate: dto.subscriptionDate ? new Date(dto.subscriptionDate) : new Date(),
+          },
+        });
+      },
+      { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+    );
 
     // حساب التكلفة الصافية بعد خصم الشركة
     const netCost = Number(
