@@ -197,137 +197,63 @@ export class TransportationService {
       );
     }
 
-    // تحقق السعة + إضافة الراكب داخل transaction ذرّي (Serializable) لمنع
-    // تجاوز السعة عند وصول عدة طلبات متوازية (race condition): نعيد عدّ الركاب
-    // النشطين *داخل* الـ transaction قبل الكتابة، فينجح طلب واحد فقط ويفشل الباقي.
+    // تحقق السعة + إضافة الراكب داخل transaction مع قفل صفّي على الباص
+    // (SELECT ... FOR UPDATE). القفل يجبر الطلبات المتزامنة على التسلسل خلف
+    // بعضها بدل التعارض، فيُمنع تجاوز السعة (race condition) نهائياً ودون فشل
+    // بأخطاء serialization. أي طلب لاحق ينتظر القفل ثم يعيد عدّ الركاب الفعلي.
     let isNewPassenger = false;
-    const passenger = await this.prisma.$transaction(
-      async (tx) => {
-        const activeCount = await tx.busPassenger.count({
-          where: { busId: bus.id, status: 'active' },
-        });
+    const passenger = await this.prisma.$transaction(async (tx) => {
+      // قفل صف الباص لتسلسل الإضافات المتزامنة
+      await tx.$queryRaw`SELECT id FROM "buses" WHERE id = ${bus.id} FOR UPDATE`;
 
-        const existing = await tx.busPassenger.findUnique({
-          where: { busId_employeeId: { busId: bus.id, employeeId: dto.employeeId } },
-        });
+      const activeCount = await tx.busPassenger.count({
+        where: { busId: bus.id, status: 'active' },
+      });
 
-        // الراكب النشط الموجود مسبقاً لا يزيد العدد؛ غير ذلك نتحقق من السعة
-        const willIncreaseCount = !existing || existing.status !== 'active';
-        if (willIncreaseCount && activeCount >= bus.capacity) {
-          throw new BadRequestException(
-            `Bus is at full capacity (${bus.capacity} passengers)`,
-          );
+      const existing = await tx.busPassenger.findUnique({
+        where: { busId_employeeId: { busId: bus.id, employeeId: dto.employeeId } },
+      });
+
+      // الراكب النشط الموجود مسبقاً لا يزيد العدد؛ غير ذلك نتحقق من السعة
+      const willIncreaseCount = !existing || existing.status !== 'active';
+      if (willIncreaseCount && activeCount >= bus.capacity) {
+        throw new BadRequestException(
+          `Bus is at full capacity (${bus.capacity} passengers)`,
+        );
+      }
+
+      if (existing) {
+        if (existing.status === 'active') {
+          throw new ConflictException(`Employee ${dto.employeeId} is already on this bus`);
         }
-
-        if (existing) {
-          if (existing.status === 'active') {
-            throw new ConflictException(`Employee ${dto.employeeId} is already on this bus`);
-          }
-          isNewPassenger = true;
-          return tx.busPassenger.update({
-            where: { id: existing.id },
-            data: {
-              status: 'active',
-              name: dto.name,
-              subscriptionDate: dto.subscriptionDate ? new Date(dto.subscriptionDate) : new Date(),
-            },
-          });
-        }
-
         isNewPassenger = true;
-        return tx.busPassenger.create({
+        return tx.busPassenger.update({
+          where: { id: existing.id },
           data: {
-            busId: bus.id,
-            employeeId: dto.employeeId,
+            status: 'active',
             name: dto.name,
             subscriptionDate: dto.subscriptionDate ? new Date(dto.subscriptionDate) : new Date(),
           },
         });
-      },
-      { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
-    );
-
-    // حساب التكلفة الصافية بعد خصم الشركة
-    const netCost = Number(
-      new Prisma.Decimal(bus.totalCost.toString())
-        .times(new Prisma.Decimal((100 - Number(bus.companyDeductionPct)).toString()))
-        .div(100)
-        .toFixed(2),
-    );
-
-    // عدد الركاب بعد إضافة الموظف الجديد
-    const totalPassengers = bus._count.passengers + 1;
-    
-    // التكلفة لكل موظف = التكلفة الصافية ÷ عدد الموظفين
-    const costPerEmployee = Number((netCost / totalPassengers).toFixed(2));
-
-    // إضافة/تحديث الخصومات لجميع الموظفين في الباص
-    if (isNewPassenger) {
-      try {
-        // الحصول على جميع موظفي الباص (بما فيهم الجديد)
-        const allPassengers = [...bus.passengers, passenger];
-
-        // تحديد نص السبب للبحث
-        const transportReason = `بدل مواصلات - ${bus.route} (${bus.plateNumber})`;
-
-        this.logger.log(`Processing ${allPassengers.length} passengers, cost per employee: ${costPerEmployee}`);
-
-        // 1) قراءة جميع الخصومات الموجودة بالتوازي
-        const existingDiscountsPerPassenger = await Promise.all(
-          allPassengers.map(p =>
-            this.prisma.$queryRaw<any[]>`
-              SELECT eb.id, eb."employeeId", eb."bonusReason", eb."assistanceAmount"
-              FROM "EmployeeBonus" eb
-              WHERE eb."employeeId" = ${p.employeeId}
-              AND eb."bonusReason" LIKE ${`%${bus.plateNumber}%`}
-              AND eb."deletedAt" IS NULL
-            `,
-          ),
-        );
-
-        // 2) بناء عمليات الكتابة: تحديث أو إنشاء
-        const writeOps: Prisma.PrismaPromise<any>[] = [];
-
-        for (let i = 0; i < allPassengers.length; i++) {
-          const p = allPassengers[i];
-          const existing = existingDiscountsPerPassenger[i];
-
-          if (existing.length > 0) {
-            this.logger.debug(`Updating discount for ${p.employeeId}: ${existing[0].assistanceAmount} → ${costPerEmployee}`);
-            writeOps.push(
-              this.prisma.employeeBonus.update({
-                where: { id: existing[0].id },
-                data: { assistanceAmount: new Prisma.Decimal(costPerEmployee.toString()) },
-              }),
-            );
-          } else {
-            this.logger.debug(`Creating new discount for ${p.employeeId}: ${costPerEmployee}`);
-            const period = new Date().toISOString().slice(0, 7);
-            writeOps.push(
-              this.prisma.employeeBonus.create({
-                data: {
-                  employeeId: p.employeeId,
-                  bonusAmount: new Prisma.Decimal(0),
-                  bonusReason: transportReason,
-                  assistanceAmount: new Prisma.Decimal(costPerEmployee.toString()),
-                  period,
-                },
-              }),
-            );
-          }
-        }
-
-        // 3) تنفيذ جميع العمليات في transaction واحد
-        if (writeOps.length > 0) {
-          await this.prisma.$transaction(writeOps);
-        }
-        
-        this.logger.log(`Successfully processed all discounts`);
-      } catch (error) {
-        // في حال فشل إضافة الخصم، نسجل الخطأ لكن لا نلغي العملية
-        this.logger.error(`Failed to create/update transportation discounts`, error instanceof Error ? error.stack : String(error));
       }
-    }
+
+      isNewPassenger = true;
+      return tx.busPassenger.create({
+        data: {
+          busId: bus.id,
+          employeeId: dto.employeeId,
+          name: dto.name,
+          subscriptionDate: dto.subscriptionDate ? new Date(dto.subscriptionDate) : new Date(),
+        },
+      });
+    });
+
+    // ملاحظة: لا نحسب أو نخزّن أي خصم هنا عمداً. حصة المشترك تُحسب لحظياً
+    // وقت الرواتب عبر calculateProratedBusDeduction / calculateBatchBusDeductions
+    // بالمعادلة الصحيحة العالمية: (مجموع تكاليف كل الباصات بعد خصم الشركة)
+    // مقسوماً على إجمالي عدد المشتركين في كل الباصات (بالتساوي). هكذا أي إضافة
+    // أو انسحاب تعيد توزيع المبلغ تلقائياً على الباقين دون أرقام مخزّنة قديمة.
+    void isNewPassenger;
 
     return passenger;
   }
