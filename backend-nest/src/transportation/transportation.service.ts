@@ -418,17 +418,23 @@ export class TransportationService {
       return 26;
     }
 
-    // If subscription is in the target month, calculate remaining days
-    const lastDayOfMonth = new Date(targetYear, targetMonthIdx + 1, 0).getDate();
-    const subDay = subscriptionDate.getDate();
-    
-    // Calculate remaining days in the month including the subscription day
-    const remainingDays = lastDayOfMonth - subDay + 1;
-    
-    // Prorate based on 26 working days max
-    const activeWorkingDays = Math.min(26, Math.round((remainingDays / lastDayOfMonth) * 26));
-    
-    return activeWorkingDays;
+    // If subscription is in the target month, count ACTUAL remaining working
+    // days (Mon–Thu + Sun; Friday(5) and Saturday(6) excluded), including the
+    // subscription day. Previously this used a calendar-day proportion which
+    // wrongly counted weekends into the proration.
+    const lastDayOfMonth = new Date(Date.UTC(targetYear, targetMonthIdx + 1, 0));
+    const subDay = subscriptionDate.getUTCDate();
+    const start = new Date(Date.UTC(targetYear, targetMonthIdx, subDay));
+
+    let activeWorkingDays = 0;
+    const cur = new Date(start);
+    while (cur <= lastDayOfMonth) {
+      const dow = cur.getUTCDay();
+      if (dow !== 5 && dow !== 6) activeWorkingDays++;
+      cur.setUTCDate(cur.getUTCDate() + 1);
+    }
+
+    return Math.min(26, activeWorkingDays);
   }
 
   async calculateProratedBusDeduction(employeeId: string, targetMonth: Date) {
@@ -575,15 +581,10 @@ export class TransportationService {
       let activeWorkingDays: number;
 
       if (options?.isProvisional && options.terminationDate) {
-        const year = targetMonth.getFullYear();
-        const month = targetMonth.getMonth();
-        const startOfMonth = new Date(Date.UTC(year, month, 1));
-        const endOfMonth = new Date(Date.UTC(year, month + 1, 0, 23, 59, 59, 999));
-
-        const effectiveStartDate = new Date(Math.max(startOfMonth.getTime(), passenger.subscriptionDate.getTime()));
-        const effectiveEndDate = new Date(Math.min(endOfMonth.getTime(), options.terminationDate.getTime()));
-        
-        activeWorkingDays = this.getWorkingDaysInRange(effectiveStartDate, effectiveEndDate);
+        // For consistency with the Transportation page / regular payroll, the
+        // bus deduction is prorated for the full month from the subscription
+        // date (not clamped to the termination date).
+        activeWorkingDays = this.getActiveWorkingDays(passenger.subscriptionDate, targetMonth);
 
       } else {
         activeWorkingDays = this.getActiveWorkingDays(passenger.subscriptionDate, targetMonth);

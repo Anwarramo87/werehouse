@@ -192,7 +192,7 @@ export class AttendanceService {
       const arabicMovement = type === 'IN' ? 'دخول' : 'خروج';
       const time = this.toTimeHHmm(record.timestamp);
 
-      this.realtimeGateway.emitAttendanceUpdate({
+      void this.realtimeGateway.emitAttendanceUpdate({
         employeeId: record.employeeId,
         employeeName,
         type,
@@ -206,7 +206,7 @@ export class AttendanceService {
       });
 
       // مصدر واحد لإنشاء إشعار الحضور — يضمن تغطية كل المسارات (يدوي/تعديل/جهاز)
-      this.notifications.create({
+      void this.notifications.create({
         type: type === 'OUT' ? 'CHECK_OUT' : 'CHECK_IN',
         severity: 'INFO',
         title: type === 'OUT' ? 'تسجيل خروج' : 'تسجيل دخول',
@@ -1409,11 +1409,14 @@ export class AttendanceService {
     if (employeeId) leaveWhere.employeeId = employeeId;
     const approvedLeaves = await this.prisma.leaveRequest.findMany({
       where: leaveWhere,
-      select: { employeeId: true, startDate: true, endDate: true, leaveType: true },
+      select: { employeeId: true, startDate: true, endDate: true, leaveType: true, isHourly: true },
     });
     const periodStartUtc = new Date(`${periodStart}T00:00:00Z`);
     const periodEndUtc = new Date(`${periodEnd}T23:59:59Z`);
     const leaveDatesByEmployee = new Map<string, Set<string>>();
+    // publicHolidayLeaveDatesByEmployee: أيام العطل الرسمية (OTHER) فقط — تمنع خصومات التأخير والدوام الناقص
+    // باقي أنواع الإجازات (SICK, ADMIN, DEATH, PAID, UNPAID) تخضع للخصم الطبيعي
+    const publicHolidayLeaveDatesByEmployee = new Map<string, Set<string>>();
     const unpaidLeaveDaysByEmployee = new Map<string, number>();
     for (const leave of approvedLeaves) {
       const start = leave.startDate < periodStartUtc ? periodStartUtc : new Date(leave.startDate);
@@ -1429,6 +1432,13 @@ export class AttendanceService {
             leaveDatesByEmployee.set(leave.employeeId, new Set<string>());
           }
           leaveDatesByEmployee.get(leave.employeeId)!.add(d);
+          // عطلة رسمية (OTHER) كاملة — تمنع خصومات التأخير والدوام الناقص
+          if (leave.leaveType === 'OTHER' && !leave.isHourly) {
+            if (!publicHolidayLeaveDatesByEmployee.has(leave.employeeId)) {
+              publicHolidayLeaveDatesByEmployee.set(leave.employeeId, new Set<string>());
+            }
+            publicHolidayLeaveDatesByEmployee.get(leave.employeeId)!.add(d);
+          }
           // حساب أيام الإجازة بدون أجر (UNPAID)
           if (leave.leaveType === 'UNPAID') {
             dayCount++;
@@ -1581,6 +1591,8 @@ export class AttendanceService {
       // نحسب الأيام الفريدة التي وُجد فيها سجل IN (استثناء الجمعة فقط — السبت يوم عمل)
       // مع استبعاد أيام الإجازة المعتمدة حتى لو وُجدت فيها بصمة دخول (راجع الأعلى)
       const employeeLeaveDates = leaveDatesByEmployee.get(employee.employeeId);
+      // أيام العطل الرسمية (OTHER) فقط — تمنع خصومات التأخير والدوام الناقص
+      const employeePublicHolidayDates = publicHolidayLeaveDatesByEmployee.get(employee.employeeId);
       const datesWithCheckIn = new Set(
         records
           .filter((r) => r.type.toUpperCase() === 'IN')
@@ -1595,11 +1607,16 @@ export class AttendanceService {
       // أيام الحضور الفعلية = عدد الأيام الفريدة التي تم فيها تسجيل حضور
       const presentDays = datesWithCheckIn.size;
 
-      // أيام الغياب = أيام العمل المنقضية - أيام الحضور الفعلية
+      // عدد أيام العطل الرسمية (OTHER) في الفترة — لا تُحسب كغياب
+      const publicHolidayDaysInPeriod = employeePublicHolidayDates
+        ? [...employeePublicHolidayDates].filter((d) => d >= periodStart && d <= periodEnd).length
+        : 0;
+
+      // أيام الغياب = أيام العمل المنقضية - أيام الحضور الفعلية - أيام العطل الرسمية (OTHER)
       // نستخدم elapsedWorkDays (حتى اليوم) حتى لا نخصم مستقبلاً
       const absentDays = Math.max(
         0,
-        elapsedWorkDays - Math.min(datesWithCheckIn.size, elapsedWorkDays),
+        elapsedWorkDays - Math.min(datesWithCheckIn.size + publicHolidayDaysInPeriod, elapsedWorkDays),
       );
 
       // ── حساب دقائق التأخير الشهرية ───────────────────────────────────────
@@ -1669,6 +1686,11 @@ export class AttendanceService {
 
       let totalDelayMinutes = 0;
       for (const { timestamp, shiftPairMinutesLate, date } of firstInByDate.values()) {
+        // ── لا تأخير في يوم الجمعة أو أيام العطل الرسمية (OTHER) فقط ──
+        const dayOfWeekForDelay = new Date(`${date}T00:00:00Z`).getUTCDay();
+        if (dayOfWeekForDelay === 5) continue; // الجمعة — لا خصم
+        if (employeePublicHolidayDates && employeePublicHolidayDates.has(date)) continue; // عطلة رسمية (OTHER)
+
         let rawLate: number;
         if (shiftPairMinutesLate !== null && shiftPairMinutesLate > 0) {
           rawLate = shiftPairMinutesLate;
@@ -1703,6 +1725,11 @@ export class AttendanceService {
 
       let directMissingMinutes = 0;
       for (const [date, dayRecords] of recordsByDate.entries()) {
+        // ── لا خصم دوام ناقص في يوم الجمعة أو أيام العطل الرسمية (OTHER) فقط ──
+        const dayOfWeekForMissing = new Date(`${date}T00:00:00Z`).getUTCDay();
+        if (dayOfWeekForMissing === 5) continue; // الجمعة — لا خصم
+        if (employeePublicHolidayDates && employeePublicHolidayDates.has(date)) continue; // عطلة رسمية (OTHER)
+
         // تأخير هذا اليوم تحديداً
         const dayDelayInfo = [...firstInByDate.values()].find((x) => x.date === date);
         const dayDelay = dayDelayInfo

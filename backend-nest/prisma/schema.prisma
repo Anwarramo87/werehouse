@@ -364,6 +364,8 @@ model PayrollItem {
   netPayWithAdvance     Decimal  @default(0) @db.Decimal(14, 2)
   earlyLeaveMinutes     Int      @default(0)
   earlyLeaveDeduction   Decimal  @default(0) @db.Decimal(14, 2)
+  /** خصم اشتراك الباص — منفصل عن باقي الخصومات لعرضه بالأزرق */
+  busDeduction          Decimal  @default(0) @db.Decimal(14, 2)
   anomalies             String[] @default([])
   createdAt             DateTime @default(now())
   updatedAt             DateTime @updatedAt

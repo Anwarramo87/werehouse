@@ -393,6 +393,40 @@ export class AttendanceAggregationService {
       return null;
     }
 
+    // ── Step 1b: Skip deduction calculation on rest days (Friday) or public holidays (OTHER leave) ──
+    // Employees are not obligated to attend on Fridays or public holidays — any partial attendance
+    // should be rewarded (overtime), never penalized for delay or early departure.
+    // Other leave types (SICK, ADMIN, DEATH, PAID, UNPAID) still apply normal deductions
+    // if the employee punched in and did not complete their scheduled hours.
+    const dateUTC = new Date(`${dateStr}T00:00:00.000Z`);
+    const dayOfWeek = dateUTC.getUTCDay(); // 5 = Friday
+    if (dayOfWeek === 5) {
+      this.logger.debug(
+        `Skipping penalty calc for ${employeeId} on ${dateStr}: Friday (rest day)`,
+      );
+      return null;
+    }
+
+    // Check for full-day OTHER leave (عطلة / عيد / سبب آخر) — لا خصومات دائماً
+    // المعامل (×1 أو ×2) يُطبَّق في مرحلة الراتب عبر payroll.service — هنا فقط نلغي الخصومات
+    const otherLeave = await this.prisma.leaveRequest.findFirst({
+      where: {
+        employeeId,
+        status: 'APPROVED',
+        leaveType: 'OTHER',
+        isHourly: false,
+        startDate: { lte: dateUTC },
+        endDate: { gte: dateUTC },
+      },
+      select: { id: true, notes: true },
+    });
+    if (otherLeave) {
+      this.logger.debug(
+        `Skipping penalty calc for ${employeeId} on ${dateStr}: OTHER leave (notes=${otherLeave.notes ?? 'none'})`,
+      );
+      return null;
+    }
+
     // ── Step 2: Fetch raw attendance punches for the day ─────────────────────
     const punches = await this.prisma.attendanceRecord.findMany({
       where: { employeeId, date: dateStr },
