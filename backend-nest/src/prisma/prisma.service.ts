@@ -25,24 +25,54 @@ export class PrismaService
 {
   private readonly logger = new Logger(PrismaService.name);
   private readonly pool: Pool;
+  private readonly poolMax: number;
   private readonly slowQueryThresholdMs: number;
   private keepaliveTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(@Optional() private readonly metricsService?: MetricsService) {
+    // Allow horizontal scaling: total connections = replicas × max. Lower the
+    // per-instance max when scaling out to avoid exhausting Neon's limit.
+    // Pool size. The dashboard fires a large concurrent burst of independent
+    // API calls on load (~15-25 at once), so a tiny pool serializes them behind
+    // a queue and produces multi-second latency. Size the pool to absorb that
+    // burst. Neon's pooler caps the *server* connections anyway, so a larger
+    // local pool just means we hold waiting clients ready instead of queueing
+    // them at the Node level.
+    const maxConnections = Number(process.env.DATABASE_MAX_CONNECTIONS || 20);
+    const poolMax = Number.isFinite(maxConnections) && maxConnections > 0 ? maxConnections : 20;
+    // Bounded statement timeout (ms) so a slow/runaway query cannot hold one of
+    // the few pooled connections indefinitely and cause cascading exhaustion.
+    const statementTimeoutMs = Number(process.env.DATABASE_STATEMENT_TIMEOUT_MS || 30_000);
+
     const pool = new Pool({
       connectionString: process.env.DATABASE_URL,
-      // Keep connections alive — critical for Neon serverless
-      // Neon terminates idle connections aggressively, so we keep a small pool,
-      // disable idle-based eviction, and recycle connections before Neon kills them.
-      max: 5,
-      idleTimeoutMillis: 0, // never close on idle; rely on maxLifetime instead
-      maxLifetimeSeconds: 120, // recycle every 2 min, well under Neon's idle limit
+      // Keep connections alive — critical for Neon serverless.
+      // maxLifetimeSeconds recycles connections periodically to prevent stale
+      // sockets. 1800s (30 min) is conservative — short enough to reclaim dead
+      // sockets but long enough to avoid frequent reconnect storms. (The old
+      // 120s value caused measurable latency spikes; measured with pool stats.)
+      max: poolMax,
+      maxLifetimeSeconds: 1800,
+      idleTimeoutMillis: 0, // never close on idle; keepalive holds the socket
       connectionTimeoutMillis: 30_000, // Increased from 10s to 30s for Neon cold starts
       keepAlive: true,
       keepAliveInitialDelayMillis: 10_000,
       allowExitOnIdle: false,
       application_name: 'backend-nest',
     });
+
+    // Bounded statement timeout so a slow/runaway query cannot hold one of the
+    // few pooled connections indefinitely. We set it per-session via `SET`
+    // rather than the startup `options` parameter: Neon's connection *pooler*
+    // rejects `statement_timeout` in the startup package (error 08P01), so it
+    // must be applied after the connection is established.
+    if (statementTimeoutMs > 0) {
+      pool.on('connect', (client: import('pg').PoolClient) => {
+        void client.query(
+          `SET statement_timeout = ${Math.round(statementTimeoutMs)}`,
+        );
+      });
+    }
 
     // Swallow pool-level errors so a single dead socket doesn't crash the process
     // or surface as an unhandledRejection. The pool auto-discards failed sockets.
@@ -56,6 +86,7 @@ export class PrismaService
     });
 
     this.pool = pool;
+    this.poolMax = poolMax;
     this.slowQueryThresholdMs = this.resolveSlowQueryThreshold();
     this.registerSlowQueryObserver();
   }
@@ -89,7 +120,30 @@ export class PrismaService
         `[Slow Query] ${event.duration}ms (threshold: ${this.slowQueryThresholdMs}ms) ${queryPreview}`,
       );
       this.metricsService?.dbSlowQueriesTotal.inc();
+
+      // Log pool state alongside slow queries so we can see if pool exhaustion
+      // is contributing to the slowness.
+      this.logger.warn(`[Pool Stats] ${this.getPoolStatsSummary()}`);
     });
+  }
+
+  /**
+   * Returns a snapshot of the pg Pool's connection state.
+   * Use this to diagnose whether pool exhaustion is contributing to latency:
+   *   waitingCount > 0  → requests are queued, pool is saturated
+   *   waitingCount = 0  → pool is innocent, bottleneck is elsewhere
+   */
+  getPoolStats() {
+    return {
+      totalCount: this.pool.totalCount,
+      idleCount: this.pool.idleCount,
+      waitingCount: this.pool.waitingCount,
+    };
+  }
+
+  private getPoolStatsSummary() {
+    const s = this.getPoolStats();
+    return `total=${s.totalCount} idle=${s.idleCount} waiting=${s.waitingCount}`;
   }
 
   /**
@@ -103,6 +157,7 @@ export class PrismaService
       try {
         await this.$connect();
         this.logger.log('Database connection established.');
+        await this.warmupPool();
         this.startKeepalive();
         return;
       } catch (error) {
@@ -149,6 +204,30 @@ export class PrismaService
     this.logger.log(
       `[Keepalive] Started — pinging Neon every ${KEEPALIVE_INTERVAL_MS / 1000}s to prevent sleep.`,
     );
+  }
+
+  /**
+   * Eagerly opens a few connections so the first real request burst doesn't
+   * pay the full cost of establishing the entire pool at once against the
+   * Neon pooler (TLS + auth + SET overhead). Without this, the first dashboard
+   * load after a cold start can take several seconds while 20 connections are
+   * opened simultaneously.
+   */
+  private async warmupPool() {
+    const warmCount = Math.min(this.poolMax, 10);
+    const clients: import('pg').PoolClient[] = [];
+    try {
+      for (let i = 0; i < warmCount; i++) {
+        clients.push(await this.pool.connect());
+      }
+      this.logger.log(`[PrismaService] Warmed up ${clients.length} pooled connections.`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.warn(`[PrismaService] Pool warmup partial/failed: ${message}`);
+    } finally {
+      // Release back to the pool (the `connect` event already ran SET on each).
+      clients.forEach((c) => c.release());
+    }
   }
 
   async enableShutdownHooks(app: INestApplication) {
