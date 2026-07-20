@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { ShortCacheService } from '../common/cache/short-cache.service';
 import { UpsertSalaryDto } from './dto/upsert-salary.dto';
 import { CalculateAllowancesDto } from './dto/calculate-allowances.dto';
 import { BulkRaiseDto } from './dto/bulk-raise.dto';
@@ -10,7 +11,15 @@ const SALARY_DELETION_ENTITY = 'salary';
 
 @Injectable()
 export class SalaryService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly shortCache: ShortCacheService,
+  ) {}
+
+  private async invalidateDashboardCache() {
+    await this.shortCache.invalidatePrefix('dashboard:home-stats:');
+  }
+
 
   /**
    * POST /api/salary/calculate-allowances
@@ -113,6 +122,8 @@ export class SalaryService {
       });
     }
 
+    await this.invalidateDashboardCache();
+
     return record;
   }
 
@@ -145,6 +156,8 @@ export class SalaryService {
 
       await tx.employeeSalary.delete({ where: { employeeId } });
     });
+
+    await this.invalidateDashboardCache();
 
     return { message: 'تم نقل بيانات الراتب إلى سلة المهملات' };
   }
@@ -199,6 +212,8 @@ export class SalaryService {
         data: { restoredAt: new Date(), restoredBy: restoredBy || null },
       });
 
+      await this.invalidateDashboardCache();
+
       return { message: 'تمت استعادة بيانات الراتب بنجاح' };
     });
   }
@@ -252,6 +267,8 @@ export class SalaryService {
 
     await this.prisma.$transaction(transactionOperations);
     const updates = salaryRecords;
+
+    await this.invalidateDashboardCache();
 
     return {
       updated: updates.length,

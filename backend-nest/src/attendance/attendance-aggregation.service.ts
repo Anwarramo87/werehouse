@@ -155,6 +155,8 @@ export class AttendanceAggregationService {
     punches: DailyPunchRecord[],
     scheduledStartMin: number,
     scheduledEndMin: number,
+    scheduledEndEffMin: number,
+    isNightShift = false,
   ): { scheduledWorkedMinutes: number; overtimeMinutes: number } {
     if (punches.length === 0) return { scheduledWorkedMinutes: 0, overtimeMinutes: 0 };
 
@@ -170,18 +172,27 @@ export class AttendanceAggregationService {
         pendingIn = punch.timestamp;
       } else if (type === 'OUT' && pendingIn) {
         const inMin = this.utcTimestampToLocalMinutes(pendingIn);
-        const outMin = this.utcTimestampToLocalMinutes(punch.timestamp);
+        let outMin = this.utcTimestampToLocalMinutes(punch.timestamp);
+
+        // For night shifts, an OUT that occurs before the scheduled start
+        // (e.g. 06:00 OUT for a 22:00→06:00 shift) actually happens on the
+        // following day — shift it forward so the pair duration is positive.
+        if (isNightShift && outMin < scheduledStartMin) {
+          outMin += 1440;
+        }
+
+        const schedEnd = isNightShift ? scheduledEndEffMin : scheduledEndMin;
 
         // Clamp the pair to the scheduled window for "scheduled" bucket
         const clampedIn = Math.max(inMin, scheduledStartMin);
-        const clampedOut = Math.min(outMin, scheduledEndMin);
+        const clampedOut = Math.min(outMin, schedEnd);
         if (clampedOut > clampedIn) {
           scheduledWorkedMs += (clampedOut - clampedIn) * 60_000;
         }
 
         // Overtime = time worked strictly after scheduledEnd
-        if (outMin > scheduledEndMin) {
-          const overtimeStart = Math.max(inMin, scheduledEndMin);
+        if (outMin > schedEnd) {
+          const overtimeStart = Math.max(inMin, schedEnd);
           overtimeMs += (outMin - overtimeStart) * 60_000;
         }
 
@@ -202,7 +213,7 @@ export class AttendanceAggregationService {
       if (totalFromShiftPair > 0) {
         scheduledWorkedMinutes = Math.min(
           Math.round(totalFromShiftPair * 60),
-          scheduledEndMin - scheduledStartMin,
+          scheduledEndEffMin - scheduledStartMin,
         );
       }
     }
@@ -285,6 +296,7 @@ export class AttendanceAggregationService {
     punches: DailyPunchRecord[],
     scheduledStartMin: number,
     gracePeriodMinutes: number,
+    isNightShift = false,
   ): number {
     const sorted = [...punches].sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
 
@@ -299,7 +311,24 @@ export class AttendanceAggregationService {
 
     // Compute from UTC timestamp → local time
     const localArrivalMin = this.utcTimestampToLocalMinutes(firstIn.timestamp);
-    const rawDelay = Math.max(0, localArrivalMin - scheduledStartMin);
+
+    // Pick the scheduled-start instance (same day or next day) closest to the
+    // arrival. This correctly handles: (a) night shifts whose start is near
+    // midnight, and (b) the edge where an employee clocks in just BEFORE the
+    // scheduled start (e.g. 23:50 for a 00:00 start → early, not 23h50m late).
+    // Candidates: scheduledStart on the arrival day and on the following day.
+    const candidates = [scheduledStartMin, scheduledStartMin + 1440];
+    let startInstance = scheduledStartMin;
+    let best = Infinity;
+    for (const c of candidates) {
+      const d = Math.abs(localArrivalMin - c);
+      if (d < best) {
+        best = d;
+        startInstance = c;
+      }
+    }
+
+    const rawDelay = Math.max(0, localArrivalMin - startInstance);
     return rawDelay > gracePeriodMinutes ? rawDelay - gracePeriodMinutes : 0;
   }
 
@@ -316,6 +345,7 @@ export class AttendanceAggregationService {
   private calculateEarlyLeaveFromPunches(
     punches: DailyPunchRecord[],
     scheduledEndMin: number,
+    scheduledEndEffMin: number,
   ): number {
     const sorted = [...punches].sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
 
@@ -329,7 +359,21 @@ export class AttendanceAggregationService {
       if (hasInAfter) continue; // not the final departure
 
       const localDepartureMin = this.utcTimestampToLocalMinutes(sorted[i].timestamp);
-      return Math.max(0, scheduledEndMin - localDepartureMin);
+
+      // Pick the scheduled-end instance (same day or next day) closest to the
+      // departure. For night shifts the effective end is the next-day occurrence.
+      const candidates = [scheduledEndMin, scheduledEndEffMin];
+      let endInstance = scheduledEndMin;
+      let best = Infinity;
+      for (const c of candidates) {
+        const d = Math.abs(localDepartureMin - c);
+        if (d < best) {
+          best = d;
+          endInstance = c;
+        }
+      }
+
+      return Math.max(0, endInstance - localDepartureMin);
     }
 
     // No valid final OUT punch — handled as absence
@@ -384,14 +428,14 @@ export class AttendanceAggregationService {
       return null;
     }
 
-    // Required work duration for the day
-    const requiredMinutes = Math.max(0, scheduledEndMin - scheduledStartMin);
-    if (requiredMinutes <= 0) {
-      this.logger.debug(
-        `Skipping ${employeeId} on ${dateStr}: requiredMinutes is 0 (start=${employee.scheduledStart}, end=${employee.scheduledEnd})`,
-      );
-      return null;
-    }
+    // Detect night shifts (schedule crosses midnight) e.g. 22:00→06:00.
+    // For these, extend the scheduled end into the next day so the required
+    // work duration stays positive and the calculations below are correct.
+    const isNightShift = scheduledEndMin <= scheduledStartMin;
+    const scheduledEndEffMin = isNightShift ? scheduledEndMin + 1440 : scheduledEndMin;
+
+    // Required work duration for the day (always positive once night handled)
+    const requiredMinutes = Math.max(0, scheduledEndEffMin - scheduledStartMin);
 
     // ── Step 1b: Skip deduction calculation on rest days (Friday) or public holidays (OTHER leave) ──
     // Employees are not obligated to attend on Fridays or public holidays — any partial attendance
@@ -451,6 +495,8 @@ export class AttendanceAggregationService {
       punches,
       scheduledStartMin,
       scheduledEndMin,
+      scheduledEndEffMin,
+      isNightShift,
     );
     const actualWorkedMinutes = scheduledWorkedMinutes;
 
@@ -478,6 +524,7 @@ export class AttendanceAggregationService {
       punches,
       effectiveScheduledStartMin,
       empGracePeriod,
+      isNightShift,
     );
 
     // If shiftPair.minutesLate was used (biometric pre-calc), it doesn't know
