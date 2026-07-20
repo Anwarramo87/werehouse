@@ -212,14 +212,17 @@ export class PayrollService {
     return this.toDateOnly(effectiveDate);
   }
 
-  private async resolvePayrollRun(runIdentifier: string) {
+  private async resolvePayrollRun(
+    runIdentifier: string,
+    db: Prisma.TransactionClient = this.prisma,
+  ) {
     const where: Prisma.PayrollRunWhereInput = this.isUuid(runIdentifier)
       ? {
           OR: [{ id: runIdentifier }, { runId: runIdentifier }],
         }
       : { runId: runIdentifier };
 
-    const run = await this.prisma.payrollRun.findFirst({ where });
+    const run = await db.payrollRun.findFirst({ where });
     if (!run) throw new NotFoundException('Payroll run not found');
     return run;
   }
@@ -812,69 +815,129 @@ export class PayrollService {
     };
   }
 
+  /**
+   * Derive a stable, positive bigint advisory-lock key from a period string.
+   * Used to serialize concurrent payroll runs for the SAME period so two
+   * admins (or a double-click / retry) cannot both create a run and
+   * double-delete/double-compute the same period.
+   */
+  private payrollPeriodLockKey(periodStart: string, periodEnd: string): bigint {
+    const str = `${periodStart}|${periodEnd}`;
+    let hash = 0n;
+    for (let i = 0; i < str.length; i += 1) {
+      hash = (hash * 31n + BigInt(str.charCodeAt(i))) & 0x7fffffffffffffffn;
+
+    }
+    return hash;
+  }
+
   async calculate(dto: CalculatePayrollDto, userId?: string) {
     const periodStart = this.toDateOnly(dto.periodStart);
     const periodEnd = this.toDateOnly(dto.periodEnd);
 
-    // Check for an existing payroll run for the given period
-    const existingRun = await this.prisma.payrollRun.findFirst({
-      where: {
-        periodStart: periodStart,
-        periodEnd: periodEnd,
-      },
+    // Serialize concurrent payroll runs for the same period. We use a
+    // transaction-scoped advisory lock (`pg_advisory_xact_lock`) acquired inside
+    // an interactive transaction so the lock and all guarded work share ONE
+    // physical connection (PrismaPg pools connections, so two separate
+    // `$executeRawUnsafe` calls could hit different connections and leak the
+    // lock). The xact lock is released automatically when the transaction ends,
+    // so there is no manual unlock to forget.
+    const lockKey = this.payrollPeriodLockKey(dto.periodStart, dto.periodEnd);
+
+    return this.prisma.$transaction(async (tx) => {
+      await tx.$executeRawUnsafe(`SELECT pg_advisory_xact_lock(${lockKey})`);
+
+      // Check for an existing payroll run for the given period
+      const existingRun = await tx.payrollRun.findFirst({
+        where: {
+          periodStart: periodStart,
+          periodEnd: periodEnd,
+        },
+      });
+
+      if (existingRun) {
+        this.logger.log(
+          `Deleting existing payroll run ${existingRun.runId} for period ${dto.periodStart} - ${dto.periodEnd}`,
+        );
+        await this.deletePayrollRun(existingRun.id, userId, tx);
+      }
+
+      const runDateKey = dto.periodStart.slice(0, 10).replace(/-/g, '');
+      const runId = `PAY${runDateKey}-${Date.now().toString().slice(-4)}`;
+
+      // Create the payroll run record first
+      const run = await tx.payrollRun.create({
+        data: {
+          runId,
+          periodStart: this.toDateOnly(dto.periodStart),
+          periodEnd: this.toDateOnly(dto.periodEnd),
+          runBy: userId,
+          status: 'queued',
+          approvalStatus: 'pending',
+          totalEmployees: 0,
+        },
+      });
+
+      // Process the payroll run. Processing uses `this.prisma` (its own
+      // connection) but still executes INSIDE this callback, so the xact lock
+      // remains held until the transaction commits — serializing the whole
+      // calculate for this period. `processPayrollRun` does not open its own
+      // transaction, so nesting is not an issue.
+      try {
+        const updatedRun = await this.processPayrollRun(run.id, dto, userId);
+        return { message: 'Payroll calculated successfully', payrollRun: updatedRun };
+      } catch (error) {
+        await this.markPayrollRunFailed(
+          run.id,
+          error instanceof Error ? error.message : 'Unknown error during payroll processing',
+        );
+        throw error;
+      }
     });
-
-    if (existingRun) {
-      this.logger.log(
-        `Deleting existing payroll run ${existingRun.runId} for period ${dto.periodStart} - ${dto.periodEnd}`,
-      );
-      await this.deletePayrollRun(existingRun.id, userId);
-    }
-
-    const runDateKey = dto.periodStart.slice(0, 10).replace(/-/g, '');
-    const runId = `PAY${runDateKey}-${Date.now().toString().slice(-4)}`;
-
-    // Create the payroll run record first
-    const run = await this.prisma.payrollRun.create({
-      data: {
-        runId,
-        periodStart: this.toDateOnly(dto.periodStart),
-        periodEnd: this.toDateOnly(dto.periodEnd),
-        runBy: userId,
-        status: 'queued',
-        approvalStatus: 'pending',
-        totalEmployees: 0,
-      },
-    });
-
-    // Process the payroll run outside the transaction
-    try {
-      const updatedRun = await this.processPayrollRun(run.id, dto, userId);
-      return { message: 'Payroll calculated successfully', payrollRun: updatedRun };
-    } catch (error) {
-      // Mark the run as failed if processing fails
-      await this.markPayrollRunFailed(
-        run.id,
-        error instanceof Error ? error.message : 'Unknown error during payroll processing',
-      );
-      throw error;
-    }
   }
 
   async calculateAsync(dto: CalculatePayrollDto, userId?: string) {
-    const runDateKey = dto.periodStart.slice(0, 10).replace(/-/g, '');
-    const runId = `PAY${runDateKey}-${Date.now().toString().slice(-4)}`;
+    const periodStart = this.toDateOnly(dto.periodStart);
+    const periodEnd = this.toDateOnly(dto.periodEnd);
 
-    const run = await this.prisma.payrollRun.create({
-      data: {
-        runId,
-        periodStart: this.toDateOnly(dto.periodStart),
-        periodEnd: this.toDateOnly(dto.periodEnd),
-        runBy: userId,
-        status: 'queued',
-        approvalStatus: 'pending',
-        totalEmployees: 0,
-      },
+    // Serialize concurrent async payroll requests for the SAME period. Without
+    // this, two simultaneous `calculateAsync` calls would each create a separate
+    // run for the same period (no period check existed before), producing
+    // duplicate PayrollItem sets and an ambiguous "current run" for the period.
+    // We reuse the same transaction-scoped advisory lock as `calculate()` so the
+    // lock and the guarded create share ONE physical connection. The existing
+    // (non-final) run for the period is removed before the new one is created,
+    // guaranteeing at most one run per period at any time.
+    const lockKey = this.payrollPeriodLockKey(dto.periodStart, dto.periodEnd);
+
+    const run = await this.prisma.$transaction(async (tx) => {
+      await tx.$executeRawUnsafe(`SELECT pg_advisory_xact_lock(${lockKey})`);
+
+      const existingRun = await tx.payrollRun.findFirst({
+        where: { periodStart, periodEnd },
+      });
+
+      if (existingRun && existingRun.approvalStatus !== 'approved') {
+        this.logger.log(
+          `Replacing existing payroll run ${existingRun.runId} for async period ${dto.periodStart} - ${dto.periodEnd}`,
+        );
+        await this.deletePayrollRun(existingRun.id, userId, tx);
+      }
+
+      const runDateKey = dto.periodStart.slice(0, 10).replace(/-/g, '');
+      const runId = `PAY${runDateKey}-${Date.now().toString().slice(-4)}`;
+
+      return tx.payrollRun.create({
+        data: {
+          runId,
+          periodStart,
+          periodEnd,
+          runBy: userId,
+          status: 'queued',
+          approvalStatus: 'pending',
+          totalEmployees: 0,
+        },
+      });
     });
 
     try {
@@ -940,30 +1003,57 @@ export class PayrollService {
     return { message: 'Payroll rejected successfully', payrollRun: updated };
   }
 
-  async deletePayrollRun(runId: string, userId?: string) {
-    const run = await this.resolvePayrollRun(runId);
+  async deletePayrollRun(
+    runId: string,
+    userId?: string,
+    tx?: Prisma.TransactionClient,
+  ) {
+    const db = tx ?? this.prisma;
+    const run = await this.resolvePayrollRun(runId, db);
 
     if (run.approvalStatus === 'approved') {
       throw new BadRequestException('Cannot delete an approved payroll run');
     }
 
-    const items = await this.prisma.payrollItem.findMany({ where: { payrollRunId: run.id } });
+    const items = await db.payrollItem.findMany({ where: { payrollRunId: run.id } });
 
-    await this.prisma.deletedRecordHistory.create({
-      data: {
-        entityType: 'PayrollRun',
-        recordId: run.id,
-        payload: {
-          run,
-          items,
-          deletedBy: userId,
-          deletedAt: new Date().toISOString(),
+    // Atomic delete: history snapshot + items + run in a single transaction so a
+    // crash between statements cannot leave orphaned items or a dangling run.
+    // When called inside an outer transaction (tx provided), execute directly
+    // since Prisma does not support nested interactive transactions.
+    if (tx) {
+      await db.deletedRecordHistory.create({
+        data: {
+          entityType: 'PayrollRun',
+          recordId: run.id,
+          payload: {
+            run,
+            items,
+            deletedBy: userId,
+            deletedAt: new Date().toISOString(),
+          },
         },
-      },
-    });
-
-    await this.prisma.payrollItem.deleteMany({ where: { payrollRunId: run.id } });
-    await this.prisma.payrollRun.delete({ where: { id: run.id } });
+      });
+      await db.payrollItem.deleteMany({ where: { payrollRunId: run.id } });
+      await db.payrollRun.delete({ where: { id: run.id } });
+    } else {
+      await this.prisma.$transaction([
+        this.prisma.deletedRecordHistory.create({
+          data: {
+            entityType: 'PayrollRun',
+            recordId: run.id,
+            payload: {
+              run,
+              items,
+              deletedBy: userId,
+              deletedAt: new Date().toISOString(),
+            },
+          },
+        }),
+        this.prisma.payrollItem.deleteMany({ where: { payrollRunId: run.id } }),
+        this.prisma.payrollRun.delete({ where: { id: run.id } }),
+      ]);
+    }
 
     return { message: 'Payroll run deleted successfully', runId: run.runId };
   }
