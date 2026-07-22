@@ -1518,8 +1518,8 @@ export class AttendanceService {
             leaveDatesByEmployee.set(leave.employeeId, new Set<string>());
           }
           leaveDatesByEmployee.get(leave.employeeId)!.add(d);
-          // عطلة رسمية (OTHER) كاملة — تمنع خصومات التأخير والدوام الناقص
-          if (leave.leaveType === 'OTHER' && !leave.isHourly) {
+          // إجازة أخرى (ساعية أو كاملة) — تمنع خصومات التأخير والخروج المبكر والغياب
+          if (leave.leaveType === 'OTHER') {
             if (!publicHolidayLeaveDatesByEmployee.has(leave.employeeId)) {
               publicHolidayLeaveDatesByEmployee.set(leave.employeeId, new Set<string>());
             }

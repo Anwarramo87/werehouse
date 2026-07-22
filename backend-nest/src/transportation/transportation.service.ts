@@ -261,9 +261,6 @@ export class TransportationService {
   async removePassenger(busId: string, employeeId: string) {
     const bus = await this.prisma.bus.findFirst({
       where: { OR: [{ id: busId }, { busId }] },
-      include: { 
-        passengers: { where: { status: 'active' } }
-      },
     });
     if (!bus) throw new NotFoundException(`Bus not found: ${busId}`);
 
@@ -274,9 +271,14 @@ export class TransportationService {
       throw new NotFoundException(`Passenger ${employeeId} not found on this bus`);
     }
 
-    // إزالة الموظف من الباص
-    await this.prisma.busPassenger.delete({
+    // إيقاف اشتراك الموظف (soft delete) مع تعيين تاريخ الانتهاء
+    // لا نحذف الصف حتى نحتفظ بالسجل لحساب الرواتب
+    await this.prisma.busPassenger.update({
       where: { id: passenger.id },
+      data: {
+        status: 'inactive',
+        terminationDate: new Date(),
+      },
     });
 
     return { message: 'Passenger removed successfully' };
@@ -288,8 +290,22 @@ export class TransportationService {
     });
     if (!bus) throw new NotFoundException(`Bus not found: ${busId}`);
 
+    // Include active + recently deactivated (this month) for display
+    const now = new Date();
+    const monthStart = new Date(Date.UTC(now.getFullYear(), now.getMonth(), 1));
+    const monthEnd = new Date(Date.UTC(now.getFullYear(), now.getMonth() + 1, 0));
+
     const passengers = await this.prisma.busPassenger.findMany({
-      where: { busId: bus.id, status: 'active' },
+      where: {
+        busId: bus.id,
+        OR: [
+          { status: 'active' },
+          {
+            status: 'inactive',
+            terminationDate: { gte: monthStart, lte: monthEnd },
+          },
+        ],
+      },
       orderBy: { subscriptionDate: 'asc' },
       include: { employee: { select: { name: true } } },
     });
@@ -337,7 +353,7 @@ export class TransportationService {
 
   // ─── Payroll Calculation Logic ────────────────────────────────────────────
 
-  private getActiveWorkingDays(subscriptionDate: Date, targetMonth: Date): number {
+  private getActiveWorkingDays(subscriptionDate: Date, targetMonth: Date, terminationDate?: Date | null): number {
     const subYear = subscriptionDate.getFullYear();
     const subMonth = subscriptionDate.getMonth();
     const targetYear = targetMonth.getFullYear();
@@ -348,22 +364,36 @@ export class TransportationService {
       return 0;
     }
 
-    // If subscription is in a past month, full month (26 days)
-    if (subYear < targetYear || (subYear === targetYear && subMonth < targetMonthIdx)) {
-      return 26;
+    // If subscription is in a past month and no termination in target month, full month (26 days)
+    const isSubInTargetMonth = subYear === targetYear && subMonth === targetMonthIdx;
+
+    // If termination is provided and in target month, clamp end to termination date
+    let endDate = new Date(Date.UTC(targetYear, targetMonthIdx + 1, 0)); // end of month
+    if (terminationDate) {
+      const termYear = terminationDate.getFullYear();
+      const termMonth = terminationDate.getMonth();
+      if (termYear === targetYear && termMonth === targetMonthIdx) {
+        endDate = new Date(Date.UTC(termYear, termMonth, terminationDate.getUTCDate()));
+      } else if (termYear < targetYear || (termYear === targetYear && termMonth < targetMonthIdx)) {
+        // Termination was in a past month — this passenger shouldn't be counted at all
+        return 0;
+      }
     }
 
-    // If subscription is in the target month, count ACTUAL remaining working
-    // days (Mon–Thu + Sun; Friday(5) and Saturday(6) excluded), including the
-    // subscription day. Previously this used a calendar-day proportion which
-    // wrongly counted weekends into the proration.
-    const lastDayOfMonth = new Date(Date.UTC(targetYear, targetMonthIdx + 1, 0));
-    const subDay = subscriptionDate.getUTCDate();
-    const start = new Date(Date.UTC(targetYear, targetMonthIdx, subDay));
+    // Determine the effective start date
+    let startDate: Date;
+    if (isSubInTargetMonth) {
+      startDate = new Date(Date.UTC(targetYear, targetMonthIdx, subscriptionDate.getUTCDate()));
+    } else if (subYear < targetYear || (subYear === targetYear && subMonth < targetMonthIdx)) {
+      // Subscription in a past month — full month from day 1 (unless terminated)
+      startDate = new Date(Date.UTC(targetYear, targetMonthIdx, 1));
+    } else {
+      return 0;
+    }
 
     let activeWorkingDays = 0;
-    const cur = new Date(start);
-    while (cur <= lastDayOfMonth) {
+    const cur = new Date(startDate);
+    while (cur <= endDate) {
       const dow = cur.getUTCDay();
       if (dow !== 5 && dow !== 6) activeWorkingDays++;
       cur.setUTCDate(cur.getUTCDate() + 1);
@@ -395,9 +425,22 @@ export class TransportationService {
 
     const companyPercentage = totalFleetCost > 0 ? (totalCompanyDeduction / totalFleetCost) * 100 : 0;
 
-    // 3. Get Total_Subscribed_Employees
+    // 3. Get Total_Subscribed_Employees (active + those who left this month)
+    const targetYear = targetMonth.getFullYear();
+    const targetMonthIdx = targetMonth.getMonth();
+    const monthStart = new Date(Date.UTC(targetYear, targetMonthIdx, 1));
+    const monthEnd = new Date(Date.UTC(targetYear, targetMonthIdx + 1, 0));
+
     const totalSubscribedEmployees = await this.prisma.busPassenger.count({
-      where: { status: 'active' },
+      where: {
+        OR: [
+          { status: 'active' },
+          {
+            status: 'inactive',
+            terminationDate: { gte: monthStart, lte: monthEnd },
+          },
+        ],
+      },
     });
 
     // 4. Handle Division by Zero
@@ -411,9 +454,18 @@ export class TransportationService {
     // 6. Calculate Base_Share
     const baseShare = netCost / totalSubscribedEmployees;
 
-    // 7. Get employee's subscription
+    // 7. Get employee's subscription (active OR recently deactivated this month)
     const passenger = await this.prisma.busPassenger.findFirst({
-      where: { employeeId, status: 'active' },
+      where: {
+        employeeId,
+        OR: [
+          { status: 'active' },
+          {
+            status: 'inactive',
+            terminationDate: { gte: monthStart, lte: monthEnd },
+          },
+        ],
+      },
       orderBy: { subscriptionDate: 'desc' },
     });
 
@@ -421,8 +473,12 @@ export class TransportationService {
       return 0;
     }
 
-    // 8. Calculate Active_Working_Days
-    const activeWorkingDays = this.getActiveWorkingDays(passenger.subscriptionDate, targetMonth);
+    // 8. Calculate Active_Working_Days (uses terminationDate if departed this month)
+    const activeWorkingDays = this.getActiveWorkingDays(
+      passenger.subscriptionDate,
+      targetMonth,
+      passenger.terminationDate,
+    );
 
     // 9. Calculate Final_Deduction
     const finalDeduction = (baseShare / 26) * activeWorkingDays;
@@ -487,9 +543,22 @@ export class TransportationService {
     }
     const companyPercentage = totalFleetCost > 0 ? (totalCompanyDeduction / totalFleetCost) * 100 : 0;
 
-    // 3. Total subscribed employees (all, not just the batch)
+    // 3. Total subscribed employees (active + those who left this month)
+    const targetYear = targetMonth.getFullYear();
+    const targetMonthIdx = targetMonth.getMonth();
+    const monthStart = new Date(Date.UTC(targetYear, targetMonthIdx, 1));
+    const monthEnd = new Date(Date.UTC(targetYear, targetMonthIdx + 1, 0));
+
     const totalSubscribedEmployees = await this.prisma.busPassenger.count({
-      where: { status: 'active' },
+      where: {
+        OR: [
+          { status: 'active' },
+          {
+            status: 'inactive',
+            terminationDate: { gte: monthStart, lte: monthEnd },
+          },
+        ],
+      },
     });
     if (totalSubscribedEmployees === 0) return result;
 
@@ -497,9 +566,18 @@ export class TransportationService {
     const netCost = totalFleetCost * (1 - companyPercentage / 100);
     const baseShare = netCost / totalSubscribedEmployees;
 
-    // 5. Get all active subscriptions for the given employees
+    // 5. Get all subscriptions for the given employees (active + recently deactivated)
     const passengers = await this.prisma.busPassenger.findMany({
-      where: { employeeId: { in: employeeIds }, status: 'active' },
+      where: {
+        employeeId: { in: employeeIds },
+        OR: [
+          { status: 'active' },
+          {
+            status: 'inactive',
+            terminationDate: { gte: monthStart, lte: monthEnd },
+          },
+        ],
+      },
       orderBy: { subscriptionDate: 'desc' },
     });
 
@@ -513,18 +591,12 @@ export class TransportationService {
 
     // 6. Calculate prorated deduction per employee
     for (const [empId, passenger] of latestByEmployee) {
-      let activeWorkingDays: number;
+      const activeWorkingDays = this.getActiveWorkingDays(
+        passenger.subscriptionDate,
+        targetMonth,
+        passenger.terminationDate,
+      );
 
-      if (options?.isProvisional && options.terminationDate) {
-        // For consistency with the Transportation page / regular payroll, the
-        // bus deduction is prorated for the full month from the subscription
-        // date (not clamped to the termination date).
-        activeWorkingDays = this.getActiveWorkingDays(passenger.subscriptionDate, targetMonth);
-
-      } else {
-        activeWorkingDays = this.getActiveWorkingDays(passenger.subscriptionDate, targetMonth);
-      }
-      
       const finalDeduction = (baseShare / 26) * activeWorkingDays;
       if (finalDeduction > 0) {
         result.set(empId, Math.round(finalDeduction * 100) / 100);
@@ -541,15 +613,29 @@ export class TransportationService {
   }) {
     const { employeeId, periodEnd } = input;
     const targetMonth = new Date(periodEnd);
+    const targetYear = targetMonth.getFullYear();
+    const targetMonthIdx = targetMonth.getMonth();
+    const monthStart = new Date(Date.UTC(targetYear, targetMonthIdx, 1));
+    const monthEnd = new Date(Date.UTC(targetYear, targetMonthIdx + 1, 0));
 
-    // الحصول على الركاب (الموظفين في الحافلات)
+    // الحصول على الركاب (الموظفين في الحافلات — نشطين + منغادرین هذا الشهر)
+    const statusFilter = {
+      OR: [
+        { status: 'active' },
+        {
+          status: 'inactive',
+          terminationDate: { gte: monthStart, lte: monthEnd },
+        },
+      ],
+    };
+
     const passengers = employeeId
       ? await this.prisma.busPassenger.findMany({
-          where: { employeeId, status: 'active' },
+          where: { employeeId, ...statusFilter },
           include: { bus: true },
         })
       : await this.prisma.busPassenger.findMany({
-          where: { status: 'active' },
+          where: statusFilter,
           include: { bus: true },
         });
 
