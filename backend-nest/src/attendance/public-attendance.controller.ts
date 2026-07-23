@@ -89,7 +89,7 @@ export class PublicAttendanceController {
     });
 
     const employeeName = await this.safeGetEmployeeName(employeeId);
-    this.notifications.create({
+    void this.notifications.create({
       type: 'CHECK_IN',
       severity: 'INFO',
       title: 'تسجيل دخول',
@@ -194,7 +194,7 @@ export class PublicAttendanceController {
     });
 
     const employeeName = await this.safeGetEmployeeName(employeeId);
-    this.notifications.create({
+    void this.notifications.create({
       type: 'CHECK_OUT',
       severity: 'INFO',
       title: 'تسجيل خروج',

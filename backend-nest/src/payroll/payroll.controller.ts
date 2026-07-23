@@ -1,9 +1,7 @@
-import { Body, Controller, Delete, Get, Param, Post, Put, Query, Res, UseGuards } from '@nestjs/common';
-import { UseInterceptors, Req } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Post, Put, Query, Res, UseGuards, UseInterceptors, Req } from '@nestjs/common';
 import { IdempotencyInterceptor } from '../common/interceptors/idempotency.interceptor';
 import { ApiTags, ApiCookieAuth } from '@nestjs/swagger';
-import { Request } from 'express';
-import { Response } from 'express';
+import { Request, Response } from 'express';
 import { PayrollService } from './payroll.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { PermissionsGuard } from '../common/guards/permissions.guard';

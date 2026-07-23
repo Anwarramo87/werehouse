@@ -43,6 +43,14 @@ export class EmployeesService {
     private readonly notifications: NotificationsService,
   ) {}
 
+  private async invalidateEmployeeCaches() {
+    await Promise.all([
+      this.shortCache.invalidatePrefix('employees:stats'),
+      this.shortCache.invalidatePrefix('dashboard:home-stats:'),
+    ]);
+  }
+
+
   private normalizeOptionalString(value?: string | null) {
     if (value === null || value === undefined) return null;
     const trimmed = value.trim();
@@ -456,7 +464,7 @@ export class EmployeesService {
       return { user, employee };
     });
 
-    await this.shortCache.invalidatePrefix('employees:stats');
+    await this.invalidateEmployeeCaches();
 
     return { message: 'Employee created successfully', employee: created.employee };
   }
@@ -684,7 +692,7 @@ export class EmployeesService {
       });
     });
 
-    await this.shortCache.invalidatePrefix('employees:stats');
+    await this.invalidateEmployeeCaches();
 
     return { message: 'Employee updated successfully', employee: updated };
   }
@@ -904,10 +912,10 @@ export class EmployeesService {
       return updatedEmployee;
     });
 
-    await this.shortCache.invalidatePrefix('employees:stats');
+    await this.invalidateEmployeeCaches();
 
     const isResignation = terminationType === 'resignation';
-    this.notifications.create({
+    void this.notifications.create({
       type: isResignation ? 'RESIGNATION' : 'TERMINATION',
       severity: 'WARNING',
       title: isResignation ? 'استقالة موظف' : 'إنهاء خدمة موظف',
@@ -1002,7 +1010,7 @@ export class EmployeesService {
       return { employee: updated, terminationRecord };
     });
 
-    await this.shortCache.invalidatePrefix('employees:stats');
+    await this.invalidateEmployeeCaches();
 
     const actionMessage =
       dto.terminationType === 'resignation'
@@ -1066,7 +1074,7 @@ export class EmployeesService {
       ),
     );
 
-    await this.shortCache.invalidatePrefix('employees:stats');
+    await this.invalidateEmployeeCaches();
 
     const actionLabel = dto.terminationType === 'resignation' ? 'استقالة' : 'إقالة';
     return {
@@ -1163,7 +1171,7 @@ export class EmployeesService {
       return { employee: updatedEmployee, rehireRecord };
     });
 
-    await this.shortCache.invalidatePrefix('employees:stats');
+    await this.invalidateEmployeeCaches();
 
     return {
       success: true,
@@ -1237,7 +1245,7 @@ export class EmployeesService {
       return { settlement, employee: updatedEmployee };
     });
 
-    await this.shortCache.invalidatePrefix('employees:stats');
+    await this.invalidateEmployeeCaches();
 
     return {
       success: true,
@@ -1409,7 +1417,7 @@ export class EmployeesService {
       });
     });
 
-    await this.shortCache.invalidatePrefix('employees:stats');
+    await this.invalidateEmployeeCaches();
 
     return { message: 'Employee terminated and archived successfully' };
   }
@@ -1441,7 +1449,7 @@ export class EmployeesService {
       });
     });
 
-    await this.shortCache.invalidatePrefix('employees:stats');
+    await this.invalidateEmployeeCaches();
 
     return this.getByEmployeeId(payload.employeeId);
   }
