@@ -56,7 +56,7 @@ export class DepartmentsService {
       where: { id },
       data: {
         name,
-        ...(dto.manager !== undefined && { manager: dto.manager }),
+        ...(dto.manager !== undefined && { manager: dto.manager || null }),
         ...(dto.establishedAt !== undefined && { establishedAt: new Date(dto.establishedAt) }),
       },
     });
@@ -69,10 +69,27 @@ export class DepartmentsService {
       include: { _count: { select: { employees: true } } },
     });
     if (!dept) throw new NotFoundException('Department not found');
-    if (dept._count.employees > 0)
-      throw new BadRequestException('Cannot delete department with employees');
+    
+    // Check if there are employees in this department
+    if (dept._count.employees > 0) {
+      throw new BadRequestException(
+        `لا يمكن حذف القسم "${dept.name}" لأنه يحتوي على ${dept._count.employees} موظف. يرجى نقل الموظفين إلى قسم آخر أولاً.`
+      );
+    }
+    
     await this.prisma.department.delete({ where: { id } });
     return { message: 'Department deleted' };
+  }
+
+  async clearSupervisor(id: string) {
+    const existing = await this.prisma.department.findUnique({ where: { id } });
+    if (!existing) throw new NotFoundException('Department not found');
+
+    const dept = await this.prisma.department.update({
+      where: { id },
+      data: { manager: null },
+    });
+    return { message: 'Supervisor removed', department: dept };
   }
 
   async list() {

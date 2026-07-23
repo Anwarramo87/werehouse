@@ -2162,14 +2162,14 @@ export class PayrollService {
         );
 
         // Count paid approved leave days inside period (from pre-fetched map).
-        // OTHER (non-hourly) = public-holiday paid leave — count it so those days
+        // OTHER (ساعية أو كاملة) = إجازة مدفوعة — count it so those days
         // are excluded from the absence fallback (they are paid via otherLeaveWorkedPay).
         const paidApprovedLeaves = (
           periodLeavesByEmployee.get(employee.employeeId) || []
         ).filter(
           (l) =>
             ['PAID', 'SICK', 'ADMIN', 'DEATH'].includes(l.leaveType) ||
-            (l.leaveType === 'OTHER' && !l.isHourly),
+            l.leaveType === 'OTHER',
         );
 
         const paidApprovedLeaveDaysInPeriod = paidApprovedLeaves.reduce((sum, l) => {
