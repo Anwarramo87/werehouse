@@ -953,7 +953,11 @@ export class PayrollService {
     // so there is no manual unlock to forget.
     const lockKey = this.payrollPeriodLockKey(dto.periodStart, dto.periodEnd);
 
-    return this.prisma.$transaction(async (tx) => {
+    // Phase 1: Acquire lock, delete existing run, create new run — COMMIT.
+    // The run must be committed before processPayrollRun() executes, because
+    // processPayrollRun uses `this.prisma` (a separate pool connection) and
+    // cannot see uncommitted rows created by `tx`.
+    const run = await this.prisma.$transaction(async (tx) => {
       await tx.$executeRawUnsafe(`SELECT pg_advisory_xact_lock(${lockKey})`);
 
       // Check for an existing payroll run for the given period
@@ -974,8 +978,8 @@ export class PayrollService {
       const runDateKey = dto.periodStart.slice(0, 10).replace(/-/g, '');
       const runId = `PAY${runDateKey}-${Date.now().toString().slice(-4)}`;
 
-      // Create the payroll run record first
-      const run = await tx.payrollRun.create({
+      // Create the payroll run record — this commits when the transaction ends
+      return tx.payrollRun.create({
         data: {
           runId,
           periodStart: this.toDateOnly(dto.periodStart),
@@ -986,23 +990,20 @@ export class PayrollService {
           totalEmployees: 0,
         },
       });
-
-      // Process the payroll run. Processing uses `this.prisma` (its own
-      // connection) but still executes INSIDE this callback, so the xact lock
-      // remains held until the transaction commits — serializing the whole
-      // calculate for this period. `processPayrollRun` does not open its own
-      // transaction, so nesting is not an issue.
-      try {
-        const updatedRun = await this.processPayrollRun(run.id, dto, userId);
-        return { message: 'Payroll calculated successfully', payrollRun: updatedRun };
-      } catch (error) {
-        await this.markPayrollRunFailed(
-          run.id,
-          error instanceof Error ? error.message : 'Unknown error during payroll processing',
-        );
-        throw error;
-      }
     });
+
+    // Phase 2: Process the payroll run — uses `this.prisma` (pool connection).
+    // The run record is now committed and visible to all connections.
+    try {
+      const updatedRun = await this.processPayrollRun(run.id, dto, userId);
+      return { message: 'Payroll calculated successfully', payrollRun: updatedRun };
+    } catch (error) {
+      await this.markPayrollRunFailed(
+        run.id,
+        error instanceof Error ? error.message : 'Unknown error during payroll processing',
+      );
+      throw error;
+    }
   }
 
   async calculateAsync(dto: CalculatePayrollDto, userId?: string) {

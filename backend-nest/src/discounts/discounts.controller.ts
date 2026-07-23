@@ -42,7 +42,7 @@ export class DiscountsController {
   }
 
   @Delete(':id')
-  @Permissions('manage_advances', 'manage_bonuses')
+  @Permissions('manage_advances', 'manage_bonuses', 'manage_penalties')
   remove(
     @Param('id') id: string,
     @Query('kind') kindParam: string,
@@ -59,24 +59,32 @@ export class DiscountsController {
     return DiscountKind.ASSISTANCE;
   }
 
-  private parseKind(kindParam?: string): DiscountKind {
+  private parseKind(kindParam?: string): DiscountKind | 'penalty' {
     if (!kindParam) {
       throw new BadRequestException('kind is required');
     }
 
     if (kindParam === DiscountKind.ADVANCE) return DiscountKind.ADVANCE;
     if (kindParam === DiscountKind.ASSISTANCE) return DiscountKind.ASSISTANCE;
+    if (kindParam === 'penalty') return 'penalty';
 
     throw new BadRequestException('Invalid kind value');
   }
 
-  private assertPermission(user: AuthenticatedUser | undefined, kind: DiscountKind | undefined) {
+  private assertPermission(user: AuthenticatedUser | undefined, kind: DiscountKind | 'penalty' | undefined) {
     if (!kind) return;
 
     const permissions = user?.permissions || [];
     const roles = user?.roles || [];
 
     if (roles.includes('admin') || user?.role === 'admin') {
+      return;
+    }
+
+    if (kind === 'penalty') {
+      if (!permissions.includes('manage_penalties')) {
+        throw new ForbiddenException('Insufficient permissions for this operation');
+      }
       return;
     }
 

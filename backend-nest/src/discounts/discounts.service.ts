@@ -2,6 +2,7 @@ import { BadRequestException, Injectable } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { AdvancesService } from '../advances/advances.service';
 import { BonusesService } from '../bonuses/bonuses.service';
+import { PenaltiesService } from '../penalties/penalties.service';
 import { ShortCacheService } from '../common/cache/short-cache.service';
 import { CreateDiscountDto, DiscountKind } from './dto/create-discount.dto';
 import { AdvanceType } from '../advances/dto/create-advance.dto';
@@ -13,7 +14,8 @@ export type DiscountRecord = {
   amount: number;
   date: string;
   notes?: string | null;
-  kind: DiscountKind;
+  kind: DiscountKind | 'penalty';
+  advanceType?: string;
 };
 
 @Injectable()
@@ -21,6 +23,7 @@ export class DiscountsService {
   constructor(
     private readonly advancesService: AdvancesService,
     private readonly bonusesService: BonusesService,
+    private readonly penaltiesService: PenaltiesService,
     private readonly shortCache: ShortCacheService,
   ) {}
 
@@ -37,9 +40,10 @@ export class DiscountsService {
   }
 
   async list(employeeId?: string, period?: string): Promise<DiscountRecord[]> {
-    const [advances, bonuses] = await Promise.all([
+    const [advances, bonuses, penalties] = await Promise.all([
       this.advancesService.list({ employeeId, period }),
       this.bonusesService.list({ employeeId, period } as any),
+      this.penaltiesService.list({ employeeId, period } as any),
     ]);
 
     const advanceRecords: DiscountRecord[] = advances.map((advance) => ({
@@ -50,6 +54,7 @@ export class DiscountsService {
       date: advance.issueDate.toISOString(),
       notes: advance.notes ?? null,
       kind: DiscountKind.ADVANCE,
+      advanceType: advance.advanceType ?? undefined,
     }));
 
     const bonusRecords: DiscountRecord[] = (bonuses.data ?? [])
@@ -64,7 +69,17 @@ export class DiscountsService {
         kind: DiscountKind.ASSISTANCE,
       }));
 
-    return [...advanceRecords, ...bonusRecords].sort(
+    const penaltyRecords: DiscountRecord[] = penalties.map((penalty: any) => ({
+      id: penalty.id,
+      employeeId: penalty.employeeId,
+      type: penalty.category || 'عقوبة',
+      amount: this.toNumber(penalty.amount),
+      date: (penalty.issueDate ?? penalty.createdAt).toISOString(),
+      notes: penalty.reason ?? null,
+      kind: 'penalty' as const,
+    }));
+
+    return [...advanceRecords, ...bonusRecords, ...penaltyRecords].sort(
       (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime(),
     );
   }
@@ -92,6 +107,7 @@ export class DiscountsService {
         date: result.issueDate.toISOString(),
         notes: result.notes ?? null,
         kind: DiscountKind.ADVANCE,
+        advanceType: result.advanceType ?? undefined,
       };
     }
 
@@ -122,7 +138,7 @@ export class DiscountsService {
     };
   }
 
-  async remove(id: string, kind?: DiscountKind, deletedBy?: string) {
+  async remove(id: string, kind?: DiscountKind | 'penalty', deletedBy?: string) {
     if (!kind) {
       // Try advance first
       const advance = await this.advancesService.getById(id).catch(() => null);
@@ -135,6 +151,14 @@ export class DiscountsService {
       if (bonus) {
         return this.bonusesService.remove(id, deletedBy);
       }
+
+      // Try penalty last
+      const penalty = await this.penaltiesService.getById(id).catch(() => null);
+      if (penalty) {
+        const result = await this.penaltiesService.remove(id, deletedBy);
+        await this.shortCache.invalidatePrefix('employees:stats');
+        return result;
+      }
       
       throw new BadRequestException('Record not found');
     }
@@ -145,6 +169,12 @@ export class DiscountsService {
     
     if (kind === DiscountKind.ASSISTANCE) {
       const result = await this.bonusesService.remove(id, deletedBy);
+      await this.shortCache.invalidatePrefix('employees:stats');
+      return result;
+    }
+
+    if (kind === 'penalty') {
+      const result = await this.penaltiesService.remove(id, deletedBy);
       await this.shortCache.invalidatePrefix('employees:stats');
       return result;
     }
