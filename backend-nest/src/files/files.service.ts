@@ -2,11 +2,12 @@ import {
   BadRequestException,
   Injectable,
   InternalServerErrorException,
+  NotFoundException,
 } from '@nestjs/common';
 import { createHash, randomUUID } from 'crypto';
 import { paginationMeta } from '../common/utils/pagination.util';
 import { mkdir, readFile, readdir, stat, writeFile } from 'fs/promises';
-import { basename, extname, join, resolve } from 'path';
+import { basename, extname, join, resolve, sep } from 'path';
 
 const ALLOWED_FILE_TYPES: Record<string, string[]> = {
   '.pdf': ['application/pdf'],
@@ -286,6 +287,67 @@ export class FilesService {
       return parsed;
     } catch {
       return null;
+    }
+  }
+
+  async getGeneralFileById(id: string) {
+    const buckets = await readdir(this.uploadRoot, { withFileTypes: true });
+
+    for (const bucket of buckets) {
+      if (!bucket.isDirectory()) continue;
+      const bucketPath = join(this.uploadRoot, bucket.name);
+
+      const entries = await readdir(bucketPath, { withFileTypes: true });
+      for (const entry of entries) {
+        if (!entry.isFile()) continue;
+        const ext = extname(entry.name).toLowerCase();
+        if (!ALLOWED_FILE_TYPES[ext]) continue;
+
+        const fileId = entry.name.slice(0, Math.max(0, entry.name.length - ext.length));
+        if (fileId !== id) continue;
+
+        const absolutePath = join(bucketPath, entry.name);
+        const metadata = await this.readStoredMetadata(bucketPath, id);
+        const buffer = await readFile(absolutePath);
+
+        return {
+          buffer,
+          mimeType: metadata?.mimeType || ALLOWED_FILE_TYPES[ext]?.[0] || 'application/octet-stream',
+          originalName: metadata?.originalName || entry.name,
+          size: buffer.length,
+        };
+      }
+    }
+
+    return null;
+  }
+
+  async getLocalFile(filePath: string) {
+    const resolved = resolve(process.cwd(), filePath);
+    const uploadRoot = resolve(process.cwd(), 'tmp', 'uploads');
+
+    if (!resolved.startsWith(uploadRoot)) {
+      throw new BadRequestException('Access denied: path outside uploads directory');
+    }
+
+    try {
+      const fileStat = await stat(resolved);
+      if (!fileStat.isFile()) {
+        throw new NotFoundException('File not found');
+      }
+
+      const ext = extname(resolved).toLowerCase();
+      const buffer = await readFile(resolved);
+
+      return {
+        buffer,
+        mimeType: ALLOWED_FILE_TYPES[ext]?.[0] || 'application/octet-stream',
+        originalName: basename(resolved),
+        size: fileStat.size,
+      };
+    } catch (err) {
+      if (err instanceof BadRequestException || err instanceof NotFoundException) throw err;
+      throw new NotFoundException('File not found');
     }
   }
 }
