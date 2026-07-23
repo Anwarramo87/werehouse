@@ -94,6 +94,8 @@ model Employee {
   hoursPerDay               Int                   @default(8)
   overtimeCalculation       Json?
   gracePeriodMinutes        Int                   @default(5)
+  insuranceAmount           Decimal?              @db.Decimal(14, 2)
+  transportAllowanceOverride Decimal?             @db.Decimal(14, 2)
   attendanceRecords         AttendanceRecord[]
   dailyAttendanceLogs       DailyAttendanceLog[]  @relation("DailyAttendanceLogs")
   advances                  EmployeeAdvance[]

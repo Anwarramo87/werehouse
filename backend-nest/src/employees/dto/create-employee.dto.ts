@@ -113,6 +113,20 @@ export class CreateEmployeeDto {
   @Type(() => Number)
   livingAllowance?: number;
 
+  @ApiPropertyOptional({ description: 'بدل المواصلات', example: 50000 })
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  @Type(() => Number)
+  transportAllowance?: number;
+
+  @ApiPropertyOptional({ description: 'مبلغ التأمينات (خصم شهري)', example: 20000 })
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  @Type(() => Number)
+  insuranceAmount?: number;
+
   @ApiProperty({ description: 'معرّف الدور (Role ID)', example: 'clx1234abc', required: false })
   @IsString()
   @IsOptional()
