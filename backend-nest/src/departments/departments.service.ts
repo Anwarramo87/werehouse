@@ -56,7 +56,7 @@ export class DepartmentsService {
       where: { id },
       data: {
         name,
-        ...(dto.manager !== undefined && { manager: dto.manager }),
+        ...(dto.manager !== undefined && { manager: dto.manager || null }),
         ...(dto.establishedAt !== undefined && { establishedAt: new Date(dto.establishedAt) }),
       },
     });
@@ -79,6 +79,17 @@ export class DepartmentsService {
     
     await this.prisma.department.delete({ where: { id } });
     return { message: 'Department deleted' };
+  }
+
+  async clearSupervisor(id: string) {
+    const existing = await this.prisma.department.findUnique({ where: { id } });
+    if (!existing) throw new NotFoundException('Department not found');
+
+    const dept = await this.prisma.department.update({
+      where: { id },
+      data: { manager: null },
+    });
+    return { message: 'Supervisor removed', department: dept };
   }
 
   async list() {

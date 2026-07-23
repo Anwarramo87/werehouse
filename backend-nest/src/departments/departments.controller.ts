@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, Param, Post, Put, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, Put, UseGuards } from '@nestjs/common';
 import { ApiTags, ApiCookieAuth } from '@nestjs/swagger';
 import { DepartmentsService } from './departments.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
@@ -29,6 +29,12 @@ export class DepartmentsController {
   @Permissions('edit_employees')
   update(@Param('id') id: string, @Body() dto: CreateDepartmentDto) {
     return this.departmentsService.update(id, dto);
+  }
+
+  @Patch(':id/supervisor')
+  @Permissions('edit_employees')
+  clearSupervisor(@Param('id') id: string) {
+    return this.departmentsService.clearSupervisor(id);
   }
 
   @Delete(':id')
