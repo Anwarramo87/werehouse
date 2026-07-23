@@ -55,7 +55,9 @@ export class DiscountsController {
 
   private resolveKind(dto: CreateDiscountDto): DiscountKind {
     if (dto.kind) return dto.kind;
-    if (dto.type?.trim() === 'سلفة') return DiscountKind.ADVANCE;
+    if (dto.type?.trim() === 'سلفة مالية' || dto.type?.trim() === 'شراء ملابس') return DiscountKind.ADVANCE;
+    if (dto.type?.trim() === 'مكافأة') return DiscountKind.REWARD;
+    if (dto.type?.trim() === 'عقوبة') return DiscountKind.PENALTY;
     return DiscountKind.ASSISTANCE;
   }
 
@@ -66,6 +68,8 @@ export class DiscountsController {
 
     if (kindParam === DiscountKind.ADVANCE) return DiscountKind.ADVANCE;
     if (kindParam === DiscountKind.ASSISTANCE) return DiscountKind.ASSISTANCE;
+    if (kindParam === DiscountKind.PENALTY) return DiscountKind.PENALTY;
+    if (kindParam === DiscountKind.REWARD) return DiscountKind.REWARD;
     if (kindParam === 'penalty') return 'penalty';
 
     throw new BadRequestException('Invalid kind value');
@@ -88,9 +92,14 @@ export class DiscountsController {
       return;
     }
 
-    const required = kind === DiscountKind.ADVANCE ? 'manage_advances' : 'manage_bonuses';
-    if (!permissions.includes(required)) {
-      throw new ForbiddenException('Insufficient permissions for this operation');
+    if (kind === DiscountKind.ADVANCE) {
+      if (!permissions.includes('manage_advances')) {
+        throw new ForbiddenException('Insufficient permissions for this operation');
+      }
+    } else {
+      if (!permissions.includes('manage_bonuses')) {
+        throw new ForbiddenException('Insufficient permissions for this operation');
+      }
     }
   }
 }

@@ -35,7 +35,9 @@ export class DiscountsService {
 
   private resolveKind(dto: CreateDiscountDto): DiscountKind {
     if (dto.kind) return dto.kind;
-    if (dto.type?.trim() === 'سلفة') return DiscountKind.ADVANCE;
+    if (dto.type?.trim() === 'سلفة مالية' || dto.type?.trim() === 'شراء ملابس') return DiscountKind.ADVANCE;
+    if (dto.type?.trim() === 'مكافأة') return DiscountKind.REWARD;
+    if (dto.type?.trim() === 'عقوبة') return DiscountKind.PENALTY;
     return DiscountKind.ASSISTANCE;
   }
 
@@ -49,7 +51,7 @@ export class DiscountsService {
     const advanceRecords: DiscountRecord[] = advances.map((advance) => ({
       id: advance.id,
       employeeId: advance.employeeId,
-      type: 'سلفة',
+      type: advance.advanceType === 'clothing' ? 'شراء ملابس' : 'سلفة مالية',
       amount: this.toNumber(this.toNumber(advance.installmentAmount) > 0 ? advance.installmentAmount : advance.remainingAmount ?? advance.totalAmount),
       date: advance.issueDate.toISOString(),
       notes: advance.notes ?? null,
@@ -58,16 +60,39 @@ export class DiscountsService {
     }));
 
     const bonusRecords: DiscountRecord[] = (bonuses.data ?? [])
-      .filter((bonus: { assistanceAmount: Prisma.Decimal | number | string }) => this.toNumber(bonus.assistanceAmount) > 0)
-      .map((bonus: { id: string; employeeId: string; bonusReason: string | null; assistanceAmount: Prisma.Decimal | number | string; createdAt: Date }) => ({
-        id: bonus.id,
-        employeeId: bonus.employeeId,
-        type: bonus.bonusReason || 'خصم متنوع',
-        amount: this.toNumber(bonus.assistanceAmount),
-        date: bonus.createdAt.toISOString(),
-        notes: bonus.bonusReason ?? null,
-        kind: DiscountKind.ASSISTANCE,
-      }));
+      .map((bonus: { id: string; employeeId: string; bonusReason: string | null; bonusAmount: Prisma.Decimal | number | string; assistanceAmount: Prisma.Decimal | number | string; createdAt: Date }) => {
+        const bonusAmt = this.toNumber(bonus.bonusAmount);
+        const assistAmt = this.toNumber(bonus.assistanceAmount);
+
+        const records: DiscountRecord[] = [];
+
+        if (bonusAmt > 0) {
+          records.push({
+            id: bonus.id,
+            employeeId: bonus.employeeId,
+            type: bonus.bonusReason || 'مكافأة',
+            amount: bonusAmt,
+            date: bonus.createdAt.toISOString(),
+            notes: bonus.bonusReason ?? null,
+            kind: DiscountKind.REWARD,
+          });
+        }
+
+        if (assistAmt > 0) {
+          records.push({
+            id: bonus.id,
+            employeeId: bonus.employeeId,
+            type: bonus.bonusReason || 'خصم متنوع',
+            amount: assistAmt,
+            date: bonus.createdAt.toISOString(),
+            notes: bonus.bonusReason ?? null,
+            kind: DiscountKind.ASSISTANCE,
+          });
+        }
+
+        return records;
+      })
+      .flat();
 
     const penaltyRecords: DiscountRecord[] = penalties.map((penalty: any) => ({
       id: penalty.id,
@@ -102,7 +127,7 @@ export class DiscountsService {
       return {
         id: result.id,
         employeeId: result.employeeId,
-        type: 'سلفة',
+        type: result.advanceType === 'clothing' ? 'شراء ملابس' : 'سلفة مالية',
         amount: this.toNumber(this.toNumber(result.installmentAmount) > 0 ? result.installmentAmount : result.remainingAmount ?? result.totalAmount),
         date: result.issueDate.toISOString(),
         notes: result.notes ?? null,
@@ -111,7 +136,61 @@ export class DiscountsService {
       };
     }
 
-    // Create assistance/discount record through bonuses endpoint
+    if (resolvedKind === DiscountKind.PENALTY) {
+      const now = new Date();
+      const period = dto.date ? dto.date.slice(0, 7) : now.toISOString().slice(0, 7);
+
+      const result = await this.penaltiesService.create({
+        employeeId: dto.employeeId,
+        category: dto.type || 'عقوبة إدارية',
+        amount: dto.amount,
+        reason: dto.notes,
+        issueDate: dto.date,
+        period,
+      });
+
+      await this.shortCache.invalidatePrefix('employees:stats');
+
+      return {
+        id: result.id,
+        employeeId: result.employeeId,
+        type: result.category || 'عقوبة',
+        amount: this.toNumber(result.amount),
+        date: (result.issueDate instanceof Date ? result.issueDate : new Date(result.issueDate)).toISOString(),
+        notes: result.reason ?? null,
+        kind: DiscountKind.PENALTY,
+      };
+    }
+
+    if (resolvedKind === DiscountKind.REWARD) {
+      const period = dto.date ? dto.date.slice(0, 7) : new Date().toISOString().slice(0, 7);
+
+      const result: any = await this.bonusesService.create({
+        employeeId: dto.employeeId,
+        bonusReason: dto.type || 'مكافأة',
+        bonusAmount: dto.amount,
+        assistanceAmount: 0,
+        period,
+      });
+
+      if (result?.skipBonusRecord) {
+        throw new BadRequestException(result.message || 'No reward record was created');
+      }
+
+      await this.shortCache.invalidatePrefix('employees:stats');
+
+      return {
+        id: result.id,
+        employeeId: result.employeeId,
+        type: result.bonusReason || 'مكافأة',
+        amount: this.toNumber(result.bonusAmount),
+        date: result.createdAt.toISOString(),
+        notes: result.bonusReason ?? null,
+        kind: DiscountKind.REWARD,
+      };
+    }
+
+    // ASSISTANCE (old behavior)
     const period = dto.date ? dto.date.slice(0, 7) : new Date().toISOString().slice(0, 7);
     
     const result: any = await this.bonusesService.create({
@@ -140,19 +219,16 @@ export class DiscountsService {
 
   async remove(id: string, kind?: DiscountKind | 'penalty', deletedBy?: string) {
     if (!kind) {
-      // Try advance first
       const advance = await this.advancesService.getById(id).catch(() => null);
       if (advance) {
         return this.advancesService.remove(id, deletedBy);
       }
       
-      // Try bonus (assistance) next
       const bonus = await this.bonusesService.getById(id).catch(() => null);
       if (bonus) {
         return this.bonusesService.remove(id, deletedBy);
       }
 
-      // Try penalty last
       const penalty = await this.penaltiesService.getById(id).catch(() => null);
       if (penalty) {
         const result = await this.penaltiesService.remove(id, deletedBy);
@@ -163,18 +239,18 @@ export class DiscountsService {
       throw new BadRequestException('Record not found');
     }
 
-    if (kind === DiscountKind.ADVANCE) {
-      return this.advancesService.remove(id, deletedBy);
-    }
-    
-    if (kind === DiscountKind.ASSISTANCE) {
-      const result = await this.bonusesService.remove(id, deletedBy);
+    if (kind === 'penalty') {
+      const result = await this.penaltiesService.remove(id, deletedBy);
       await this.shortCache.invalidatePrefix('employees:stats');
       return result;
     }
 
-    if (kind === 'penalty') {
-      const result = await this.penaltiesService.remove(id, deletedBy);
+    if (kind === DiscountKind.ADVANCE) {
+      return this.advancesService.remove(id, deletedBy);
+    }
+    
+    if (kind === DiscountKind.ASSISTANCE || kind === DiscountKind.REWARD) {
+      const result = await this.bonusesService.remove(id, deletedBy);
       await this.shortCache.invalidatePrefix('employees:stats');
       return result;
     }

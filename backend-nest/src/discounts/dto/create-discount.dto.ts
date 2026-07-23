@@ -13,6 +13,8 @@ import { AdvanceType } from '../../advances/dto/create-advance.dto';
 export enum DiscountKind {
   ADVANCE = 'advance',
   ASSISTANCE = 'assistance',
+  PENALTY = 'penalty',
+  REWARD = 'reward',
 }
 
 export class CreateDiscountDto {
