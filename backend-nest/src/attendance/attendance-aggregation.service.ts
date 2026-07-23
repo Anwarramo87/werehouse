@@ -451,14 +451,13 @@ export class AttendanceAggregationService {
       return null;
     }
 
-    // Check for full-day OTHER leave (عطلة / عيد / سبب آخر) — لا خصومات دائماً
+    // Check for OTHER leave (ساعية أو كاملة — عطلة / عيد / سبب آخر) — لا خصومات دائماً
     // المعامل (×1 أو ×2) يُطبَّق في مرحلة الراتب عبر payroll.service — هنا فقط نلغي الخصومات
     const otherLeave = await this.prisma.leaveRequest.findFirst({
       where: {
         employeeId,
         status: 'APPROVED',
         leaveType: 'OTHER',
-        isHourly: false,
         startDate: { lte: dateUTC },
         endDate: { gte: dateUTC },
       },

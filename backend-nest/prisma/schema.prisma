@@ -94,6 +94,8 @@ model Employee {
   hoursPerDay               Int                   @default(8)
   overtimeCalculation       Json?
   gracePeriodMinutes        Int                   @default(5)
+  insuranceAmount           Decimal?              @db.Decimal(14, 2)
+  transportAllowanceOverride Decimal?             @db.Decimal(14, 2)
   attendanceRecords         AttendanceRecord[]
   dailyAttendanceLogs       DailyAttendanceLog[]  @relation("DailyAttendanceLogs")
   advances                  EmployeeAdvance[]
@@ -659,16 +661,17 @@ model Bus {
 }
 
 model BusPassenger {
-  id               String   @id @default(uuid()) @db.Uuid
-  busId            String   @db.Uuid
-  bus              Bus      @relation(fields: [busId], references: [id], onDelete: Cascade)
+  id               String    @id @default(uuid()) @db.Uuid
+  busId            String    @db.Uuid
+  bus              Bus       @relation(fields: [busId], references: [id], onDelete: Cascade)
   employeeId       String
-  employee         Employee @relation(fields: [employeeId], references: [employeeId], onDelete: Cascade)
+  employee         Employee  @relation(fields: [employeeId], references: [employeeId], onDelete: Cascade)
   name             String? // optional passenger name for display
-  subscriptionDate DateTime @default(now()) @db.Date
-  status           String   @default("active") // active | inactive
-  createdAt        DateTime @default(now())
-  updatedAt        DateTime @updatedAt
+  subscriptionDate DateTime  @default(now()) @db.Date
+  terminationDate  DateTime? @db.Date // تاريخ انتهاء الاشتراك (عند الاستقالة/الإيقاف)
+  status           String    @default("active") // active | inactive
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
 
   @@unique([busId, employeeId])
   @@index([employeeId])
