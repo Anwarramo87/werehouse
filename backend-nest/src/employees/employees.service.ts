@@ -222,6 +222,8 @@ export class EmployeesService {
           hourlyRate: true,
           baseSalary: true,
           livingAllowance: true,
+          transportAllowanceOverride: true,
+          insuranceAmount: true,
           currency: true,
           employmentStartDate: true,
           terminationDate: true,
@@ -322,6 +324,14 @@ export class EmployeesService {
     const department = await this.resolveDepartment(departmentName);
     const profession = this.normalizeOptionalString(dto.profession ?? dto.jobTitle);
     const baseSalary = dto.baseSalary ?? null;
+    const transportAllowanceOverride =
+      dto.transportAllowance !== null && dto.transportAllowance !== undefined
+        ? new Prisma.Decimal(dto.transportAllowance)
+        : null;
+    const insuranceAmount =
+      dto.insuranceAmount !== null && dto.insuranceAmount !== undefined
+        ? new Prisma.Decimal(dto.insuranceAmount)
+        : null;
     const resolvedWorkDaysInPeriod = dto.workDaysInPeriod ?? DEFAULT_WORK_DAYS_IN_PERIOD;
     const resolvedHoursPerDay = dto.hoursPerDay ?? DEFAULT_HOURS_PER_DAY;
     const resolvedHourlyRate =
@@ -414,6 +424,8 @@ export class EmployeesService {
             dto.livingAllowance !== null && dto.livingAllowance !== undefined
               ? new Prisma.Decimal(dto.livingAllowance)
               : null,
+          transportAllowanceOverride,
+          insuranceAmount,
           roleId: dto.roleId || null,
           department: department.name,
           departmentId: department.id,
@@ -442,6 +454,10 @@ export class EmployeesService {
             dto.livingAllowance !== null && dto.livingAllowance !== undefined
               ? new Prisma.Decimal(dto.livingAllowance)
               : new Prisma.Decimal(0),
+          transportAllowance:
+            transportAllowanceOverride ?? new Prisma.Decimal(0),
+          insuranceAmount:
+            insuranceAmount ?? new Prisma.Decimal(0),
         },
       });
 
@@ -582,6 +598,14 @@ export class EmployeesService {
           livingAllowance:
             dto.livingAllowance === null ? null : new Prisma.Decimal(dto.livingAllowance),
         }),
+        ...(dto.transportAllowance !== undefined && {
+          transportAllowanceOverride:
+            dto.transportAllowance === null ? null : new Prisma.Decimal(dto.transportAllowance),
+        }),
+        ...(dto.insuranceAmount !== undefined && {
+          insuranceAmount:
+            dto.insuranceAmount === null ? null : new Prisma.Decimal(dto.insuranceAmount),
+        }),
         ...(profession !== undefined && { jobTitle: profession, profession }),
         ...(dto.roleId !== undefined && { roleId: dto.roleId }),
         ...(departmentName !== undefined && { department: departmentName }),
@@ -624,6 +648,22 @@ export class EmployeesService {
               : new Prisma.Decimal(dto.livingAllowance)
             : (existingSalary?.livingAllowance ??
               employee.livingAllowance ??
+              new Prisma.Decimal(0)),
+        transportAllowance:
+          dto.transportAllowance !== undefined
+            ? dto.transportAllowance === null
+              ? new Prisma.Decimal(0)
+              : new Prisma.Decimal(dto.transportAllowance)
+            : (existingSalary?.transportAllowance ??
+              employee.transportAllowanceOverride ??
+              new Prisma.Decimal(0)),
+        insuranceAmount:
+          dto.insuranceAmount !== undefined
+            ? dto.insuranceAmount === null
+              ? new Prisma.Decimal(0)
+              : new Prisma.Decimal(dto.insuranceAmount)
+            : (existingSalary?.insuranceAmount ??
+              employee.insuranceAmount ??
               new Prisma.Decimal(0)),
         lumpSumSalary:
           dto.lumpSumSalary !== undefined
