@@ -224,6 +224,10 @@ model AttendanceRecord {
   @@index([employeeId, date, timestamp])
   @@index([date, type])
   @@index([employeeId, date, type])
+  // Prevents duplicate punches (same employee + timestamp + type). The migration
+  // de-duplicates existing rows (keeping the earliest by createdAt) before this
+  // is applied. Application code also guards via a 30-minute re-punch window.
+  @@unique([employeeId, timestamp, type])
   @@map("attendance_records")
 }
 
@@ -259,6 +263,9 @@ model DailyAttendanceLog {
   @@index([date])
   @@index([employeeId, recordType, date])
   @@index([recordType, date])
+  // Prevents duplicate calculated/manual log rows for the same employee+day+type.
+  // Makes aggregateEmployeeDay's deleteMany+create idempotent under concurrency.
+  @@unique([employeeId, date, recordType, source])
   @@map("daily_attendance_logs")
 }
 
@@ -366,6 +373,8 @@ model PayrollItem {
   netPayWithAdvance     Decimal  @default(0) @db.Decimal(14, 2)
   earlyLeaveMinutes     Int      @default(0)
   earlyLeaveDeduction   Decimal  @default(0) @db.Decimal(14, 2)
+  /** خصم اشتراك الباص — منفصل عن باقي الخصومات لعرضه بالأزرق */
+  busDeduction          Decimal  @default(0) @db.Decimal(14, 2)
   anomalies             String[] @default([])
   createdAt             DateTime @default(now())
   updatedAt             DateTime @updatedAt
@@ -652,16 +661,17 @@ model Bus {
 }
 
 model BusPassenger {
-  id               String   @id @default(uuid()) @db.Uuid
-  busId            String   @db.Uuid
-  bus              Bus      @relation(fields: [busId], references: [id], onDelete: Cascade)
+  id               String    @id @default(uuid()) @db.Uuid
+  busId            String    @db.Uuid
+  bus              Bus       @relation(fields: [busId], references: [id], onDelete: Cascade)
   employeeId       String
-  employee         Employee @relation(fields: [employeeId], references: [employeeId], onDelete: Cascade)
+  employee         Employee  @relation(fields: [employeeId], references: [employeeId], onDelete: Cascade)
   name             String? // optional passenger name for display
-  subscriptionDate DateTime @default(now()) @db.Date
-  status           String   @default("active") // active | inactive
-  createdAt        DateTime @default(now())
-  updatedAt        DateTime @updatedAt
+  subscriptionDate DateTime  @default(now()) @db.Date
+  terminationDate  DateTime? @db.Date // تاريخ انتهاء الاشتراك (عند الاستقالة/الإيقاف)
+  status           String    @default("active") // active | inactive
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
 
   @@unique([busId, employeeId])
   @@index([employeeId])

@@ -91,7 +91,7 @@ export class PenaltiesService {
       },
     });
 
-    this.notifications.create({
+    void this.notifications.create({
       type: 'PENALTY',
       severity: 'DANGER',
       title: 'خصم / جزاء جديد',

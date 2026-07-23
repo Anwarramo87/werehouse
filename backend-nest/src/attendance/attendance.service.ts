@@ -155,6 +155,8 @@ export class AttendanceService {
       this.shortCache.invalidatePrefix('attendance:stats:'),
       this.shortCache.invalidatePrefix('attendance:anomalies:'),
       this.shortCache.invalidatePrefix('attendance:alerts:'),
+      this.shortCache.invalidatePrefix('attendance:deductions:'),
+      this.shortCache.invalidatePrefix('dashboard:home-stats:'),
     ]);
   }
 
@@ -192,7 +194,7 @@ export class AttendanceService {
       const arabicMovement = type === 'IN' ? 'دخول' : 'خروج';
       const time = this.toTimeHHmm(record.timestamp);
 
-      this.realtimeGateway.emitAttendanceUpdate({
+      void this.realtimeGateway.emitAttendanceUpdate({
         employeeId: record.employeeId,
         employeeName,
         type,
@@ -206,7 +208,7 @@ export class AttendanceService {
       });
 
       // مصدر واحد لإنشاء إشعار الحضور — يضمن تغطية كل المسارات (يدوي/تعديل/جهاز)
-      this.notifications.create({
+      void this.notifications.create({
         type: type === 'OUT' ? 'CHECK_OUT' : 'CHECK_IN',
         severity: 'INFO',
         title: type === 'OUT' ? 'تسجيل خروج' : 'تسجيل دخول',
@@ -228,7 +230,47 @@ export class AttendanceService {
       return fromInput;
     }
 
-    return parsed.toISOString().slice(0, 10);
+    // استخدم التاريخ المحلي للمصنع (UTC+3) وليس تاريخ UTC،
+    // حتى لا تنقسم ورديات الليل (مثل 00:00→08:00 أو 22:00→06:00) على يومين مختلفين.
+    return toFactoryDateKey(parsed);
+  }
+
+  /**
+   * يحدّد حقل `date` (مفتاح اليوم) لبصمة حضور مع مراعاة ورديات الليل.
+   *
+   * - IN  → تاريخ اليوم المحلي للمصنع لتوقيت الدخول (بداية الورديّة).
+   * - OUT → يُربط بنفس يوم الـ IN المقابل له (آخر IN غير مقرون بـ OUT قبله)،
+   *   حتى لو تجاوز الخروج منتصف الليل إلى اليوم التالي. هذا يمنع انقسام
+   *   ورديات الليل على يومين مختلفين ويضمن اقتران IN/OUT الصحيح.
+   *   يُرجع التاريخ المحلي للمصنع كحل احتياطي إذا لم يوجد IN مقابل.
+   */
+  private async resolveAttendanceDate(
+    employeeId: string,
+    type: 'IN' | 'OUT',
+    eventDate: Date,
+  ): Promise<string> {
+    const localDate = toFactoryDateKey(eventDate);
+
+    if (type !== 'OUT') {
+      return localDate;
+    }
+
+    const pairedIn = await this.prisma.attendanceRecord.findFirst({
+      where: {
+        employeeId,
+        type: 'IN',
+        timestamp: { lt: eventDate },
+      },
+      orderBy: { timestamp: 'desc' },
+      select: { date: true },
+    });
+
+    if (pairedIn?.date) {
+      return pairedIn.date;
+    }
+
+    // لا يوجد IN سابق — استخدم تاريخ اليوم المحلي للمصنع
+    return localDate;
   }
 
   private async assertEmployeeExists(employeeId: string) {
@@ -547,11 +589,11 @@ export class AttendanceService {
 
     await this.assertEmployeeExists(dto.employeeId);
 
-    const date = this.deriveDateKey(dto.timestamp, eventDate);
+    const normalizedType = dto.type.toUpperCase();
+    const date = await this.resolveAttendanceDate(dto.employeeId, normalizedType as 'IN' | 'OUT', eventDate);
 
     // ── التحقق من التسلسل المنطقي للبصمات: نمنع IN→IN أو OUT→OUT المباشر ──
     // نسمح بالورديات المتعددة (IN→OUT→IN→OUT) لكن نمنع التسلسل الخاطئ (IN→IN بدون OUT بينهما)
-    const normalizedType = dto.type.toUpperCase();
     const lastRecord = await this.prisma.attendanceRecord.findFirst({
       where: { employeeId: dto.employeeId, date },
       orderBy: { timestamp: 'desc' },
@@ -577,16 +619,42 @@ export class AttendanceService {
       // إذا كان الفرق أكثر من 30 دقيقة، نسمح (قد يكون وردية ثانية)
     }
 
-    const record = await this.prisma.attendanceRecord.create({
-      data: {
-        ...dto,
-        timestamp: eventDate,
-        type: dto.type.toUpperCase(),
-        source: dto.source || 'manual',
-        verified: dto.verified ?? true,
-        date,
-      },
-    });
+    let record: Awaited<ReturnType<typeof this.prisma.attendanceRecord.create>>;
+    try {
+      record = await this.prisma.attendanceRecord.create({
+        data: {
+          ...dto,
+          timestamp: eventDate,
+          type: dto.type.toUpperCase(),
+          source: dto.source || 'manual',
+          verified: dto.verified ?? true,
+          date,
+        },
+      });
+    } catch (err) {
+      // Unique constraint (employeeId + timestamp + type) — concurrent biometric
+      // sync or a re-sent punch. Treat as an idempotent no-op, not a 500.
+      if (
+        err instanceof Prisma.PrismaClientKnownRequestError &&
+        err.code === 'P2002'
+      ) {
+        const existing = await this.prisma.attendanceRecord.findFirst({
+          where: {
+            employeeId: dto.employeeId,
+            timestamp: eventDate,
+            type: dto.type.toUpperCase(),
+          },
+        });
+        if (existing) {
+          return {
+            message: 'Attendance record already exists for this timestamp',
+            record: existing,
+            warning: undefined,
+          };
+        }
+      }
+      throw err;
+    }
 
     await this.invalidateAttendanceDashboardCaches();
     await this.emitAttendanceRealtime(record, 'created');
@@ -758,7 +826,13 @@ export class AttendanceService {
         throw new BadRequestException('Invalid timestamp');
       }
       payload.timestamp = parsed;
-      payload.date = this.deriveDateKey(dto.timestamp, parsed);
+      // حافظ على اقتران ورديات الليل: الخروج يتبع يوم الـ IN المقابل له
+      const updType = (dto.type ?? existing.type).toUpperCase();
+      payload.date = await this.resolveAttendanceDate(
+        dto.employeeId ?? originalEmployeeId,
+        updType as 'IN' | 'OUT',
+        parsed,
+      );
     }
 
     const updated = await this.prisma.attendanceRecord.update({
@@ -836,6 +910,9 @@ export class AttendanceService {
     });
 
     await this.invalidateAttendanceDashboardCaches();
+    // Notify realtime clients so dashboards/punch views drop the deleted row
+    // immediately instead of keeping a stale punch until next refresh.
+    this.emitAttendanceRealtime(record, 'updated').catch(() => {});
 
     return {
       message: 'Attendance record deleted successfully',
@@ -914,6 +991,8 @@ export class AttendanceService {
     });
 
     await this.invalidateAttendanceDashboardCaches();
+    // Notify realtime clients so dashboards/punch views pick up the restored row.
+    this.emitAttendanceRealtime(restoredRecord, 'created').catch(() => {});
 
     return {
       message: 'Attendance record restored successfully',
@@ -1237,7 +1316,7 @@ export class AttendanceService {
         status = 'absent';
       } else {
         const [schH, schM] = scheduledStart.split(':').map(Number);
-        const scheduledMinutes = (schH || 8) * 60 + (schM || 0);
+      const scheduledMinutes = ((schH ?? 8)) * 60 + (schM ?? 0);
         const utcMin = entry.firstIn.getUTCHours() * 60 + entry.firstIn.getUTCMinutes();
         const localMin = ((utcMin + TIMEZONE_OFFSET_MINUTES) % 1440) % 1440;
         const rawLate = Math.max(0, localMin - scheduledMinutes);
@@ -1258,7 +1337,7 @@ export class AttendanceService {
 
         if (entry.lastOut) {
           const [seH, seM] = scheduledEnd.split(':').map(Number);
-          const scheduledEndMin = (seH || 16) * 60 + (seM || 0);
+          const scheduledEndMin = ((seH ?? 16)) * 60 + (seM ?? 0);
           const outUtcMin = entry.lastOut.getUTCHours() * 60 + entry.lastOut.getUTCMinutes();
           const outLocalMin = ((outUtcMin + TIMEZONE_OFFSET_MINUTES) % 1440) % 1440;
           const overtime = Math.max(0, outLocalMin - scheduledEndMin);
@@ -1345,6 +1424,13 @@ export class AttendanceService {
       throw new BadRequestException('periodStart must be before or equal to periodEnd');
     }
 
+    // Short-lived cache: the dashboard fires this POST on every load and the
+    // underlying data only changes on explicit attendance edits. A 30-second
+    // TTL eliminates redundant full-table scans when the frontend's React
+    // Query refetches overlap with navigation-triggered calls.
+    const dedupeKey = `attendance:deductions:${periodStart}:${periodEnd}:${employeeId ?? 'all'}`;
+    return this.shortCache.getOrSetJson(dedupeKey, 30, async () => {
+
     // حساب عدد أيام العمل في الفترة (استثناء الجمعة فقط — السبت يوم عمل)
     const calcWorkingDays = (start: string, end: string): number => {
       const startDate = new Date(`${start}T00:00:00Z`);
@@ -1409,11 +1495,14 @@ export class AttendanceService {
     if (employeeId) leaveWhere.employeeId = employeeId;
     const approvedLeaves = await this.prisma.leaveRequest.findMany({
       where: leaveWhere,
-      select: { employeeId: true, startDate: true, endDate: true, leaveType: true },
+      select: { employeeId: true, startDate: true, endDate: true, leaveType: true, isHourly: true },
     });
     const periodStartUtc = new Date(`${periodStart}T00:00:00Z`);
     const periodEndUtc = new Date(`${periodEnd}T23:59:59Z`);
     const leaveDatesByEmployee = new Map<string, Set<string>>();
+    // publicHolidayLeaveDatesByEmployee: أيام العطل الرسمية (OTHER) فقط — تمنع خصومات التأخير والدوام الناقص
+    // باقي أنواع الإجازات (SICK, ADMIN, DEATH, PAID, UNPAID) تخضع للخصم الطبيعي
+    const publicHolidayLeaveDatesByEmployee = new Map<string, Set<string>>();
     const unpaidLeaveDaysByEmployee = new Map<string, number>();
     for (const leave of approvedLeaves) {
       const start = leave.startDate < periodStartUtc ? periodStartUtc : new Date(leave.startDate);
@@ -1429,6 +1518,13 @@ export class AttendanceService {
             leaveDatesByEmployee.set(leave.employeeId, new Set<string>());
           }
           leaveDatesByEmployee.get(leave.employeeId)!.add(d);
+          // إجازة أخرى (ساعية أو كاملة) — تمنع خصومات التأخير والخروج المبكر والغياب
+          if (leave.leaveType === 'OTHER') {
+            if (!publicHolidayLeaveDatesByEmployee.has(leave.employeeId)) {
+              publicHolidayLeaveDatesByEmployee.set(leave.employeeId, new Set<string>());
+            }
+            publicHolidayLeaveDatesByEmployee.get(leave.employeeId)!.add(d);
+          }
           // حساب أيام الإجازة بدون أجر (UNPAID)
           if (leave.leaveType === 'UNPAID') {
             dayCount++;
@@ -1462,6 +1558,25 @@ export class AttendanceService {
       sickLeavesByEmployee.set(l.employeeId, arr);
     }
 
+    // جلب جميع الإجازات الساعية المعتمدة للفترة دفعة واحدة (قبل الحلقة)
+    // Previously this was queried per-employee inside the loop (N+1 problem).
+    const allHourlyLeaves = await this.prisma.leaveRequest.findMany({
+      where: {
+        status: 'APPROVED',
+        isHourly: true,
+        ...(employeeId ? { employeeId } : {}),
+        startDate: { lte: new Date(`${periodEnd}T23:59:59Z`) },
+        endDate: { gte: new Date(`${periodStart}T00:00:00Z`) },
+      },
+      select: { employeeId: true, startDate: true, startTime: true, endTime: true },
+    });
+    const hourlyLeavesByEmployee = new Map<string, typeof allHourlyLeaves>();
+    for (const l of allHourlyLeaves) {
+      const arr = hourlyLeavesByEmployee.get(l.employeeId) ?? [];
+      arr.push(l);
+      hourlyLeavesByEmployee.set(l.employeeId, arr);
+    }
+
     // جلب جميع سجلات الحضور للفترة دفعة واحدة لتحسين الأداء
     const allRecords = await this.prisma.attendanceRecord.findMany({
       where: {
@@ -1486,8 +1601,10 @@ export class AttendanceService {
       schedStartMin: number,
       schedEndMin: number,
       delayAlreadyPenalized: number,
+      isNightShift = false,
+      scheduledEndEffMin = schedEndMin,
     ): number => {
-      const requiredMin = Math.max(0, schedEndMin - schedStartMin);
+      const requiredMin = Math.max(0, scheduledEndEffMin - schedStartMin);
       if (requiredMin <= 0 || dayRecords.length === 0) return 0;
 
       const sorted = [...dayRecords].sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
@@ -1500,9 +1617,13 @@ export class AttendanceService {
           pendingIn = punch.timestamp;
         } else if (type === 'OUT' && pendingIn) {
           const inMin = toLocalMinutes(pendingIn);
-          const outMin = toLocalMinutes(punch.timestamp);
+          let outMin = toLocalMinutes(punch.timestamp);
+          // For night shifts an OUT before scheduled start (e.g. 06:00 for a
+          // 22:00→06:00 shift) actually happens the following local day.
+          if (isNightShift && outMin < schedStartMin) outMin += 1440;
+          const schedEnd = isNightShift ? scheduledEndEffMin : schedEndMin;
           const clampedIn = Math.max(inMin, schedStartMin);
-          const clampedOut = Math.min(outMin, schedEndMin);
+          const clampedOut = Math.min(outMin, schedEnd);
           if (clampedOut > clampedIn) scheduledWorkedMs += (clampedOut - clampedIn) * 60_000;
           pendingIn = null;
         }
@@ -1581,6 +1702,8 @@ export class AttendanceService {
       // نحسب الأيام الفريدة التي وُجد فيها سجل IN (استثناء الجمعة فقط — السبت يوم عمل)
       // مع استبعاد أيام الإجازة المعتمدة حتى لو وُجدت فيها بصمة دخول (راجع الأعلى)
       const employeeLeaveDates = leaveDatesByEmployee.get(employee.employeeId);
+      // أيام العطل الرسمية (OTHER) فقط — تمنع خصومات التأخير والدوام الناقص
+      const employeePublicHolidayDates = publicHolidayLeaveDatesByEmployee.get(employee.employeeId);
       const datesWithCheckIn = new Set(
         records
           .filter((r) => r.type.toUpperCase() === 'IN')
@@ -1595,18 +1718,23 @@ export class AttendanceService {
       // أيام الحضور الفعلية = عدد الأيام الفريدة التي تم فيها تسجيل حضور
       const presentDays = datesWithCheckIn.size;
 
-      // أيام الغياب = أيام العمل المنقضية - أيام الحضور الفعلية
+      // عدد أيام العطل الرسمية (OTHER) في الفترة — لا تُحسب كغياب
+      const publicHolidayDaysInPeriod = employeePublicHolidayDates
+        ? [...employeePublicHolidayDates].filter((d) => d >= periodStart && d <= periodEnd).length
+        : 0;
+
+      // أيام الغياب = أيام العمل المنقضية - أيام الحضور الفعلية - أيام العطل الرسمية (OTHER)
       // نستخدم elapsedWorkDays (حتى اليوم) حتى لا نخصم مستقبلاً
       const absentDays = Math.max(
         0,
-        elapsedWorkDays - Math.min(datesWithCheckIn.size, elapsedWorkDays),
+        elapsedWorkDays - Math.min(datesWithCheckIn.size + publicHolidayDaysInPeriod, elapsedWorkDays),
       );
 
       // ── حساب دقائق التأخير الشهرية ───────────────────────────────────────
       // نأخذ أول IN لكل يوم ونقارنه بـ scheduledStart الخاص بالموظف
       const scheduledStart = employee.scheduledStart || '08:00';
       const [schH, schM] = scheduledStart.split(':').map(Number);
-      const scheduledMinutes = (schH || 8) * 60 + (schM || 0);
+      const scheduledMinutes = ((schH ?? 8)) * 60 + (schM ?? 0);
 
       // أول IN وآخر OUT لكل يوم
       const firstInByDate = new Map<
@@ -1641,16 +1769,8 @@ export class AttendanceService {
       const TIMEZONE_OFFSET_MINUTES = 180;
 
       // جلب الإجازات الساعية المعتمدة للموظف في الفترة
-      const hourlyLeavesInPeriod = await this.prisma.leaveRequest.findMany({
-        where: {
-          employeeId: employee.employeeId,
-          status: 'APPROVED',
-          isHourly: true,
-          startDate: { lte: new Date(`${periodEnd}T23:59:59Z`) },
-          endDate: { gte: new Date(`${periodStart}T00:00:00Z`) },
-        },
-        select: { startDate: true, startTime: true, endTime: true },
-      });
+      // (تم نقله إلى استعلام مجمّع قبل الحلقة — see hourlyLeavesByEmployee map)
+      const hourlyLeavesInPeriod = hourlyLeavesByEmployee.get(employee.employeeId) ?? [];
 
       // بناء map: date → دقائق الإجازة الساعية في بداية اليوم
       const morningLeaveOffsetByDate = new Map<string, number>();
@@ -1667,8 +1787,13 @@ export class AttendanceService {
         }
       }
 
-      let totalDelayMinutes = 0;
+        let totalDelayMinutes = 0;
       for (const { timestamp, shiftPairMinutesLate, date } of firstInByDate.values()) {
+        // ── لا تأخير في يوم الجمعة أو أيام العطل الرسمية (OTHER) فقط ──
+        const dayOfWeekForDelay = new Date(`${date}T00:00:00Z`).getUTCDay();
+        if (dayOfWeekForDelay === 5) continue; // الجمعة — لا خصم
+        if (employeePublicHolidayDates && employeePublicHolidayDates.has(date)) continue; // عطلة رسمية (OTHER)
+
         let rawLate: number;
         if (shiftPairMinutesLate !== null && shiftPairMinutesLate > 0) {
           rawLate = shiftPairMinutesLate;
@@ -1676,7 +1801,17 @@ export class AttendanceService {
           // timestamp stored in DB as UTC — add +3h to get local Saudi time
           const utcMinutes = timestamp.getUTCHours() * 60 + timestamp.getUTCMinutes();
           const localMinutes = (((utcMinutes + TIMEZONE_OFFSET_MINUTES) % 1440) + 1440) % 1440;
-          rawLate = Math.max(0, localMinutes - scheduledMinutes);
+          // Pick the scheduled-start instance (same day or next day) closest to
+          // the arrival. Prevents a 00:00-start shift from treating a 23:50
+          // arrival as ~24h late instead of ~10min early.
+          const cand = [scheduledMinutes, scheduledMinutes + 1440];
+          let best = Infinity;
+          let startInstance = scheduledMinutes;
+          for (const c of cand) {
+            const d = Math.abs(localMinutes - c);
+            if (d < best) { best = d; startInstance = c; }
+          }
+          rawLate = Math.max(0, startInstance - localMinutes < 0 ? localMinutes - startInstance : 0);
         }
         // طرح دقائق الإجازة الساعية الصباحية من التأخير
         const morningOffset = morningLeaveOffsetByDate.get(date) || 0;
@@ -1689,7 +1824,7 @@ export class AttendanceService {
       // هاد يضمن دقة الحساب مع الورديات المتعددة (IN→OUT→IN→OUT)
       const scheduledEnd = employee.scheduledEnd || '16:00';
       const [seH, seM] = scheduledEnd.split(':').map(Number);
-      const scheduledEndMinutes = (seH || 16) * 60 + (seM || 0);
+      const scheduledEndMinutes = ((seH ?? 16)) * 60 + (seM ?? 0);
       const schedStartMin = scheduledMinutes;
       const schedEndMin = scheduledEndMinutes;
 
@@ -1703,6 +1838,11 @@ export class AttendanceService {
 
       let directMissingMinutes = 0;
       for (const [date, dayRecords] of recordsByDate.entries()) {
+        // ── لا خصم دوام ناقص في يوم الجمعة أو أيام العطل الرسمية (OTHER) فقط ──
+        const dayOfWeekForMissing = new Date(`${date}T00:00:00Z`).getUTCDay();
+        if (dayOfWeekForMissing === 5) continue; // الجمعة — لا خصم
+        if (employeePublicHolidayDates && employeePublicHolidayDates.has(date)) continue; // عطلة رسمية (OTHER)
+
         // تأخير هذا اليوم تحديداً
         const dayDelayInfo = [...firstInByDate.values()].find((x) => x.date === date);
         const dayDelay = dayDelayInfo
@@ -1713,7 +1853,14 @@ export class AttendanceService {
               } else {
                 const utcMin = dayDelayInfo.timestamp.getUTCHours() * 60 + dayDelayInfo.timestamp.getUTCMinutes();
                 const localMin = (((utcMin + TIMEZONE_OFFSET_MINUTES) % 1440) + 1440) % 1440;
-                rawLate = Math.max(0, localMin - schedStartMin);
+                // closest scheduled-start instance (handles 00:00-start / night shifts)
+                const cand = [schedStartMin, schedStartMin + 1440];
+                let best = Infinity, startInstance = schedStartMin;
+                for (const c of cand) {
+                  const d = Math.abs(localMin - c);
+                  if (d < best) { best = d; startInstance = c; }
+                }
+                rawLate = startInstance - localMin < 0 ? localMin - startInstance : 0;
               }
               rawLate = Math.max(0, rawLate - (morningLeaveOffsetByDate.get(date) || 0));
               return rawLate > empGracePeriod ? rawLate - empGracePeriod : 0;
@@ -1721,11 +1868,15 @@ export class AttendanceService {
           : 0;
 
         // حساب الدقائق الناقصة مباشرة من أزواج البصمات
+        const isNightShift = schedEndMin <= schedStartMin;
+        const scheduledEndEffMin = isNightShift ? schedEndMin + 1440 : schedEndMin;
         const missingFromPunches = computeMissingMinutesFromPunches(
           dayRecords,
           schedStartMin,
           schedEndMin,
           dayDelay,
+          isNightShift,
+          scheduledEndEffMin,
         );
 
         // استخدام DailyAttendanceLog كـ fallback إذا كان الحساب المباشر صفر وكان في log
@@ -1810,7 +1961,12 @@ export class AttendanceService {
             weekendWorkedMinutes += Math.max(0, localOutMinutes - localInMinutes);
           }
         } else {
-          const overtime = Math.max(0, localOutMinutes - scheduledEndMinutes);
+          // For night shifts the scheduled end is on the following local day,
+          // so compare against the effective end (scheduledEnd + 1440).
+          const effScheduledEnd = schedEndMin <= schedStartMin ? schedEndMin + 1440 : schedEndMin;
+          let outMin = localOutMinutes;
+          if (schedEndMin <= schedStartMin && outMin < schedStartMin) outMin += 1440;
+          const overtime = Math.max(0, outMin - effScheduledEnd);
           totalOvertimeMinutes += overtime;
         }
       }
@@ -1876,5 +2032,6 @@ export class AttendanceService {
         effectivePeriodEnd,
       },
     };
+    }); // end shortCache.getOrSetJson
   }
 }

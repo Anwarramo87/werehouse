@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
+import { appendFileSync } from 'fs';
 import { PrismaService } from '../prisma/prisma.service';
 import { ShortCacheService } from '../common/cache/short-cache.service';
 import {
@@ -90,7 +91,9 @@ export class DashboardService {
   async getHomeStats() {
     const today = toFactoryDateKey();
 
-    return this.shortCache.getOrSetJson(`dashboard:home-stats:${today}`, 60, async () =>
+    // TTL قصير (30s) — تُبطَّل الكاش فوراً عند أي تغيير في الحضور/الموظفين/الرواتب
+    // عبر ShortCacheService.invalidatePrefix('dashboard:home-stats:')
+    return this.shortCache.getOrSetJson(`dashboard:home-stats:${today}`, 30, async () =>
       this.buildHomeStats(today),
     );
   }
@@ -99,29 +102,96 @@ export class DashboardService {
     const now = new Date();
     const { start: monthStart, end: monthEnd } = monthDateRange(now.getFullYear(), now.getMonth());
 
-    const [
-      totalEmployees,
-      todayAttendanceRecords,
-      salaryAggregate,
-      absentEmployees,
-      allActiveWithSalaries,
-    ] = await Promise.all([
-      this.prisma.employee.count({ where: { status: 'active' } }),
+    const timers: Array<{ name: string; ms: number }> = [];
+    const timed = async <T>(name: string, fn: () => Promise<T>): Promise<T> => {
+      const s = Date.now();
+      const result = await fn();
+      timers.push({ name, ms: Date.now() - s });
+      return result;
+    };
 
-      this.prisma.attendanceRecord.findMany({
-        where: { date: today },
-        select: {
-          employeeId: true,
-          type: true,
-          timestamp: true,
-          shiftPair: true,
-          employee: {
+    const [totalEmployees, todayAttendanceRecords, salaryAggregate, absentEmployees, allActiveWithSalaries] =
+      await Promise.all([
+        timed('employee.count', () =>
+          this.prisma.employee.count({ where: { status: 'active' } }),
+        ),
+
+        timed('attendanceRecord.findMany(today)', () =>
+          this.prisma.attendanceRecord.findMany({
+            where: { date: today },
             select: {
-              name: true,
               employeeId: true,
-              scheduledStart: true,
+              type: true,
+              timestamp: true,
+              shiftPair: true,
+              employee: {
+                select: {
+                  name: true,
+                  employeeId: true,
+                  scheduledStart: true,
+                  department: true,
+                  scheduledEnd: true,
+                  hourlyRate: true,
+                  baseSalary: true,
+                  livingAllowance: true,
+                  workDaysInPeriod: true,
+                  hoursPerDay: true,
+                  employeeSalary: {
+                    select: {
+                      baseSalary: true,
+                      lumpSumSalary: true,
+                      livingAllowance: true,
+                      responsibilityAllowance: true,
+                      extraEffortAllowance: true,
+                      productionIncentive: true,
+                      transportAllowance: true,
+                    },
+                  },
+                },
+              },
+            },
+            orderBy: { timestamp: 'asc' },
+            take: 2000,
+          }),
+        ),
+
+        timed('employeeSalary.aggregate', () =>
+          this.prisma.employeeSalary.aggregate({
+            _sum: {
+              baseSalary: true,
+              lumpSumSalary: true,
+              livingAllowance: true,
+              responsibilityAllowance: true,
+              extraEffortAllowance: true,
+              productionIncentive: true,
+              transportAllowance: true,
+            },
+          }),
+        ),
+
+        timed('employee.findMany(absent)', () =>
+          this.prisma.employee.findMany({
+            where: {
+              status: 'active',
+              attendanceRecords: {
+                none: { date: today, type: 'IN' },
+              },
+            },
+            select: {
+              employeeId: true,
+              name: true,
               department: true,
-              scheduledEnd: true,
+              scheduledStart: true,
+            },
+            take: 500,
+          }),
+        ),
+
+        timed('employee.findMany(allActive+salary)', () =>
+          this.prisma.employee.findMany({
+            where: { status: 'active' },
+            select: {
+              employeeId: true,
               hourlyRate: true,
               baseSalary: true,
               livingAllowance: true,
@@ -139,63 +209,9 @@ export class DashboardService {
                 },
               },
             },
-          },
-        },
-        orderBy: { timestamp: 'asc' },
-        take: 2000,
-      }),
-
-      this.prisma.employeeSalary.aggregate({
-        _sum: {
-          baseSalary: true,
-          lumpSumSalary: true,
-          livingAllowance: true,
-          responsibilityAllowance: true,
-          extraEffortAllowance: true,
-          productionIncentive: true,
-          transportAllowance: true,
-        },
-      }),
-
-      this.prisma.employee.findMany({
-        where: {
-          status: 'active',
-          attendanceRecords: {
-            none: { date: today, type: 'IN' },
-          },
-        },
-        select: {
-          employeeId: true,
-          name: true,
-          department: true,
-          scheduledStart: true,
-        },
-        take: 500,
-      }),
-
-      this.prisma.employee.findMany({
-        where: { status: 'active' },
-        select: {
-          employeeId: true,
-          hourlyRate: true,
-          baseSalary: true,
-          livingAllowance: true,
-          workDaysInPeriod: true,
-          hoursPerDay: true,
-          employeeSalary: {
-            select: {
-              baseSalary: true,
-              lumpSumSalary: true,
-              livingAllowance: true,
-              responsibilityAllowance: true,
-              extraEffortAllowance: true,
-              productionIncentive: true,
-              transportAllowance: true,
-            },
-          },
-        },
-      }),
-    ]);
+          }),
+        ),
+      ]);
 
     const presentMap = new Map<string, { name: string; department: string | null; checkIn: string }>();
     for (const rec of todayAttendanceRecords) {
@@ -346,6 +362,18 @@ export class DashboardService {
       // (رقم ثابت لا يتأثر بعدد أيام الحضور الفعلية)
       totalReceivedSalaries += empTotalSalary;
     }
+
+    // Log per-query timing so we can identify which query is the bottleneck.
+    // Write to a temp file (not console) because the detached backend discards stdout.
+    const totalMs = timers.reduce((a, t) => a + t.ms, 0);
+    const summary = timers.map((t) => `${t.name}=${t.ms}ms`).join(' | ');
+    const pool = this.prisma.getPoolStats();
+    try {
+      appendFileSync(
+        'C:/Users/BootCamp/AppData/Local/Temp/opencode/dashboard-profile.log',
+        `[${new Date().toISOString()}] TOTAL=${totalMs}ms | pool: total=${pool.totalCount} idle=${pool.idleCount} waiting=${pool.waitingCount} | ${summary}\n`,
+      );
+    } catch { /* ignore */ }
 
     return {
       totalEmployees,

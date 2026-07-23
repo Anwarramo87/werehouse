@@ -34,10 +34,12 @@ export class CreateEmployeeDto {
   @IsOptional()
   password: string;
 
-  @ApiPropertyOptional({ description: 'رقم الجوال', example: '0501234567' })
+  @ApiPropertyOptional({ description: 'رقم الجوال — رقم سوري يبدأ بـ 09 ويتكون من 10 أرقام', example: '0912345678' })
   @IsOptional()
   @IsString()
-  @MaxLength(30)
+  @Matches(/^09[0-9]{8}$/, {
+    message: 'mobile must start with 09 and be exactly 10 digits',
+  })
   mobile?: string;
 
   @ApiPropertyOptional({ description: 'رقم الموظف القديم على جهاز البصمة', example: 785 })

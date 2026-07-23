@@ -439,7 +439,7 @@ export class LeavesService {
     await this.shortCache.invalidatePrefix('employees:stats');
 
     const employeeName = (result as any).employee?.name ?? dto.employeeId;
-    this.notifications.create({
+    void this.notifications.create({
       type: 'LEAVE',
       severity: 'INFO',
       title: 'طلب إجازة جديد',
