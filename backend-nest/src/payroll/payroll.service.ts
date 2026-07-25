@@ -1620,13 +1620,17 @@ export class PayrollService {
   }
 
   async markPayrollRunFailed(payrollRunId: string, message: string) {
-    await this.prisma.payrollRun.update({
-      where: { id: payrollRunId },
-      data: {
-        status: 'failed',
-        notes: message || 'Payroll calculation failed',
-      },
-    });
+    try {
+      await this.prisma.payrollRun.update({
+        where: { id: payrollRunId },
+        data: {
+          status: 'failed',
+          notes: message || 'Payroll calculation failed',
+        },
+      });
+    } catch (updateError) {
+      this.logger.error(`Failed to mark payroll run ${payrollRunId} as failed: ${updateError}`);
+    }
   }
 
   private async enqueuePayrollJob(payload: PayrollQueuePayload) {
