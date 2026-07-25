@@ -13,7 +13,7 @@ import { PayrollService } from './payroll.service';
 import { Prisma, PrismaClient } from '@prisma/client';
 
 type Tx = {
-  $executeRawUnsafe: jest.Mock;
+  $executeRaw: jest.Mock;
   payrollRun: {
     findFirst: jest.Mock;
     create: jest.Mock;
@@ -25,7 +25,7 @@ type Tx = {
 
 function makeTx(existingRun: any | null, createdRun: any) {
   const tx: Tx = {
-    $executeRawUnsafe: jest.fn().mockResolvedValue(undefined),
+    $executeRaw: jest.fn().mockResolvedValue(undefined),
     payrollRun: {
       findFirst: jest.fn().mockResolvedValue(existingRun),
       create: jest.fn().mockResolvedValue(createdRun),
@@ -129,7 +129,7 @@ describe('PayrollService.calculateAsync — C1 deduplication', () => {
 
     await service.calculateAsync(dto as any, 'u1');
 
-    expect(usedTx.$executeRawUnsafe).toHaveBeenCalledWith(
+    expect(usedTx.$executeRaw).toHaveBeenCalledWith(
       expect.stringContaining('pg_advisory_xact_lock'),
     );
   });
@@ -148,7 +148,7 @@ describe('PayrollService.calculateAsync — C1 deduplication', () => {
       created.push(createdRun);
       const seen = created.length === 1 ? null : created[0];
       const tx = {
-        $executeRawUnsafe: jest.fn().mockResolvedValue(undefined),
+        $executeRaw: jest.fn().mockResolvedValue(undefined),
         payrollRun: {
           findFirst: jest.fn().mockResolvedValue(seen),
           create: jest.fn().mockResolvedValue(createdRun),

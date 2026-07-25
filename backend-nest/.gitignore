@@ -8,5 +8,20 @@ coverage/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
-tmp/uploads/
+tmp/
 *.tsbuildinfo
+
+# Temp/test files — never commit
+*.zip
+*.rar
+*.bak
+Screenshot*.png
+response.txt
+res2.txt
+query-emp*.sql
+query-emp*.ts
+test-*.js
+test-*.ts
+test-*.ps1
+list-tables.sql
+.dbg/

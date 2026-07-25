@@ -1,4 +1,5 @@
 import { Employee, EmployeeSalary, Prisma } from '@prisma/client';
+import { WORK_HOURS_PER_DAY } from '../constants/payroll.constants';
 
 export type SalarySourceEmployee = Pick<
   Employee,
@@ -61,7 +62,7 @@ export function resolveSalary(
   salaryRecord?: SalaryRecordLike | null,
 ): ResolvedSalary {
   const workDaysInPeriod = employee.workDaysInPeriod || 26;
-  const hoursPerDay = employee.hoursPerDay || 8;
+  const hoursPerDay = employee.hoursPerDay || WORK_HOURS_PER_DAY;
 
   const baseSalary = toNumber(salaryRecord?.baseSalary ?? employee.baseSalary);
   const livingAllowance = toNumber(salaryRecord?.livingAllowance ?? employee.livingAllowance);
@@ -128,6 +129,7 @@ export function buildEmployeeSalaryMirror(resolved: ResolvedSalary): Prisma.Empl
     baseSalary: new Prisma.Decimal(resolved.baseSalary),
     livingAllowance: new Prisma.Decimal(resolved.livingAllowance),
     hourlyRate: new Prisma.Decimal(resolved.hourlyRate.toFixed(2)),
+    insuranceAmount: new Prisma.Decimal(resolved.insuranceAmount),
   };
 }
 
