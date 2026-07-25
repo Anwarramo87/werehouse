@@ -4,6 +4,7 @@ import { JwtService } from '@nestjs/jwt';
 import { createHash, createPublicKey, randomBytes, verify } from 'crypto';
 import * as bcrypt from 'bcryptjs';
 import { PrismaService } from '../prisma/prisma.service';
+import { checkLeaveConflictForAttendance } from '../common/utils/leave-attendance-conflict.util';
 import { TokenRevocationService } from './token-revocation.service';
 import { RealtimeGateway } from '../realtime/realtime.gateway';
 import { LoginDto } from './dto/login.dto';
@@ -131,8 +132,9 @@ export class AuthService {
   }
 
   async register(dto: RegisterDto) {
+    // Registration is disabled by default. Set REGISTRATION_ENABLED=true in .env to allow it.
     const registrationEnabled = this.config.get<boolean>('REGISTRATION_ENABLED', false);
-    if (this.config.get<string>('NODE_ENV') === 'production' && !registrationEnabled) {
+    if (!registrationEnabled) {
       throw new BadRequestException('Registration is disabled');
     }
 
@@ -419,6 +421,16 @@ export class AuthService {
 
     const now = new Date();
     const localDate = toFactoryDateKey(now, this.timezoneOffsetMinutes);
+
+    try {
+      await checkLeaveConflictForAttendance(this.prisma, employee.employeeId, localDate);
+    } catch (err) {
+      this.logger.warn(
+        `Auto-attendance skipped for ${employee.employeeId} on ${localDate}: ${err instanceof Error ? err.message : err}`,
+      );
+      return;
+    }
+
     const attendance = await this.prisma.attendanceRecord.create({
       data: {
         employeeId: employee.employeeId,

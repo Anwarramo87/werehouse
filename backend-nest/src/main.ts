@@ -13,12 +13,36 @@ import { AppModule } from './app.module';
 import { PrismaService } from './prisma/prisma.service';
 import { GlobalExceptionFilter } from './common/filters/global-exception.filter';
 
+// EPIPE guard — prevents crash when stdout/stderr is redirected to a file
+// and the pipe is broken or closed. This must run before any logger or
+// NestJS bootstrap code so that all subsequent console.log / logger.log
+// calls are safely intercepted.
+const originalStdoutWrite = process.stdout.write.bind(process.stdout);
+process.stdout.write = function (chunk: string | Uint8Array, ...args: any[]): boolean {
+  try {
+    return originalStdoutWrite(chunk, ...args);
+  } catch {
+    return true;
+  }
+};
+const originalStderrWrite = process.stderr.write.bind(process.stderr);
+process.stderr.write = function (chunk: string | Uint8Array, ...args: any[]): boolean {
+  try {
+    return originalStderrWrite(chunk, ...args);
+  } catch {
+    return true;
+  }
+};
+
 // -----------------------------------------------------------------------------
 // 1. Global error handling
 // -----------------------------------------------------------------------------
 const logger = new Logger('Bootstrap');
 
 process.on('uncaughtException', (err) => {
+  if ((err as NodeJS.ErrnoException).code === 'EPIPE') {
+    process.exit(0);
+  }
   logger.error('Uncaught Exception (process kept alive):', err);
 });
 
@@ -86,6 +110,25 @@ async function bootstrap() {
   const isProd = configService.get<string>('NODE_ENV') === 'production';
   const port = configService.get<number>('PORT', 3000);
   const host = configService.get<string>('HOST', '0.0.0.0');
+
+  // --- Startup Guard: Deployment mismatch detection ---
+  const deploymentEnv = configService.get<string>('DEPLOYMENT_ENV', '');
+  if (deploymentEnv === 'production' && !isProd) {
+    logger.error(
+      '⚠️  WARNING: DEPLOYMENT_ENV=production but NODE_ENV != production — ' +
+      'security hardening (Swagger disabled, CORS restricted, HSTS, secure cookies) is currently OFF. ' +
+      'Set NODE_ENV=production on the production server immediately.',
+    );
+  }
+
+  // --- Startup Guard: Biometric simulator warning ---
+  const biometricSimulator = configService.get<string>('USE_BIOMETRIC_SIMULATOR', 'false') === 'true';
+  if (biometricSimulator) {
+    logger.warn(
+      '⚠️  USE_BIOMETRIC_SIMULATOR is enabled — attendance data from biometric device is ' +
+      'GENERATED RANDOMALLY (simulated), NOT from real hardware. Do not use in production.',
+    );
+  }
 
   // --- Security & Proxy ---
   const trustProxy = configService.get<boolean>('TRUST_PROXY', isProd);

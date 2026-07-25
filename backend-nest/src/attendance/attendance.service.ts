@@ -13,6 +13,7 @@ import { ShortCacheService } from '../common/cache/short-cache.service';
 import { RealtimeGateway } from '../realtime/realtime.gateway';
 import { NotificationsService } from '../notifications/notifications.service';
 import { AttendanceAggregationService } from './attendance-aggregation.service';
+import { WORK_HOURS_PER_DAY } from '../common/constants/payroll.constants';
 import { toFactoryDateKey } from '../common/utils/timezone.util';
 import { resolveSalary } from '../common/utils/salary-resolution.util';
 
@@ -718,6 +719,7 @@ export class AttendanceService {
       }
 
       try {
+        const dateKey = this.deriveDateKey(row.timestamp, parsedTimestamp);
         const created = await this.prisma.attendanceRecord.create({
           data: {
             employeeId: row.employeeId,
@@ -728,9 +730,19 @@ export class AttendanceService {
             source: this.normalizeAttendanceSource(row.source),
             verified: true,
             notes: row.notes || null,
-            date: this.deriveDateKey(row.timestamp, parsedTimestamp),
+            date: dateKey,
           },
         });
+
+        try {
+          await checkLeaveConflictForAttendance(this.prisma, row.employeeId, dateKey);
+        } catch (conflictErr) {
+          errors.push({
+            row: rowNumber,
+            error: conflictErr instanceof Error ? conflictErr.message : 'Leave conflict',
+          });
+          continue;
+        }
 
         importedRows += 1;
         await this.emitAttendanceRealtime(created, 'created');
@@ -960,6 +972,13 @@ export class AttendanceService {
     const notes = typeof payload.notes === 'string' ? payload.notes : null;
     const shiftPair = payload.shiftPair;
 
+    const conflict = await checkLeaveConflictForAttendance(this.prisma, employeeId, date);
+    if (conflict) {
+      throw new BadRequestException(
+        `Cannot restore attendance: ${conflict.message}`,
+      );
+    }
+
     const restoredRecord = await this.prisma.$transaction(async (tx) => {
       const created = await tx.attendanceRecord.create({
         data: {
@@ -1018,6 +1037,16 @@ export class AttendanceService {
           where: { status: 'active' },
         });
 
+        const approvedLeavesOnRange = await this.prisma.leaveRequest.findMany({
+          where: {
+            status: 'APPROVED',
+            startDate: { lte: new Date(`${range.endDate}T23:59:59Z`) },
+            endDate: { gte: new Date(`${range.startDate}T00:00:00Z`) },
+          },
+          select: { employeeId: true },
+        });
+        const onLeaveIds = new Set(approvedLeavesOnRange.map((l) => l.employeeId));
+
         const employeeMap = new Map<
           string,
           { employeeId: string; name: string; minutesLate: number; records: number }
@@ -1058,7 +1087,7 @@ export class AttendanceService {
         return {
           summary: {
             activeEmployees: employeeMap.size,
-            absentCount: totalEmployees - employeeMap.size,
+            absentCount: totalEmployees - employeeMap.size - onLeaveIds.size,
             totalLateMinutes,
           },
           statistics: {
@@ -1083,7 +1112,33 @@ export class AttendanceService {
           },
         });
 
+        const approvedLeavesForAnomalies = await this.prisma.leaveRequest.findMany({
+          where: {
+            status: 'APPROVED',
+            startDate: { lte: new Date(`${range.endDate}T23:59:59Z`) },
+            endDate: { gte: new Date(`${range.startDate}T00:00:00Z`) },
+          },
+          select: { employeeId: true, startDate: true, endDate: true },
+        });
+
+        const leaveDateRangesByEmployee = new Map<string, { start: string; end: string }[]>();
+        for (const leave of approvedLeavesForAnomalies) {
+          const start = leave.startDate.toISOString().slice(0, 10);
+          const end = leave.endDate.toISOString().slice(0, 10);
+          if (!leaveDateRangesByEmployee.has(leave.employeeId)) {
+            leaveDateRangesByEmployee.set(leave.employeeId, []);
+          }
+          leaveDateRangesByEmployee.get(leave.employeeId)!.push({ start, end });
+        }
+
+        const isInApprovedLeave = (empId: string, date: string): boolean => {
+          const ranges = leaveDateRangesByEmployee.get(empId);
+          if (!ranges) return false;
+          return ranges.some((r) => date >= r.start && date <= r.end);
+        };
+
         const anomalies = candidates.filter((record: (typeof candidates)[number]) => {
+          if (isInApprovedLeave(record.employeeId, record.date)) return false;
           if (!record.verified) return true;
           const shiftPair = record.shiftPair as ShiftPair | null;
           return (shiftPair?.minutesLate || 0) > 60;
@@ -1130,6 +1185,16 @@ export class AttendanceService {
           }),
         ]);
 
+        const approvedLeavesForAlerts = await this.prisma.leaveRequest.findMany({
+          where: {
+            status: 'APPROVED',
+            startDate: { lte: new Date(`${targetDate}T23:59:59Z`) },
+            endDate: { gte: new Date(`${targetDate}T00:00:00Z`) },
+          },
+          select: { employeeId: true },
+        });
+        const onLeaveIds = new Set(approvedLeavesForAlerts.map((l) => l.employeeId));
+
         const attendanceByEmployee = new Map<string, EmployeeDailyAttendance>();
 
         for (const record of records) {
@@ -1163,6 +1228,11 @@ export class AttendanceService {
         for (const employee of activeEmployees) {
           const snapshot = attendanceByEmployee.get(employee.employeeId);
           const scheduledStart = employee.scheduledStart || DEFAULT_ALERT_SCHEDULE_START;
+
+          if (onLeaveIds.has(employee.employeeId)) {
+            continue;
+          }
+
           if (!snapshot?.firstIn) {
             absentAlerts.push({
               status: 'absent',
@@ -1208,9 +1278,10 @@ export class AttendanceService {
           lateThresholdMinutes: threshold,
           summary: {
             activeEmployees: activeEmployees.length,
-            checkedInCount: activeEmployees.length - absentAlerts.length,
+            checkedInCount: activeEmployees.length - absentAlerts.length - onLeaveIds.size,
             absentCount: absentAlerts.length,
             lateCount: lateAlerts.length,
+            onLeaveCount: onLeaveIds.size,
             totalAlerts: alerts.length,
           },
           alerts,
@@ -1255,6 +1326,16 @@ export class AttendanceService {
         },
       }),
     ]);
+
+    const approvedLeavesForDay = await this.prisma.leaveRequest.findMany({
+      where: {
+        status: 'APPROVED',
+        startDate: { lte: new Date(`${targetDate}T23:59:59Z`) },
+        endDate: { gte: new Date(`${targetDate}T00:00:00Z`) },
+      },
+      select: { employeeId: true },
+    });
+    const onLeaveIds = new Set(approvedLeavesForDay.map((l) => l.employeeId));
 
     const byEmployee = new Map<
       string,
@@ -1313,7 +1394,7 @@ export class AttendanceService {
       let notes: string | null = null;
 
       if (!entry?.firstIn) {
-        status = 'absent';
+        status = onLeaveIds.has(emp.employeeId) ? 'on-leave' : 'absent';
       } else {
         const [schH, schM] = scheduledStart.split(':').map(Number);
       const scheduledMinutes = ((schH ?? 8)) * 60 + (schM ?? 0);
@@ -1370,6 +1451,7 @@ export class AttendanceService {
         present: result.filter((e) => e.status === 'present').length,
         late: result.filter((e) => e.status === 'late').length,
         absent: result.filter((e) => e.status === 'absent').length,
+        onLeave: result.filter((e) => e.status === 'on-leave').length,
       },
     };
   }
@@ -1412,7 +1494,7 @@ export class AttendanceService {
       // القيم الافتراضية من الـ input — تُستخدم فقط إذا لم يوجد إعداد على الموظف نفسه
       gracePeriodMinutes: inputGracePeriod = 5,
       workDaysInPeriod: inputWorkDays = 26,
-      hoursPerDay: inputHoursPerDay = 8,
+      hoursPerDay: inputHoursPerDay = WORK_HOURS_PER_DAY,
       employeeId,
     } = input;
 

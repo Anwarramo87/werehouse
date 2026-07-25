@@ -564,7 +564,8 @@ export class PayrollService {
     const livingAllowance = this.toDecimal(salaryRecord?.livingAllowance ?? 0);
 
     const g3 = baseSalary.plus(livingAllowance);
-    const dailyWage = g3.div(STANDARD_WORK_DAYS);
+    const employeeWorkDays = new Prisma.Decimal(workDays);
+    const dailyWage = g3.div(employeeWorkDays);
     const hourlyWage = dailyWage.div(new Prisma.Decimal(hoursPerDayEmp));
     const minuteWage = hourlyWage.div(MINUTES_PER_HOUR);
 
@@ -786,7 +787,7 @@ export class PayrollService {
     }
 
     const workDays = employee.workDaysInPeriod ?? 26;
-    const hoursPerDayEmp = employee.hoursPerDay ?? 8;
+    const hoursPerDayEmp = employee.hoursPerDay ?? WORK_HOURS_PER_DAY;
 
     // 2. Compute earned salary dynamically from DailyAttendanceLog (start of month → terminationDate)
     const periodStart = new Date(Date.UTC(Number(yearStr), Number(monthStr) - 1, 1));
@@ -953,18 +954,34 @@ export class PayrollService {
     // so there is no manual unlock to forget.
     const lockKey = this.payrollPeriodLockKey(dto.periodStart, dto.periodEnd);
 
-    // Phase 1: Acquire lock, delete existing run, create new run — COMMIT.
-    // The run must be committed before processPayrollRun() executes, because
-    // processPayrollRun uses `this.prisma` (a separate pool connection) and
-    // cannot see uncommitted rows created by `tx`.
-    const run = await this.prisma.$transaction(async (tx) => {
-      await tx.$executeRawUnsafe(`SELECT pg_advisory_xact_lock(${lockKey})`);
+    // Create the payroll run record BEFORE acquiring the advisory lock.
+    // This guarantees the record is committed and always available for
+    // markPayrollRunFailed() in the error-handling path, even if the
+    // subsequent lock/cleanup transaction encounters an error.
+    const runDateKey = dto.periodStart.slice(0, 10).replace(/-/g, '');
+    const runId = `PAY${runDateKey}-${Date.now().toString().slice(-4)}`;
+    const run = await this.prisma.payrollRun.create({
+      data: {
+        runId,
+        periodStart: this.toDateOnly(dto.periodStart),
+        periodEnd: this.toDateOnly(dto.periodEnd),
+        runBy: userId,
+        status: 'queued',
+        approvalStatus: 'pending',
+        totalEmployees: 0,
+      },
+    });
 
-      // Check for an existing payroll run for the given period
+    // Phase 1: Acquire advisory lock, then delete any stale payroll runs
+    // for the same period. Our newly-created run is excluded from the query
+    // so it is never deleted by this cleanup.
+    await this.prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(${lockKey}::bigint)`;
       const existingRun = await tx.payrollRun.findFirst({
         where: {
           periodStart: periodStart,
           periodEnd: periodEnd,
+          id: { not: run.id },
         },
       });
 
@@ -974,26 +991,10 @@ export class PayrollService {
         );
         await this.deletePayrollRun(existingRun.id, userId, tx);
       }
-
-      const runDateKey = dto.periodStart.slice(0, 10).replace(/-/g, '');
-      const runId = `PAY${runDateKey}-${Date.now().toString().slice(-4)}`;
-
-      // Create the payroll run record — this commits when the transaction ends
-      return tx.payrollRun.create({
-        data: {
-          runId,
-          periodStart: this.toDateOnly(dto.periodStart),
-          periodEnd: this.toDateOnly(dto.periodEnd),
-          runBy: userId,
-          status: 'queued',
-          approvalStatus: 'pending',
-          totalEmployees: 0,
-        },
-      });
     });
 
     // Phase 2: Process the payroll run — uses `this.prisma` (pool connection).
-    // The run record is now committed and visible to all connections.
+    // The run record is already committed and visible to all connections.
     try {
       const updatedRun = await this.processPayrollRun(run.id, dto, userId);
       return { message: 'Payroll calculated successfully', payrollRun: updatedRun };
@@ -1015,16 +1016,33 @@ export class PayrollService {
     // run for the same period (no period check existed before), producing
     // duplicate PayrollItem sets and an ambiguous "current run" for the period.
     // We reuse the same transaction-scoped advisory lock as `calculate()` so the
-    // lock and the guarded create share ONE physical connection. The existing
-    // (non-final) run for the period is removed before the new one is created,
-    // guaranteeing at most one run per period at any time.
+    // lock and the guarded create share ONE physical connection.
     const lockKey = this.payrollPeriodLockKey(dto.periodStart, dto.periodEnd);
 
-    const run = await this.prisma.$transaction(async (tx) => {
-      await tx.$executeRawUnsafe(`SELECT pg_advisory_xact_lock(${lockKey})`);
+    // Create the payroll run record BEFORE acquiring the advisory lock.
+    // This guarantees the record is committed and always available for
+    // markPayrollRunFailed() in the error-handling path, even if the
+    // subsequent lock/cleanup transaction encounters an error.
+    const runDateKey = dto.periodStart.slice(0, 10).replace(/-/g, '');
+    const runId = `PAY${runDateKey}-${Date.now().toString().slice(-4)}`;
+    const run = await this.prisma.payrollRun.create({
+      data: {
+        runId,
+        periodStart,
+        periodEnd,
+        runBy: userId,
+        status: 'queued',
+        approvalStatus: 'pending',
+        totalEmployees: 0,
+      },
+    });
 
+    // Phase 1: Acquire advisory lock, then delete any stale (non-approved)
+    // payroll runs for the same period. Our newly-created run is excluded.
+    await this.prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(${lockKey}::bigint)`;
       const existingRun = await tx.payrollRun.findFirst({
-        where: { periodStart, periodEnd },
+        where: { periodStart, periodEnd, id: { not: run.id } },
       });
 
       if (existingRun && existingRun.approvalStatus !== 'approved') {
@@ -1033,21 +1051,6 @@ export class PayrollService {
         );
         await this.deletePayrollRun(existingRun.id, userId, tx);
       }
-
-      const runDateKey = dto.periodStart.slice(0, 10).replace(/-/g, '');
-      const runId = `PAY${runDateKey}-${Date.now().toString().slice(-4)}`;
-
-      return tx.payrollRun.create({
-        data: {
-          runId,
-          periodStart,
-          periodEnd,
-          runBy: userId,
-          status: 'queued',
-          approvalStatus: 'pending',
-          totalEmployees: 0,
-        },
-      });
     });
 
     try {
@@ -1676,6 +1679,8 @@ export class PayrollService {
         gracePeriodMinutes: true,
         scheduledStart: true,
         scheduledEnd: true,
+        employmentStartDate: true,
+        terminationDate: true,
       },
     });
 
@@ -2152,7 +2157,23 @@ export class PayrollService {
         const workDays = employee.workDaysInPeriod ?? defaultWorkDaysInPeriod;
         const hoursPerDayEmp = employee.hoursPerDay ?? defaultHoursPerDay;
 
-        const fallbackBaseSalary = Number(employee.hourlyRate || 0) * hoursPerDayEmp * workDays;
+        // Proration: cap work days based on employmentStartDate and terminationDate
+        const periodStartDate = new Date(periodStart);
+        const periodEndDate = new Date(periodEnd);
+        const effectiveStart = employee.employmentStartDate && employee.employmentStartDate > periodStartDate
+          ? employee.employmentStartDate
+          : periodStartDate;
+        const effectiveEnd = employee.terminationDate && employee.terminationDate < periodEndDate
+          ? employee.terminationDate
+          : periodEndDate;
+        const effectiveRangeDays = Math.ceil((effectiveEnd.getTime() - effectiveStart.getTime()) / 86_400_000) + 1;
+        const fullPeriodDays = Math.ceil((periodEndDate.getTime() - periodStartDate.getTime()) / 86_400_000) + 1;
+        const isProrated = effectiveRangeDays < fullPeriodDays;
+        const effectiveWorkDays = isProrated
+          ? Math.max(1, Math.round(workDays * (effectiveRangeDays / fullPeriodDays)))
+          : workDays;
+
+        const fallbackBaseSalary = Number(employee.hourlyRate || 0) * hoursPerDayEmp * effectiveWorkDays;
         const baseSalary = this.toDecimal(
           salaryRecord?.baseSalary ?? employee.baseSalary ?? fallbackBaseSalary,
         );
@@ -2178,8 +2199,8 @@ export class PayrollService {
 
         const paidApprovedLeaveDaysInPeriod = paidApprovedLeaves.reduce((sum, l) => {
           const overlapStart =
-            l.startDate > new Date(periodStart) ? l.startDate : new Date(periodStart);
-          const overlapEnd = l.endDate < new Date(periodEnd) ? l.endDate : new Date(periodEnd);
+            l.startDate > effectiveStart ? l.startDate : effectiveStart;
+          const overlapEnd = l.endDate < effectiveEnd ? l.endDate : effectiveEnd;
           const ms = overlapEnd.getTime() - overlapStart.getTime();
           const days = Math.floor(ms / 86_400_000) + 1;
           return sum + (Number.isFinite(days) && days > 0 ? days : 0);
@@ -2188,8 +2209,8 @@ export class PayrollService {
         const attendanceDays = attendanceDaysByEmployee.get(employee.employeeId) || 0;
         const hoursWorked = attendanceDays * hoursPerDayEmp;
 
-        // absenceDaysFallback: compute as (workDays - attendanceDays) BUT exclude APPROVED paid leaves
-        const absenceDaysFallbackRaw = Math.max(0, workDays - attendanceDays);
+        // absenceDaysFallback: compute as (effectiveWorkDays - attendanceDays) BUT exclude APPROVED paid leaves
+        const absenceDaysFallbackRaw = Math.max(0, effectiveWorkDays - attendanceDays);
         const absenceDaysFallback = Math.max(
           0,
           absenceDaysFallbackRaw - paidApprovedLeaveDaysInPeriod,
@@ -2261,7 +2282,8 @@ export class PayrollService {
 
         // g3 formula: baseSalary + livingAllowance
         const g3 = baseSalary.plus(livingAllowance);
-        const dailyWage = g3.div(STANDARD_WORK_DAYS);
+        const employeeWorkDays = new Prisma.Decimal(effectiveWorkDays);
+        const dailyWage = g3.div(employeeWorkDays);
         const _hourlyWage = dailyWage.div(new Prisma.Decimal(hoursPerDayEmp));
         const minuteWage = _hourlyWage.div(MINUTES_PER_HOUR);
 
@@ -2296,7 +2318,7 @@ export class PayrollService {
           employeeId: employee.employeeId,
           periodStart: this.toDateOnly(periodStart),
           endDate: this.toDateOnly(periodEnd),
-          workDays,
+          workDays: effectiveWorkDays,
           hoursPerDayEmp,
           employee: {
             hourlyRate: employee.hourlyRate,

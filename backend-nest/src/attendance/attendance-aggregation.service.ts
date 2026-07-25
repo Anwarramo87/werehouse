@@ -470,6 +470,24 @@ export class AttendanceAggregationService {
       return null;
     }
 
+    const fullDayLeave = await this.prisma.leaveRequest.findFirst({
+      where: {
+        employeeId,
+        status: 'APPROVED',
+        isHourly: false,
+        leaveType: { not: 'OTHER' },
+        startDate: { lte: dateUTC },
+        endDate: { gte: dateUTC },
+      },
+      select: { id: true, leaveType: true },
+    });
+    if (fullDayLeave) {
+      this.logger.debug(
+        `Skipping penalty calc for ${employeeId} on ${dateStr}: full-day ${fullDayLeave.leaveType} leave`,
+      );
+      return null;
+    }
+
     // ── Step 2: Fetch raw attendance punches for the day ─────────────────────
     const punches = await this.prisma.attendanceRecord.findMany({
       where: { employeeId, date: dateStr },

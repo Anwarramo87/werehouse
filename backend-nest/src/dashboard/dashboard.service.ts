@@ -110,7 +110,7 @@ export class DashboardService {
       return result;
     };
 
-    const [totalEmployees, todayAttendanceRecords, salaryAggregate, absentEmployees, allActiveWithSalaries] =
+    const [totalEmployees, todayAttendanceRecords, salaryAggregate, absentEmployees, allActiveWithSalaries, todayLeaves] =
       await Promise.all([
         timed('employee.count', () =>
           this.prisma.employee.count({ where: { status: 'active' } }),
@@ -211,6 +211,17 @@ export class DashboardService {
             },
           }),
         ),
+
+        timed('leaveRequest.findMany(today)', () =>
+          this.prisma.leaveRequest.findMany({
+            where: {
+              status: 'APPROVED',
+              startDate: { lte: new Date(`${today}T23:59:59Z`) },
+              endDate: { gte: new Date(`${today}T00:00:00Z`) },
+            },
+            select: { employeeId: true },
+          }),
+        ),
       ]);
 
     const presentMap = new Map<string, { name: string; department: string | null; checkIn: string }>();
@@ -225,7 +236,9 @@ export class DashboardService {
     }
 
     const presentCount = presentMap.size;
-    const absentCount = Math.max(0, totalEmployees - presentCount);
+    const onLeaveIds = new Set(todayLeaves.map((l) => l.employeeId));
+    const absentCount = Math.max(0, totalEmployees - presentCount - onLeaveIds.size);
+    const absentNotOnLeave = absentEmployees.filter((emp) => !onLeaveIds.has(emp.employeeId));
 
     type LateEntry = {
       employeeId: string;
@@ -383,7 +396,7 @@ export class DashboardService {
       },
       absence: {
         count: absentCount,
-        employees: absentEmployees.map((emp) => ({
+        employees: absentNotOnLeave.map((emp) => ({
           employeeId: emp.employeeId,
           name: emp.name,
           department: emp.department,

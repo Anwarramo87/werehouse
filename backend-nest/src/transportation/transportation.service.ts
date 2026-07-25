@@ -24,6 +24,23 @@ export class TransportationService {
     return `BUS${randomBytes(3).toString('hex').toUpperCase()}`;
   }
 
+  private async hasApprovedPayrollForCurrentMonth(): Promise<boolean> {
+    const now = new Date();
+    const monthStart = new Date(Date.UTC(now.getFullYear(), now.getMonth(), 1));
+    const monthEnd = new Date(Date.UTC(now.getFullYear(), now.getMonth() + 1, 0));
+
+    const approvedRun = await this.prisma.payrollRun.findFirst({
+      where: {
+        approvalStatus: 'approved',
+        periodStart: { gte: monthStart },
+        periodEnd: { lte: monthEnd },
+      },
+      select: { id: true },
+    });
+
+    return !!approvedRun;
+  }
+
   // ─── Buses ────────────────────────────────────────────────────────────────
 
   async listBuses() {
@@ -131,6 +148,15 @@ export class TransportationService {
     if (dto.employeeDeductionPct !== undefined) data.employeeDeductionPct = new Prisma.Decimal(dto.employeeDeductionPct.toString());
     if (dto.status !== undefined)              data.status = dto.status;
 
+    if (
+      (dto.totalCost !== undefined || dto.companyDeductionPct !== undefined) &&
+      (await this.hasApprovedPayrollForCurrentMonth())
+    ) {
+      this.logger.warn(
+        `Fleet cost or company deduction changed for bus ${bus.busId} while an approved payroll exists for the current month. Bus deductions will be stale until payroll is re-run.`,
+      );
+    }
+
     return this.prisma.bus.update({ where: { id: bus.id }, data });
   }
 
@@ -180,6 +206,13 @@ export class TransportationService {
     });
     if (!employee) {
       throw new NotFoundException(`Employee not found: ${dto.employeeId}`);
+    }
+
+    // منع تعديل الركاب بعد اعتماد الرواتب للشهر الحالي
+    if (await this.hasApprovedPayrollForCurrentMonth()) {
+      throw new BadRequestException(
+        'لا يمكن تعديل ركاب الباص بعد اعتماد الرواتب لهذا الشهر',
+      );
     }
 
     // تحقق من أن الموظف غير مشترك بباص آخر نشط
@@ -263,6 +296,13 @@ export class TransportationService {
       where: { OR: [{ id: busId }, { busId }] },
     });
     if (!bus) throw new NotFoundException(`Bus not found: ${busId}`);
+
+    // منع تعديل الركاب بعد اعتماد الرواتب للشهر الحالي
+    if (await this.hasApprovedPayrollForCurrentMonth()) {
+      throw new BadRequestException(
+        'لا يمكن تعديل ركاب الباص بعد اعتماد الرواتب لهذا الشهر',
+      );
+    }
 
     const passenger = await this.prisma.busPassenger.findUnique({
       where: { busId_employeeId: { busId: bus.id, employeeId } },
