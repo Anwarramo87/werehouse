@@ -77,6 +77,9 @@ export class PublicAttendanceController {
       }
     }
 
+    // ── Check leave conflict BEFORE any DB write ──
+    const warning = await checkLeaveConflictForAttendance(this.prisma, employeeId, dateKey);
+
     const record = await this.prisma.attendanceRecord.create({
       data: {
         employeeId,
@@ -108,8 +111,6 @@ export class PublicAttendanceController {
           `Real-time aggregation failed (check-in) for ${employeeId}: ${err.message}`,
         ),
       );
-
-    const warning = await checkLeaveConflictForAttendance(this.prisma, employeeId, dateKey);
 
     return {
       message: 'Check-in successful',
@@ -162,6 +163,9 @@ export class PublicAttendanceController {
 
     const hoursWorked = (now.getTime() - existingIn.timestamp.getTime()) / (1000 * 60 * 60);
 
+    // ── Check leave conflict BEFORE any DB write ──
+    const warning = await checkLeaveConflictForAttendance(this.prisma, employeeId, dateKey);
+
     const record = await this.prisma.$transaction(async (tx) => {
       const outRecord = await tx.attendanceRecord.create({
         data: {
@@ -213,8 +217,6 @@ export class PublicAttendanceController {
           `Real-time aggregation failed (check-out) for ${employeeId}: ${err.message}`,
         ),
       );
-
-    const warning = await checkLeaveConflictForAttendance(this.prisma, employeeId, dateKey);
 
     return {
       message: 'Check-out successful',

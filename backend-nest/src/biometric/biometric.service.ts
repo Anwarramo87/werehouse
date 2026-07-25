@@ -393,6 +393,15 @@ export class BiometricService {
           }
 
           // Insert new record
+          // ── Check leave conflict BEFORE any DB write ──
+          try {
+            await checkLeaveConflictForAttendance(this.prisma, log.employeeId, dateStr);
+          } catch (conflictErr) {
+            skipped++;
+            this.logger.debug(`⏭️ Leave conflict for ${log.employeeId}: ${conflictErr instanceof Error ? conflictErr.message : 'conflict'}`);
+            continue;
+          }
+
           const record = await this.prisma.attendanceRecord.create({
             data: {
               employeeId: log.employeeId,
@@ -406,8 +415,6 @@ export class BiometricService {
             },
           });
 
-          const leaveWarning = await checkLeaveConflictForAttendance(this.prisma, log.employeeId, dateStr);
-
           synced++;
           results.push({
             employeeId: log.employeeId,
@@ -419,7 +426,6 @@ export class BiometricService {
               earlyLeaveMinutes: log.earlyLeaveMinutes,
               overtimeMinutes: log.overtimeMinutes,
             },
-            warning: leaveWarning ?? undefined,
           });
 
           // Mark this (employeeId, date) for post-sync aggregation

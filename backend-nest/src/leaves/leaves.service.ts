@@ -414,6 +414,16 @@ export class LeavesService {
     await this.assertEmployeeExists(dto.employeeId);
     const data = this.buildCreateData(dto);
 
+    // ── Check attendance conflict BEFORE any DB write ──
+    const warning = await checkAttendanceConflictForLeave(
+      this.prisma,
+      dto.employeeId,
+      data.startDate as Date,
+      data.endDate as Date,
+      data.isHourly as boolean,
+      dto.leaveType as string,
+    );
+
     const result = await this.prisma.$transaction(async (tx) => {
       // تحقق من عدم وجود تداخل مع إجازات معتمدة أخرى
       await this.assertNoOverlappingLeave(
@@ -456,15 +466,6 @@ export class LeavesService {
       },
     });
 
-    const warning = await checkAttendanceConflictForLeave(
-      this.prisma,
-      dto.employeeId,
-      data.startDate as Date,
-      data.endDate as Date,
-      data.isHourly as boolean,
-      dto.leaveType as string,
-    );
-
     return { ...result, warning: warning ?? undefined };
   }
 
@@ -499,6 +500,16 @@ export class LeavesService {
     const created = await this.prisma.$transaction(async (tx) => {
       const records: Array<Awaited<ReturnType<typeof tx.leaveRequest.create>>> = [];
       for (const { input, data } of buildItems) {
+        // ── Check attendance conflict BEFORE any DB write ──
+        const warning = await checkAttendanceConflictForLeave(
+          this.prisma,
+          input.employeeId,
+          data.startDate as Date,
+          data.endDate as Date,
+          data.isHourly as boolean,
+          input.leaveType as string,
+        );
+
         // تحقق من عدم وجود تداخل مع إجازات معتمدة أخرى
         await this.assertNoOverlappingLeave(
           tx,
@@ -522,29 +533,17 @@ export class LeavesService {
       return records;
     });
 
-    const warningResults = await Promise.all(
-      created.map(async (record) => {
-        const buildItem = buildItems.find((b) => b.input.employeeId === record.employeeId);
-        const warning = buildItem
-          ? await checkAttendanceConflictForLeave(
-              this.prisma,
-              record.employeeId,
-              buildItem.data.startDate as Date,
-              buildItem.data.endDate as Date,
-              buildItem.data.isHourly as boolean,
-              buildItem.input.leaveType as string,
-            )
-          : null;
-        return { employeeId: record.employeeId, success: true, data: record, warning: warning ?? undefined };
-      }),
-    );
+    const results = created.map((record) => {
+      const buildItem = buildItems.find((b) => b.input.employeeId === record.employeeId);
+      return { employeeId: record.employeeId, success: true, data: record, warning: undefined as { hasConflict: true; message: string; conflictType: 'leave_on_attendance_day' | 'attendance_on_leave_day'; employeeId: string; date: string } | undefined };
+    });
 
     return {
       message: `تم إنشاء ${created.length} طلب إجازة بنجاح`,
       total: dto.items.length,
       succeeded: created.length,
       failed: 0,
-      results: warningResults,
+      results,
     };
   }
 
@@ -581,6 +580,19 @@ export class LeavesService {
       throw new BadRequestException('endDate must be greater than or equal to startDate');
     }
 
+    const effectiveIsHourly = dto.isHourly !== undefined ? dto.isHourly : current.isHourly;
+    const effectiveLeaveType = dto.leaveType !== undefined ? dto.leaveType : current.leaveType;
+
+    // ── Check attendance conflict BEFORE any DB write ──
+    const warning = await checkAttendanceConflictForLeave(
+      this.prisma,
+      dto.employeeId ?? current.employeeId,
+      nextStart,
+      nextEnd,
+      effectiveIsHourly,
+      effectiveLeaveType as string,
+    );
+
     const result = await this.prisma.$transaction(async (tx) => {
       // تحقق من عدم وجود تداخل مع إجازات معتمدة أخرى (استبعد الإجازة الحالية)
       const effectiveStart = (data.startDate as Date) ?? nextStart;
@@ -610,17 +622,6 @@ export class LeavesService {
     });
 
     await this.shortCache.invalidatePrefix('employees:stats');
-
-    const effectiveIsHourly = dto.isHourly !== undefined ? dto.isHourly : current.isHourly;
-    const effectiveLeaveType = dto.leaveType !== undefined ? dto.leaveType : current.leaveType;
-    const warning = await checkAttendanceConflictForLeave(
-      this.prisma,
-      result.employeeId,
-      result.startDate,
-      result.endDate,
-      effectiveIsHourly,
-      effectiveLeaveType as string,
-    );
 
     return { ...result, warning: warning ?? undefined };
   }
