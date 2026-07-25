@@ -593,6 +593,9 @@ export class AttendanceService {
     const normalizedType = dto.type.toUpperCase();
     const date = await this.resolveAttendanceDate(dto.employeeId, normalizedType as 'IN' | 'OUT', eventDate);
 
+    // ── Check leave conflict BEFORE any DB write ──
+    const warning = await checkLeaveConflictForAttendance(this.prisma, dto.employeeId, date);
+
     // ── التحقق من التسلسل المنطقي للبصمات: نمنع IN→IN أو OUT→OUT المباشر ──
     // نسمح بالورديات المتعددة (IN→OUT→IN→OUT) لكن نمنع التسلسل الخاطئ (IN→IN بدون OUT بينهما)
     const lastRecord = await this.prisma.attendanceRecord.findFirst({
@@ -602,22 +605,16 @@ export class AttendanceService {
     });
     
     if (lastRecord && lastRecord.type.toUpperCase() === normalizedType) {
-      // نفس النوع متتالي — نتحقق: هل توجد بصمة معاكسة بين آخر بصمة والبصمة الجديدة؟
-      // لكن هنا المشكلة: البصمة الجديدة لسه ما انأنشأت، فمنقدرش نتحقق منها
-      // الحل: نسمح بالتسجيل ونخلي aggregation يعالج التناقضات
-      // أو: نرفض فقط إذا الفرق الزمني قصير جداً (< 30 دقيقة) = خطأ واضح
       const newTimestamp = eventDate.getTime();
       const lastTimestamp = lastRecord.timestamp.getTime();
       const diffMinutes = Math.abs(newTimestamp - lastTimestamp) / 60000;
       
       if (diffMinutes < 30) {
-        // بصمتين من نفس النوع بفرق أقل من 30 دقيقة = خطأ واضح
         const typeLabel = normalizedType === 'IN' ? 'دخول' : 'خروج';
         throw new BadRequestException(
           `تحذير: آخر بصمة ${typeLabel} كانت قبل ${Math.round(diffMinutes)} دقيقة فقط — يُرجى تسجيل ${normalizedType === 'IN' ? 'خروج' : 'دخول'} أولاً`,
         );
       }
-      // إذا كان الفرق أكثر من 30 دقيقة، نسمح (قد يكون وردية ثانية)
     }
 
     let record: Awaited<ReturnType<typeof this.prisma.attendanceRecord.create>>;
@@ -633,8 +630,6 @@ export class AttendanceService {
         },
       });
     } catch (err) {
-      // Unique constraint (employeeId + timestamp + type) — concurrent biometric
-      // sync or a re-sent punch. Treat as an idempotent no-op, not a 500.
       if (
         err instanceof Prisma.PrismaClientKnownRequestError &&
         err.code === 'P2002'
@@ -660,7 +655,6 @@ export class AttendanceService {
     await this.invalidateAttendanceDashboardCaches();
     await this.emitAttendanceRealtime(record, 'created');
 
-    // ── Real-time aggregation: recalculate missing minutes immediately ──
     this.aggregationService
       .aggregateEmployeeDay(dto.employeeId, date)
       .catch((err) =>
@@ -669,7 +663,6 @@ export class AttendanceService {
         ),
       );
 
-    const warning = await checkLeaveConflictForAttendance(this.prisma, dto.employeeId, date);
     return { message: 'Attendance record created successfully', record, warning: warning ?? undefined };
   }
 
@@ -720,6 +713,18 @@ export class AttendanceService {
 
       try {
         const dateKey = this.deriveDateKey(row.timestamp, parsedTimestamp);
+
+        // ── Check leave conflict BEFORE any DB write ──
+        try {
+          await checkLeaveConflictForAttendance(this.prisma, row.employeeId, dateKey);
+        } catch (conflictErr) {
+          errors.push({
+            row: rowNumber,
+            error: conflictErr instanceof Error ? conflictErr.message : 'Leave conflict',
+          });
+          continue;
+        }
+
         const created = await this.prisma.attendanceRecord.create({
           data: {
             employeeId: row.employeeId,
@@ -733,16 +738,6 @@ export class AttendanceService {
             date: dateKey,
           },
         });
-
-        try {
-          await checkLeaveConflictForAttendance(this.prisma, row.employeeId, dateKey);
-        } catch (conflictErr) {
-          errors.push({
-            row: rowNumber,
-            error: conflictErr instanceof Error ? conflictErr.message : 'Leave conflict',
-          });
-          continue;
-        }
 
         importedRows += 1;
         await this.emitAttendanceRealtime(created, 'created');
@@ -847,6 +842,12 @@ export class AttendanceService {
       );
     }
 
+    const effectiveDate = payload.date as string | undefined ?? existing.date;
+    const effectiveEmployeeId = (payload.employeeId as string) ?? originalEmployeeId;
+
+    // ── Check leave conflict BEFORE any DB write ──
+    const warning = await checkLeaveConflictForAttendance(this.prisma, effectiveEmployeeId, effectiveDate);
+
     const updated = await this.prisma.attendanceRecord.update({
       where: { id: recordId },
       data: payload,
@@ -855,8 +856,6 @@ export class AttendanceService {
     await this.invalidateAttendanceDashboardCaches();
     await this.emitAttendanceRealtime(updated, 'updated');
 
-    // ── Real-time aggregation: recalculate missing minutes for the NEW state ──
-    // Fire-and-forget so the update response is not blocked.
     this.aggregationService
       .aggregateEmployeeDay(updated.employeeId, updated.date)
       .catch((err) =>
@@ -865,8 +864,6 @@ export class AttendanceService {
         ),
       );
 
-    // ── Edge case: if admin changed date or employeeId, also recalculate the OLD day ──
-    // This cleans up stale penalty calculations from the original employee/date combination.
     if (updated.employeeId !== originalEmployeeId || updated.date !== originalDate) {
       this.aggregationService
         .aggregateEmployeeDay(originalEmployeeId, originalDate)
@@ -877,7 +874,6 @@ export class AttendanceService {
         );
     }
 
-    const warning = await checkLeaveConflictForAttendance(this.prisma, updated.employeeId, updated.date);
     return { message: 'Attendance record updated successfully', record: updated, warning: warning ?? undefined };
   }
 
