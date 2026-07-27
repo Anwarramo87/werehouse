@@ -583,12 +583,14 @@ export class PayrollService {
         cur.setDate(cur.getDate() + 1);
       }
     }
-    const presentDays = uniqueInDates.filter((dateStr) => {
+    const presentDaysRaw = uniqueInDates.filter((dateStr) => {
       const dow = new Date(dateStr).getDay();
       if (dow === 5) return false;            // Friday
       if (approvedLeaveDateSet.has(dateStr)) return false; // on approved leave
       return true;
     }).length;
+    // Cap presentDays at effectiveWorkDays to prevent overpayment
+    const presentDays = Math.min(presentDaysRaw, workDays);
 
     // Contractual worked minutes (matching frontend calcEarnedSalaryHourly)
     const contractualWorkedMinutes = presentDays * hoursPerDayEmp * 60;
