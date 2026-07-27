@@ -895,18 +895,22 @@ export class EmployeesService {
       });
 
       // إزالة الموظف من أي باص وحذف خصم المواصلات الخاص به
-      const busPassenger = await tx.busPassenger.findFirst({
-        where: { employeeId, status: 'active' },
-        include: { bus: { select: { plateNumber: true } } },
-      });
-      if (busPassenger) {
-        await tx.busPassenger.delete({ where: { id: busPassenger.id } });
-        await tx.employeeBonus.deleteMany({
-          where: {
-            employeeId,
-            bonusReason: { contains: busPassenger.bus.plateNumber },
-          },
+      try {
+        const busPassenger = await tx.busPassenger.findFirst({
+          where: { employeeId, status: 'active' },
+          include: { bus: { select: { plateNumber: true } } },
         });
+        if (busPassenger) {
+          await tx.busPassenger.delete({ where: { id: busPassenger.id } });
+          await tx.employeeBonus.deleteMany({
+            where: {
+              employeeId,
+              bonusReason: { contains: busPassenger.bus.plateNumber },
+            },
+          });
+        }
+      } catch {
+        // bus_passengers table may not exist yet — safe to skip
       }
 
       return updatedEmployee;
@@ -993,18 +997,22 @@ export class EmployeesService {
       });
 
       // إزالة الموظف من أي باص وحذف خصم المواصلات الخاص به
-      const busPassenger = await tx.busPassenger.findFirst({
-        where: { employeeId: dto.employeeId, status: 'active' },
-        include: { bus: { select: { plateNumber: true } } },
-      });
-      if (busPassenger) {
-        await tx.busPassenger.delete({ where: { id: busPassenger.id } });
-        await tx.employeeBonus.deleteMany({
-          where: {
-            employeeId: dto.employeeId,
-            bonusReason: { contains: busPassenger.bus.plateNumber },
-          },
+      try {
+        const busPassenger = await tx.busPassenger.findFirst({
+          where: { employeeId: dto.employeeId, status: 'active' },
+          include: { bus: { select: { plateNumber: true } } },
         });
+        if (busPassenger) {
+          await tx.busPassenger.delete({ where: { id: busPassenger.id } });
+          await tx.employeeBonus.deleteMany({
+            where: {
+              employeeId: dto.employeeId,
+              bonusReason: { contains: busPassenger.bus.plateNumber },
+            },
+          });
+        }
+      } catch {
+        // bus_passengers table may not exist yet — safe to skip
       }
 
       return { employee: updated, terminationRecord };
