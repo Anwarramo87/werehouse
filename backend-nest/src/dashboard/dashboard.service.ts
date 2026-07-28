@@ -182,6 +182,12 @@ export class DashboardService {
               name: true,
               department: true,
               scheduledStart: true,
+              attendanceRecords: {
+                where: { type: 'IN' },
+                orderBy: { timestamp: 'desc' },
+                take: 1,
+                select: { timestamp: true, date: true },
+              },
             },
             take: 500,
           }),
@@ -224,14 +230,18 @@ export class DashboardService {
         ),
       ]);
 
-    const presentMap = new Map<string, { name: string; department: string | null; checkIn: string }>();
+    const presentMap = new Map<string, { name: string; department: string | null; checkIn: string; checkOut: string | null }>();
     for (const rec of todayAttendanceRecords) {
       if (rec.type === 'IN' && !presentMap.has(rec.employeeId)) {
         presentMap.set(rec.employeeId, {
           name: rec.employee.name,
           department: rec.employee.department,
           checkIn: formatFactoryLocalTime(rec.timestamp),
+          checkOut: null,
         });
+      }
+      if (rec.type === 'OUT' && presentMap.has(rec.employeeId)) {
+        presentMap.get(rec.employeeId)!.checkOut = formatFactoryLocalTime(rec.timestamp);
       }
     }
 
@@ -401,6 +411,10 @@ export class DashboardService {
           name: emp.name,
           department: emp.department,
           scheduledStart: emp.scheduledStart,
+          lastWorkDay: emp.attendanceRecords?.[0]?.date ?? null,
+          lastCheckIn: emp.attendanceRecords?.[0]?.timestamp
+            ? formatFactoryLocalTime(emp.attendanceRecords[0].timestamp)
+            : null,
         })),
       },
       totalDueSalaries: Number(totalDueSalaries.toFixed(2)),
