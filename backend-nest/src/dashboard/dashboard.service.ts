@@ -110,127 +110,173 @@ export class DashboardService {
       return result;
     };
 
-    const [totalEmployees, todayAttendanceRecords, salaryAggregate, absentEmployees, allActiveWithSalaries, todayLeaves] =
-      await Promise.all([
-        timed('employee.count', () =>
-          this.prisma.employee.count({ where: { status: 'active' } }),
-        ),
+    const [
+      totalEmployees,
+      todayAttendanceRecords,
+      salaryAggregate,
+      absentEmployees,
+      allActiveWithSalaries,
+      todayLeaves,
+      todayOvertimeLogs,
+    ] = await Promise.all([
+      timed('employee.count', () => this.prisma.employee.count({ where: { status: 'active' } })),
 
-        timed('attendanceRecord.findMany(today)', () =>
-          this.prisma.attendanceRecord.findMany({
-            where: { date: today },
-            select: {
-              employeeId: true,
-              type: true,
-              timestamp: true,
-              shiftPair: true,
-              employee: {
-                select: {
-                  name: true,
-                  employeeId: true,
-                  scheduledStart: true,
-                  department: true,
-                  scheduledEnd: true,
-                  hourlyRate: true,
-                  baseSalary: true,
-                  livingAllowance: true,
-                  workDaysInPeriod: true,
-                  hoursPerDay: true,
-                  employeeSalary: {
-                    select: {
-                      baseSalary: true,
-                      lumpSumSalary: true,
-                      livingAllowance: true,
-                      responsibilityAllowance: true,
-                      extraEffortAllowance: true,
-                      productionIncentive: true,
-                      transportAllowance: true,
-                    },
+      timed('attendanceRecord.findMany(today)', () =>
+        this.prisma.attendanceRecord.findMany({
+          where: { date: today },
+          select: {
+            employeeId: true,
+            type: true,
+            timestamp: true,
+            shiftPair: true,
+            employee: {
+              select: {
+                name: true,
+                employeeId: true,
+                scheduledStart: true,
+                department: true,
+                scheduledEnd: true,
+                hourlyRate: true,
+                baseSalary: true,
+                livingAllowance: true,
+                workDaysInPeriod: true,
+                hoursPerDay: true,
+                employeeSalary: {
+                  select: {
+                    baseSalary: true,
+                    lumpSumSalary: true,
+                    livingAllowance: true,
+                    responsibilityAllowance: true,
+                    extraEffortAllowance: true,
+                    productionIncentive: true,
+                    transportAllowance: true,
                   },
                 },
               },
             },
-            orderBy: { timestamp: 'asc' },
-            take: 2000,
-          }),
-        ),
+          },
+          orderBy: { timestamp: 'asc' },
+          take: 2000,
+        }),
+      ),
 
-        timed('employeeSalary.aggregate', () =>
-          this.prisma.employeeSalary.aggregate({
-            _sum: {
-              baseSalary: true,
-              lumpSumSalary: true,
-              livingAllowance: true,
-              responsibilityAllowance: true,
-              extraEffortAllowance: true,
-              productionIncentive: true,
-              transportAllowance: true,
+      timed('employeeSalary.aggregate', () =>
+        this.prisma.employeeSalary.aggregate({
+          _sum: {
+            baseSalary: true,
+            lumpSumSalary: true,
+            livingAllowance: true,
+            responsibilityAllowance: true,
+            extraEffortAllowance: true,
+            productionIncentive: true,
+            transportAllowance: true,
+          },
+        }),
+      ),
+
+      timed('employee.findMany(absent)', () =>
+        this.prisma.employee.findMany({
+          where: {
+            status: 'active',
+            attendanceRecords: {
+              none: { date: today, type: 'IN' },
             },
-          }),
-        ),
+          },
+          select: {
+            employeeId: true,
+            name: true,
+            department: true,
+            scheduledStart: true,
+            attendanceRecords: {
+              where: { type: 'IN' },
+              orderBy: { timestamp: 'desc' },
+              take: 1,
+              select: { timestamp: true, date: true },
+            },
+          },
+          take: 500,
+        }),
+      ),
 
-        timed('employee.findMany(absent)', () =>
-          this.prisma.employee.findMany({
-            where: {
-              status: 'active',
-              attendanceRecords: {
-                none: { date: today, type: 'IN' },
+      timed('employee.findMany(allActive+salary)', () =>
+        this.prisma.employee.findMany({
+          where: { status: 'active' },
+          select: {
+            employeeId: true,
+            hourlyRate: true,
+            baseSalary: true,
+            livingAllowance: true,
+            workDaysInPeriod: true,
+            hoursPerDay: true,
+            employeeSalary: {
+              select: {
+                baseSalary: true,
+                lumpSumSalary: true,
+                livingAllowance: true,
+                responsibilityAllowance: true,
+                extraEffortAllowance: true,
+                productionIncentive: true,
+                transportAllowance: true,
               },
             },
-            select: {
-              employeeId: true,
-              name: true,
-              department: true,
-              scheduledStart: true,
-              attendanceRecords: {
-                where: { type: 'IN' },
-                orderBy: { timestamp: 'desc' },
-                take: 1,
-                select: { timestamp: true, date: true },
-              },
-            },
-            take: 500,
-          }),
-        ),
+          },
+        }),
+      ),
 
-        timed('employee.findMany(allActive+salary)', () =>
-          this.prisma.employee.findMany({
-            where: { status: 'active' },
-            select: {
-              employeeId: true,
-              hourlyRate: true,
-              baseSalary: true,
-              livingAllowance: true,
-              workDaysInPeriod: true,
-              hoursPerDay: true,
-              employeeSalary: {
-                select: {
-                  baseSalary: true,
-                  lumpSumSalary: true,
-                  livingAllowance: true,
-                  responsibilityAllowance: true,
-                  extraEffortAllowance: true,
-                  productionIncentive: true,
-                  transportAllowance: true,
+      timed('leaveRequest.findMany(today)', () =>
+        this.prisma.leaveRequest.findMany({
+          where: {
+            status: 'APPROVED',
+            startDate: { lte: new Date(`${today}T23:59:59Z`) },
+            endDate: { gte: new Date(`${today}T00:00:00Z`) },
+          },
+          select: { employeeId: true },
+        }),
+      ),
+
+      timed('dailyAttendanceLog.findMany(todayOvertime)', () =>
+        this.prisma.dailyAttendanceLog.findMany({
+          where: {
+            date: new Date(`${today}T00:00:00.000Z`),
+            recordType: 'OVERTIME_MINUTES',
+          },
+          select: {
+            employeeId: true,
+            value: true,
+            employee: {
+              select: {
+                name: true,
+                employeeId: true,
+                department: true,
+                scheduledEnd: true,
+                hourlyRate: true,
+                baseSalary: true,
+                livingAllowance: true,
+                workDaysInPeriod: true,
+                hoursPerDay: true,
+                employeeSalary: {
+                  select: {
+                    baseSalary: true,
+                    lumpSumSalary: true,
+                    livingAllowance: true,
+                    responsibilityAllowance: true,
+                    extraEffortAllowance: true,
+                    productionIncentive: true,
+                    transportAllowance: true,
+                  },
                 },
               },
             },
-          }),
-        ),
+          },
+          take: 2000,
+        }),
+      ),
+    ]);
 
-        timed('leaveRequest.findMany(today)', () =>
-          this.prisma.leaveRequest.findMany({
-            where: {
-              status: 'APPROVED',
-              startDate: { lte: new Date(`${today}T23:59:59Z`) },
-              endDate: { gte: new Date(`${today}T00:00:00Z`) },
-            },
-            select: { employeeId: true },
-          }),
-        ),
-      ]);
-
-    const presentMap = new Map<string, { name: string; department: string | null; checkIn: string; checkOut: string | null }>();
+    const presentMap = new Map<
+      string,
+      { name: string; department: string | null; checkIn: string; checkOut: string | null }
+    >();
     for (const rec of todayAttendanceRecords) {
       if (rec.type === 'IN' && !presentMap.has(rec.employeeId)) {
         presentMap.set(rec.employeeId, {
@@ -275,7 +321,8 @@ export class DashboardService {
       firstInMap.set(rec.employeeId, {
         timestamp: rec.timestamp,
         scheduledStart: rec.employee.scheduledStart ?? null,
-        shiftPairMinutesLate: sp?.minutesLate !== null && sp?.minutesLate !== undefined ? Number(sp.minutesLate) : null,
+        shiftPairMinutesLate:
+          sp?.minutesLate !== null && sp?.minutesLate !== undefined ? Number(sp.minutesLate) : null,
         name: rec.employee.name,
       });
     }
@@ -315,29 +362,56 @@ export class DashboardService {
     let totalOvertimeMinutes = 0;
 
     // Track last OUT record per employee (in case of multiple punches)
-    const lastOutMap = new Map<string, typeof todayAttendanceRecords[number]>();
+    const lastOutMap = new Map<string, (typeof todayAttendanceRecords)[number]>();
     for (const rec of todayAttendanceRecords) {
       if (rec.type !== 'OUT') continue;
       lastOutMap.set(rec.employeeId, rec);
     }
 
+    const overtimeEmployeeIds = new Set<string>();
+
+    for (const log of todayOvertimeLogs) {
+      const overtimeMinutes = Math.round(toNum(log.value));
+      if (overtimeMinutes <= 0) continue;
+
+      const lastOut = lastOutMap.get(log.employeeId);
+      const scheduledEnd = log.employee.scheduledEnd || '16:00';
+      const resolved = resolveSalary(log.employee, log.employee.employeeSalary);
+      const overtimeHours = overtimeMinutes / 60;
+      const overtimePay = Number((resolved.hourlyRate * overtimeHours * 1.5).toFixed(2));
+
+      overtimeEmployees.push({
+        employeeId: log.employeeId,
+        name: log.employee.name,
+        department: log.employee.department,
+        scheduledEnd,
+        actualCheckOut: lastOut ? formatFactoryLocalTime(lastOut.timestamp) : scheduledEnd,
+        overtimeMinutes,
+        overtimePay,
+      });
+      totalOvertimeMinutes += overtimeMinutes;
+      overtimeEmployeeIds.add(log.employeeId);
+    }
+
     for (const rec of lastOutMap.values()) {
+      if (overtimeEmployeeIds.has(rec.employeeId)) continue;
+
       const scheduledEnd = rec.employee.scheduledEnd || '16:00';
 
       // Prefer shiftPair.overtimeMinutes (from biometric pairing) when available,
       // otherwise fall back to computing checkOut - scheduledEnd directly.
       const shiftPair = rec.shiftPair as Record<string, unknown> | null;
       const shiftPairOvertimeMinutes =
-        shiftPair?.overtimeMinutes !== null && shiftPair?.overtimeMinutes !== undefined ? toNum(shiftPair.overtimeMinutes) : null;
+        shiftPair?.overtimeMinutes !== null && shiftPair?.overtimeMinutes !== undefined
+          ? toNum(shiftPair.overtimeMinutes)
+          : null;
 
       let overtimeMinutes: number;
       if (shiftPairOvertimeMinutes !== null && shiftPairOvertimeMinutes > 0) {
         overtimeMinutes = Math.round(shiftPairOvertimeMinutes);
       } else {
         const match = /^(\d{1,2}):(\d{2})$/.exec(scheduledEnd.slice(0, 5));
-        const scheduledEndMinutes = match
-          ? Number(match[1]) * 60 + Number(match[2])
-          : 16 * 60;
+        const scheduledEndMinutes = match ? Number(match[1]) * 60 + Number(match[2]) : 16 * 60;
         const checkOutLocalMinutes = utcTimestampToLocalMinutes(rec.timestamp);
         overtimeMinutes = Math.max(0, checkOutLocalMinutes - scheduledEndMinutes);
       }
@@ -396,7 +470,9 @@ export class DashboardService {
         'C:/Users/BootCamp/AppData/Local/Temp/opencode/dashboard-profile.log',
         `[${new Date().toISOString()}] TOTAL=${totalMs}ms | pool: total=${pool.totalCount} idle=${pool.idleCount} waiting=${pool.waitingCount} | ${summary}\n`,
       );
-    } catch { /* ignore */ }
+    } catch {
+      /* ignore */
+    }
 
     return {
       totalEmployees,
