@@ -3,6 +3,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { DuplicateHandlingService, DuplicateStrategy } from './duplicate-handling.service';
 import { AttendanceAggregationService } from '../attendance/attendance-aggregation.service';
 import { checkLeaveConflictForAttendance } from '../common/utils/leave-attendance-conflict.util';
+import { factoryDateKeyDayOfWeek, toFactoryDateKey } from '../common/utils/timezone.util';
 import ZKLib from 'zklib';
 
 interface RawBiometricLog {
@@ -254,7 +255,12 @@ export class BiometricService {
       };
 
       // Calculate metrics
-      if (type === 'check-in') {
+      const localDateKey = toFactoryDateKey(log.recordTime);
+      const isFriday = factoryDateKeyDayOfWeek(localDateKey) === 5;
+      if (isFriday) {
+        // Friday is paid by actual worked minutes only; never emit raw late,
+        // early-leave, or weekday overtime metrics for it.
+      } else if (type === 'check-in') {
         processedLog.lateMinutes = this.calculateLateMinutes(
           log.recordTime,
           employee.scheduledStart || '08:00',

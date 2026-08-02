@@ -3,6 +3,7 @@ import { Cron, CronExpression } from '@nestjs/schedule';
 import { Prisma, NotificationType, NotificationSeverity } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeGateway, NotificationRealtimePayload } from '../realtime/realtime.gateway';
+import { toFactoryDateKey, factoryDateKeyDayOfWeek } from '../common/utils/timezone.util';
 
 type CreateNotificationInput = {
   type: NotificationType;
@@ -166,7 +167,8 @@ export class NotificationsService implements OnModuleInit {
       // لا نُنبّه بعد انتهاء الدوام (بعد 17:00) لتجنّب الإزعاج ليلاً
       if (currentHour < this.workStartHour || currentHour >= 17) return;
 
-      const todayKey = now.toISOString().slice(0, 10);
+       const todayKey = toFactoryDateKey(now);
+       if (factoryDateKeyDayOfWeek(todayKey) === 5) return;
 
       // وقت بداية الدوام اليوم بصيغة Date
       const workStart = new Date(now);
