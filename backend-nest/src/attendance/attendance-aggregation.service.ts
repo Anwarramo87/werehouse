@@ -2,7 +2,7 @@ import { Injectable, Logger, BadRequestException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Prisma, DailyRecordType } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
-import { resolveTimezoneOffsetMinutes } from '../common/utils/timezone.util';
+import { isFridayDateKey, resolveTimezoneOffsetMinutes } from '../common/utils/timezone.util';
 
 const HH_MM_REGEX = /^([01]\d|2[0-3]):([0-5]\d)$/;
 const MINUTES_IN_DAY = 1440;
@@ -417,6 +417,29 @@ export class AttendanceAggregationService {
       throw new BadRequestException(`Employee not found: ${employeeId}`);
     }
 
+    // Friday is never a contractual attendance day. Clean stale calculated
+    // logs before any schedule validation so the rule remains unconditional.
+    if (isFridayDateKey(dateStr)) {
+      await this.prisma.dailyAttendanceLog.deleteMany({
+        where: {
+          employeeId,
+          date: dateOnly,
+          source: 'calculated',
+          recordType: {
+            in: [
+              DailyRecordType.DELAY_MINUTES,
+              DailyRecordType.EARLY_LEAVE_MINUTES,
+              DailyRecordType.OVERTIME_MINUTES,
+              DailyRecordType.PAID_LEAVE,
+              DailyRecordType.UNPAID_LEAVE,
+            ],
+          },
+        },
+      });
+      this.logger.debug(`Skipping penalty calc for ${employeeId} on ${dateStr}: Friday (rest day)`);
+      return null;
+    }
+
     const scheduledStartMin = this.parseHHmmToMinutes(employee.scheduledStart);
     const scheduledEndMin = this.parseHHmmToMinutes(employee.scheduledEnd);
 
@@ -443,13 +466,6 @@ export class AttendanceAggregationService {
     // Other leave types (SICK, ADMIN, DEATH, PAID, UNPAID) still apply normal deductions
     // if the employee punched in and did not complete their scheduled hours.
     const dateUTC = new Date(`${dateStr}T00:00:00.000Z`);
-    const dayOfWeek = dateUTC.getUTCDay(); // 5 = Friday
-    if (dayOfWeek === 5) {
-      this.logger.debug(
-        `Skipping penalty calc for ${employeeId} on ${dateStr}: Friday (rest day)`,
-      );
-      return null;
-    }
 
     // Check for OTHER leave (ساعية أو كاملة — عطلة / عيد / سبب آخر) — لا خصومات دائماً
     // المعامل (×1 أو ×2) يُطبَّق في مرحلة الراتب عبر payroll.service — هنا فقط نلغي الخصومات

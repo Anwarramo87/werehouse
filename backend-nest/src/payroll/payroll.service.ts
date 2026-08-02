@@ -9,7 +9,7 @@ import { InjectQueue } from '@nestjs/bullmq';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { paginationMeta, resolvePagination } from '../common/utils/pagination.util';
-import { toFactoryDateKey } from '../common/utils/timezone.util';
+import { isFridayDateKey, toFactoryDateKey } from '../common/utils/timezone.util';
 import { CalculatePayrollDto } from './dto/calculate-payroll.dto';
 import { PayrollListQueryDto } from './dto/payroll-list-query.dto';
 import { PayrollInputsQueryDto, UpsertPayrollInputDto } from './dto/payroll-input.dto';
@@ -617,7 +617,7 @@ export class PayrollService {
       const dow = new Date(`${dateStr}T00:00:00Z`).getUTCDay();
       const localOutMin = toLocalMinutesFromTimestamp(outTs);
       if (dow === 5) {
-        // الجمعة: كل دقيقة فعلية من أول IN حتى آخر OUT تُحسب بـ 2×
+        // الجمعة: كل دقيقة فعلية من أول IN حتى آخر OUT تُحسب بـ 1.5×
         const firstInTs = firstInByDate.get(dateStr);
         if (firstInTs) {
           const localInMin = toLocalMinutesFromTimestamp(firstInTs);
@@ -744,7 +744,7 @@ export class PayrollService {
     const overtimePay = minuteWage
       .times(new Prisma.Decimal(1.5))
       .times(this.toDecimal(weekdayOvertimeMinutes));
-    // الجمعة: كل دقيقة فعلية × 2 (minuteWage × 2 × weekendOvertimeMinutes)
+    // الجمعة: كل دقيقة فعلية × 1.5
     const weekendOvertimePay = minuteWage
       .times(new Prisma.Decimal(WEEKEND_MULTIPLIER))
       .times(this.toDecimal(weekendOvertimeMinutes));
@@ -1842,6 +1842,7 @@ export class PayrollService {
         },
         select: {
           employeeId: true,
+          date: true,
           value: true,
         },
       }),
@@ -1857,6 +1858,7 @@ export class PayrollService {
         },
         select: {
           employeeId: true,
+          date: true,
           value: true,
         },
       }),
@@ -1912,7 +1914,7 @@ export class PayrollService {
                 lte: new Date(`${periodEnd}T23:59:59.999Z`),
               },
             },
-            select: { employeeId: true, value: true },
+            select: { employeeId: true, date: true, value: true },
           }),
           this.prisma.dailyAttendanceLog.findMany({
             where: {
@@ -1923,7 +1925,7 @@ export class PayrollService {
                 lte: new Date(`${periodEnd}T23:59:59.999Z`),
               },
             },
-            select: { employeeId: true, value: true },
+            select: { employeeId: true, date: true, value: true },
           }),
         ]);
         // Replace the stale pre-aggregation arrays
@@ -2003,6 +2005,7 @@ export class PayrollService {
     // ── Aggregate DELAY_MINUTES from DailyAttendanceLog (authoritative source) ──
     const lateMinutesByEmployee = new Map<string, number>();
     for (const log of dailyDelayLogs) {
+      if (isFridayDateKey(toFactoryDateKey(log.date))) continue;
       const minutes = Number(log.value ?? 0);
       if (!Number.isFinite(minutes) || minutes <= 0) continue;
       lateMinutesByEmployee.set(
@@ -2016,24 +2019,18 @@ export class PayrollService {
     // Weekend (Friday) overtime → weekend overtime pay + weekend days
     const overtimeMinutesByEmployee = new Map<string, number>();
     const overtimeWeekendMinutesByEmployee = new Map<string, number>();
-    const overtimeWeekendDaysByEmployee = new Map<string, number>();
 
     for (const log of dailyOvertimeLogs) {
       const minutes = Number(log.value ?? 0);
       if (!Number.isFinite(minutes) || minutes <= 0) continue;
 
-      const d = new Date(log.date);
-      const isFriday = d.getDay() === 5;
+      const isFriday = isFridayDateKey(toFactoryDateKey(log.date));
 
       if (isFriday) {
         // Weekend overtime: separate bucket for weekend multiplier
         overtimeWeekendMinutesByEmployee.set(
           log.employeeId,
           (overtimeWeekendMinutesByEmployee.get(log.employeeId) || 0) + minutes,
-        );
-        overtimeWeekendDaysByEmployee.set(
-          log.employeeId,
-          (overtimeWeekendDaysByEmployee.get(log.employeeId) || 0) + 1,
         );
       } else {
         // Weekday overtime: regular overtime pay
@@ -2047,6 +2044,7 @@ export class PayrollService {
     // ── Aggregate EARLY_LEAVE_MINUTES from DailyAttendanceLog (missing-minutes engine) ──
     const earlyLeaveMinutesByEmployee = new Map<string, number>();
     for (const log of dailyEarlyLeaveLogs) {
+      if (isFridayDateKey(toFactoryDateKey(log.date))) continue;
       const minutes = Number(log.value ?? 0);
       if (!Number.isFinite(minutes) || minutes <= 0) continue;
       earlyLeaveMinutesByEmployee.set(
@@ -2061,6 +2059,9 @@ export class PayrollService {
         // استبعاد أيام الإجازة المعتمدة حتى لو وُجدت فيها بصمة دخول (IN)
         const empLeaveDates = leaveDatesByEmployee.get(record.employeeId);
         if (empLeaveDates && empLeaveDates.has(record.date)) continue;
+        // Friday attendance is paid as weekend overtime, not as a contractual
+        // workday and must not reduce absence days.
+        if (isFridayDateKey(record.date)) continue;
         const dates = attendanceDatesByEmployee.get(record.employeeId) || new Set<string>();
         dates.add(record.date);
         attendanceDatesByEmployee.set(record.employeeId, dates);
@@ -2284,11 +2285,12 @@ export class PayrollService {
           ? Number(input?.overtimeRegularMinutes ?? overtimeRegularMinutesComputed)
           : Number(input?.overtimeRegularMinutes ?? 0);
 
-        // overtimeWeekendMinutes/days:
-        const overtimeWeekendDaysComputed =
-          overtimeWeekendDaysByEmployee.get(employee.employeeId) || 0;
-        const overtimeWeekendDays = Number(
-          input?.overtimeWeekendDays ?? overtimeWeekendDaysComputed,
+        // This legacy field is named Days in the API, but its value is minutes.
+        // Keep the fallback in the same unit as the frontend and attendance API.
+        const overtimeWeekendMinutesComputed =
+          overtimeWeekendMinutesByEmployee.get(employee.employeeId) || 0;
+        const overtimeWeekendMinutes = Number(
+          input?.overtimeWeekendDays ?? overtimeWeekendMinutesComputed,
         );
 
         // g3 formula: baseSalary + livingAllowance
@@ -2301,8 +2303,8 @@ export class PayrollService {
         // Calculate penalty and overtime amounts for anomalies
         const latePenalty = minuteWage.times(this.toDecimal(lateMinutes)).times(1.5);
         const earlyLeavePenalty = minuteWage.times(this.toDecimal(earlyLeaveMinutes));
-        const overtimeWeekendPay = dailyWage
-          .times(this.toDecimal(overtimeWeekendDays))
+        const overtimeWeekendPay = minuteWage
+          .times(this.toDecimal(overtimeWeekendMinutes))
           .times(MULTIPLIER_WEEKEND);
         const overtimeRegularPay = minuteWage
           .times(MULTIPLIER_OVERTIME)

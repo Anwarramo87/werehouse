@@ -55,6 +55,10 @@ export function factoryDateKeyDayOfWeek(dateKey: string): number {
   return new Date(`${dateKey}T00:00:00Z`).getUTCDay();
 }
 
+export function isFridayDateKey(dateKey: string): boolean {
+  return factoryDateKeyDayOfWeek(dateKey) === 5;
+}
+
 /** Parse YYYY-MM-DD to UTC midnight Date for Prisma @db.Date fields. */
 export function parseDateKeyToUtcMidnight(dateKey: string): Date {
   return new Date(`${dateKey.slice(0, 10)}T00:00:00.000Z`);

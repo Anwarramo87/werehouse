@@ -13,6 +13,7 @@ import {
   WORK_HOURS_PER_DAY,
   MINUTES_PER_HOUR,
   OVERTIME_MULTIPLIER,
+  WEEKEND_MULTIPLIER,
   SICK_LEAVE_DEDUCTION_RATIO,
   PAYROLL_ROUNDING_UNIT,
 } from '../common/constants/payroll.constants';
@@ -130,9 +131,18 @@ describe('Payroll Calculations', () => {
       // This unit file tests formulas only; classification is validated in payroll.service.ts integration.
       // Ensures we keep weekend overtime formula unchanged.
       const overtimeWeekendMinutes = 60;
-      const expected = getHourlyWage(GROSS) * OVERTIME_MULTIPLIER * 1;
-      const actual = getMinuteWage(GROSS) * OVERTIME_MULTIPLIER * overtimeWeekendMinutes;
+      const expected = getHourlyWage(GROSS) * WEEKEND_MULTIPLIER;
+      const actual = getMinuteWage(GROSS) * WEEKEND_MULTIPLIER * overtimeWeekendMinutes;
       expect(actual).toBeCloseTo(expected, 6);
+    });
+
+    it('Friday pay uses each employee minute wage at 1.5x', () => {
+      const workedMinutes = 120;
+      const oneMillionPay = getMinuteWage(1_000_000) * workedMinutes * WEEKEND_MULTIPLIER;
+      const twoMillionPay = getMinuteWage(2_000_000) * workedMinutes * WEEKEND_MULTIPLIER;
+
+      expect(WEEKEND_MULTIPLIER).toBe(1.5);
+      expect(twoMillionPay).toBeCloseTo(oneMillionPay * 2, 6);
     });
 
     it('should apply late penalty multiplier to lateMinutes (policy regression guard)', () => {

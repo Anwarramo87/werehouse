@@ -1,5 +1,6 @@
 import {
   factoryDateKeyDayOfWeek,
+  isFridayDateKey,
   toFactoryDateKey,
   utcTimestampToLocalMinutes,
 } from './timezone.util';
@@ -18,5 +19,10 @@ describe('timezone.util', () => {
 
   it('factoryDateKeyDayOfWeek returns Friday for 2026-06-19', () => {
     expect(factoryDateKeyDayOfWeek('2026-06-19')).toBe(5);
+  });
+
+  it('isFridayDateKey identifies Friday without local timezone drift', () => {
+    expect(isFridayDateKey('2026-06-19')).toBe(true);
+    expect(isFridayDateKey('2026-06-20')).toBe(false);
   });
 });
