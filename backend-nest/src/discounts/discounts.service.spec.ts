@@ -4,6 +4,7 @@ import { DiscountsService } from './discounts.service';
 import { AdvancesService } from '../advances/advances.service';
 import { BonusesService } from '../bonuses/bonuses.service';
 import { ShortCacheService } from '../common/cache/short-cache.service';
+import { PenaltiesService } from '../penalties/penalties.service';
 import { DiscountKind } from './dto/create-discount.dto';
 
 describe('DiscountsService', () => {
@@ -28,6 +29,13 @@ describe('DiscountsService', () => {
           },
         },
         { provide: BonusesService, useValue: bonusesService },
+        {
+          provide: PenaltiesService,
+          useValue: {
+            create: jest.fn(),
+            list: jest.fn(),
+          },
+        },
         {
           provide: ShortCacheService,
           useValue: {

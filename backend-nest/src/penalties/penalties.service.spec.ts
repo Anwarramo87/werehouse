@@ -3,6 +3,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { PenaltiesService } from './penalties.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { ShortCacheService } from '../common/cache/short-cache.service';
+import { NotificationsService } from '../notifications/notifications.service';
 import { Prisma } from '@prisma/client';
 
 const penaltyRecord = {
@@ -39,6 +40,11 @@ describe('PenaltiesService', () => {
 
   const cacheMock = { invalidatePrefix: jest.fn().mockResolvedValue(undefined) };
 
+  const notificationsMock = {
+    create: jest.fn().mockResolvedValue(undefined),
+    list: jest.fn().mockResolvedValue([]),
+  };
+
   beforeEach(async () => {
     jest.clearAllMocks();
 
@@ -54,6 +60,7 @@ describe('PenaltiesService', () => {
         PenaltiesService,
         { provide: PrismaService, useValue: prismaMock },
         { provide: ShortCacheService, useValue: cacheMock },
+        { provide: NotificationsService, useValue: notificationsMock },
       ],
     }).compile();
 

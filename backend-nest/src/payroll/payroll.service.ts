@@ -863,7 +863,13 @@ export class PayrollService {
     const uniqueDates = new Set(attendanceInRecords.map((r) => r.date));
     const attendanceDays = uniqueDates.size;
     const absenceDays = Math.max(0, workDays - attendanceDays);
-    const absencePenalty = new Prisma.Decimal(0); // Force absencePenalty to 0 for provisional settlement
+    // IMPORTANT: absencePenalty is intentionally ZERO here. The earned salary
+    // above is already computed from PRESENT days only (contractualWorkedMinutes
+    // = presentDays × hoursPerDay), so every absent day is already excluded from
+    // pay. Adding an explicit absencePenalty on top would DOUBLE-deduct absence.
+    // Do NOT "fix" this without also switching computeEarnedSalaryForPeriod to a
+    // full-salary-then-deduct model.
+    const absencePenalty = new Prisma.Decimal(0);
 
     // 5. Bus subscription deduction (prorated for the partial month up to termination date)
     let busDeduction = 0;
@@ -910,8 +916,11 @@ export class PayrollService {
     this.logger.log(`[PROVISIONAL] totalDeductions=${totalDeductions.toString()}`);
     this.logger.log(`[PROVISIONAL] empId=${employeeId} earnedSalary=${earnedSalary.toFixed(2)} totalBonuses=${totalBonuses.toFixed(2)} totalDeductions=${totalDeductions.toFixed(2)}`);
 
-    // Final provisional settlement
-    const provisionalFinalSalary = earnedSalary.plus(totalBonuses).minus(totalDeductions);
+    // Final provisional settlement (rounded UP to nearest thousand to match the
+    // monthly payroll netPay behavior — single source of truth for rounding)
+    const provisionalFinalSalary = this.roundUpToNearestThousand(
+      earnedSalary.plus(totalBonuses).minus(totalDeductions),
+    );
 
     return {
       employeeId: employee.employeeId,

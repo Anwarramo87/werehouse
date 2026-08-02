@@ -9,6 +9,7 @@ import * as ExcelJS from 'exceljs';
 import { QUEUE_JOBS, QUEUE_NAMES } from '../queues/queue.constants';
 import { paginatedResponse, resolvePagination } from '../common/utils/pagination.util';
 import { ImportsHistoryQueryDto } from './dto/imports-history-query.dto';
+import { deriveHoursPerDayFromSchedule } from '../common/utils/work-hours.util';
 
 type ParsedRow = Record<string, string>;
 type RowError = { row: number; error: string };
@@ -938,30 +939,45 @@ export class ImportsService {
             if (!['active', 'inactive', 'on_leave', 'terminated'].includes(status))
               throw new Error('status must be one of: active, inactive, on_leave, terminated');
 
+            // hoursPerDay is ALWAYS derived from the schedule — never accepted
+            // from the file. Reject rows with an invalid schedule window.
+            let derivedHoursPerDay: number | undefined;
+            if (scheduledStart && scheduledEnd) {
+              const derived = deriveHoursPerDayFromSchedule(scheduledStart, scheduledEnd);
+              if (derived === null) {
+                throw new Error('scheduledEnd must be after scheduledStart');
+              }
+              derivedHoursPerDay = derived;
+            }
+
             if (persist) {
               const roleId = await this.resolveRoleId(roleIdRaw, defaultRoleId);
               await this.prisma.employee.upsert({
                 where: { employeeId },
                 update: {
                   name,
-                  email: normalizedEmail,
                   hourlyRate: new Prisma.Decimal(hourlyRate),
                   currency,
                   department,
                   scheduledStart,
                   scheduledEnd,
+                  ...(derivedHoursPerDay !== undefined && {
+                    hoursPerDay: derivedHoursPerDay,
+                  }),
                   status,
                   roleId,
                 },
                 create: {
                   employeeId,
                   name,
-                  email: normalizedEmail,
                   hourlyRate: new Prisma.Decimal(hourlyRate),
                   currency,
                   department,
                   scheduledStart,
                   scheduledEnd,
+                  ...(derivedHoursPerDay !== undefined && {
+                    hoursPerDay: derivedHoursPerDay,
+                  }),
                   status,
                   roleId,
                 },
