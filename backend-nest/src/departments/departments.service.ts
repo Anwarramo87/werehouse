@@ -6,10 +6,18 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateDepartmentDto } from './dto/create-department.dto';
+import { ShortCacheService } from '../common/cache/short-cache.service';
 
 @Injectable()
 export class DepartmentsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly shortCache: ShortCacheService,
+  ) {}
+
+  private invalidateListCache() {
+    return this.shortCache.invalidatePrefix('departments:list');
+  }
 
   private normalizeName(name: string) {
     const normalized = name.trim();
@@ -38,6 +46,7 @@ export class DepartmentsService {
         ...(dto.establishedAt !== undefined && { establishedAt: new Date(dto.establishedAt) }),
       },
     });
+    await this.invalidateListCache();
 
     return { message: 'Department created successfully', department };
   }
@@ -60,6 +69,7 @@ export class DepartmentsService {
         ...(dto.establishedAt !== undefined && { establishedAt: new Date(dto.establishedAt) }),
       },
     });
+    await this.invalidateListCache();
     return { message: 'Department updated', department: dept };
   }
 
@@ -78,6 +88,7 @@ export class DepartmentsService {
     }
     
     await this.prisma.department.delete({ where: { id } });
+    await this.invalidateListCache();
     return { message: 'Department deleted' };
   }
 
@@ -89,24 +100,27 @@ export class DepartmentsService {
       where: { id },
       data: { manager: null },
     });
+    await this.invalidateListCache();
     return { message: 'Supervisor removed', department: dept };
   }
 
   async list() {
-    const departments = await this.prisma.department.findMany({
-      orderBy: [{ createdAt: 'desc' }, { name: 'asc' }],
-      include: {
-        _count: {
-          select: { employees: true },
+    return this.shortCache.getOrSetJson('departments:list', 30, async () => {
+      const departments = await this.prisma.department.findMany({
+        orderBy: [{ createdAt: 'desc' }, { name: 'asc' }],
+        include: {
+          _count: {
+            select: { employees: true },
+          },
         },
-      },
-    });
+      });
 
-    return {
-      departments: departments.map((department) => ({
-        ...department,
-        employeeCount: department._count.employees,
-      })),
-    };
+      return {
+        departments: departments.map((department) => ({
+          ...department,
+          employeeCount: department._count.employees,
+        })),
+      };
+    });
   }
 }

@@ -65,6 +65,8 @@ function makeService(
   jest
     .spyOn(service as any, 'enqueuePayrollJob')
     .mockResolvedValue(undefined);
+  // The outer (pre-transaction) create at line ~1039 must resolve a run.
+  (mockPrisma.payrollRun.create as jest.Mock).mockResolvedValue(createdRun);
   // Return the tx-bound run so we can assert on it.
   (tx.payrollRun.create as jest.Mock).mockResolvedValue(createdRun);
   (tx.payrollRun.findFirst as jest.Mock).mockResolvedValue(existingRun);
@@ -82,7 +84,7 @@ const dto = {
 describe('PayrollService.calculateAsync — C1 deduplication', () => {
   it('replaces an existing non-approved run for the same period (single call)', async () => {
     const tx = makeTx(null, {});
-    const { service, tx: usedTx } = makeService(tx);
+    const { service, mockPrisma, tx: usedTx } = makeService(tx);
 
     const res = await service.calculateAsync(dto as any, 'u1');
 
@@ -94,13 +96,14 @@ describe('PayrollService.calculateAsync — C1 deduplication', () => {
         }),
       }),
     );
-    expect(usedTx.payrollRun.create).toHaveBeenCalledTimes(1);
+    // The run record is created BEFORE the advisory lock is acquired.
+    expect(mockPrisma.payrollRun.create).toHaveBeenCalledTimes(1);
     expect(res.payrollRun.runId).toMatch(/^PAY20260101-/);
   });
 
   it('deletes the existing non-approved run before creating the new one', async () => {
     const tx = makeTx(null, {});
-    const { service, tx: usedTx, existingRun } = makeService(tx);
+    const { service, mockPrisma, tx: usedTx, existingRun } = makeService(tx);
 
     await service.calculateAsync(dto as any, 'u1');
 
@@ -110,17 +113,17 @@ describe('PayrollService.calculateAsync — C1 deduplication', () => {
       expect.objectContaining({ where: { id: existingRun.id } }),
     );
     // Exactly one new run created after the old one removed.
-    expect(usedTx.payrollRun.create).toHaveBeenCalledTimes(1);
+    expect(mockPrisma.payrollRun.create).toHaveBeenCalledTimes(1);
   });
 
   it('does NOT replace an approved run for the same period', async () => {
     const tx = makeTx(null, {});
-    const { service, tx: usedTx } = makeService(tx, { approvedExisting: true });
+    const { service, mockPrisma, tx: usedTx } = makeService(tx, { approvedExisting: true });
 
     await service.calculateAsync(dto as any, 'u1');
 
     expect(usedTx.payrollRun.delete).not.toHaveBeenCalled();
-    expect(usedTx.payrollRun.create).toHaveBeenCalledTimes(1);
+    expect(mockPrisma.payrollRun.create).toHaveBeenCalledTimes(1);
   });
 
   it('acquires the period advisory lock inside the transaction', async () => {
@@ -129,8 +132,10 @@ describe('PayrollService.calculateAsync — C1 deduplication', () => {
 
     await service.calculateAsync(dto as any, 'u1');
 
+    // $executeRaw is invoked as a tagged template literal.
     expect(usedTx.$executeRaw).toHaveBeenCalledWith(
-      expect.stringContaining('pg_advisory_xact_lock'),
+      expect.arrayContaining([expect.stringContaining('pg_advisory_xact_lock')]),
+      expect.any(BigInt),
     );
   });
 
@@ -165,7 +170,15 @@ describe('PayrollService.calculateAsync — C1 deduplication', () => {
 
     const mockPrisma = {
       $transaction: jest.fn((cb: any) => cb(txFactory())),
-      payrollRun: { findFirst: jest.fn(), create: jest.fn(), delete: jest.fn() },
+      payrollRun: {
+        findFirst: jest.fn(),
+        create: jest.fn().mockResolvedValue({
+          id: 'run-x',
+          runId: 'PAY20260101-xxxx',
+          approvalStatus: 'pending',
+        }),
+        delete: jest.fn(),
+      },
       payrollItem: { deleteMany: jest.fn() },
       deletedRecordHistory: { create: jest.fn() },
     } as unknown as PrismaClient;

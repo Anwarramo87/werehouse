@@ -631,10 +631,18 @@ export class TransportationService {
 
     // 6. Calculate prorated deduction per employee
     for (const [empId, passenger] of latestByEmployee) {
+      // During a provisional settlement (termination preview) the passenger is
+      // still active with terminationDate=null, so we must use the preview's
+      // terminationDate to prorate correctly for the employee's last work day.
+      const effectiveTerminationDate =
+        options?.isProvisional && options?.terminationDate
+          ? options.terminationDate
+          : passenger.terminationDate;
+
       const activeWorkingDays = this.getActiveWorkingDays(
         passenger.subscriptionDate,
         targetMonth,
-        passenger.terminationDate,
+        effectiveTerminationDate,
       );
 
       const finalDeduction = (baseShare / 26) * activeWorkingDays;

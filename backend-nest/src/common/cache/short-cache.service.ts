@@ -12,6 +12,7 @@ export class ShortCacheService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(ShortCacheService.name);
   private readonly keyPrefix = 'api:short-cache:';
   private readonly memory = new Map<string, MemoryCacheEntry>();
+  private readonly inFlight = new Map<string, Promise<unknown>>();
 
   private readonly cacheEnabled: boolean;
   private readonly redisUrl: string;
@@ -115,7 +116,20 @@ export class ShortCacheService implements OnModuleInit, OnModuleDestroy {
       }
     }
 
-    const value = await producer();
+    const existingProducer = this.inFlight.get(key) as Promise<T> | undefined;
+    if (existingProducer) {
+      return existingProducer;
+    }
+
+    const producerPromise = producer();
+    this.inFlight.set(key, producerPromise);
+
+    let value: T;
+    try {
+      value = await producerPromise;
+    } finally {
+      this.inFlight.delete(key);
+    }
 
     try {
       const serialized = JSON.stringify(value);

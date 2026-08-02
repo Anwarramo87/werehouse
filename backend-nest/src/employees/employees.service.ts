@@ -29,6 +29,10 @@ import {
   MAX_HOURLY_RATE,
 } from './employees.constants';
 import { buildEmployeeSalaryMirror, resolveSalary } from '../common/utils/salary-resolution.util';
+import {
+  deriveHoursPerDayFromSchedule,
+  validateScheduleTimes,
+} from '../common/utils/work-hours.util';
 
 const DEFAULT_PROFILE_RANGE_DAYS = 30;
 const DEFAULT_PROFILE_LIMIT = 200;
@@ -333,7 +337,18 @@ export class EmployeesService {
         ? new Prisma.Decimal(dto.insuranceAmount)
         : null;
     const resolvedWorkDaysInPeriod = dto.workDaysInPeriod ?? DEFAULT_WORK_DAYS_IN_PERIOD;
-    const resolvedHoursPerDay = dto.hoursPerDay ?? DEFAULT_HOURS_PER_DAY;
+
+    // hoursPerDay is ALWAYS derived from the schedule (scheduledStart/scheduledEnd).
+    // Any client-supplied hoursPerDay is ignored and overwritten so the two can
+    // never diverge. When no schedule is provided we fall back to the default.
+    const scheduleError = validateScheduleTimes(dto.scheduledStart, dto.scheduledEnd);
+    if (scheduleError) {
+      throw new BadRequestException(scheduleError);
+    }
+    const resolvedHoursPerDay =
+      deriveHoursPerDayFromSchedule(dto.scheduledStart, dto.scheduledEnd) ??
+      (dto.hoursPerDay ?? DEFAULT_HOURS_PER_DAY);
+
     const resolvedHourlyRate =
       dto.hourlyRate ??
       (baseSalary !== null && baseSalary !== undefined
@@ -435,7 +450,7 @@ export class EmployeesService {
           terminationDate: null,
           status: 'active',
           workDaysInPeriod: dto.workDaysInPeriod ?? DEFAULT_WORK_DAYS_IN_PERIOD,
-          hoursPerDay: dto.hoursPerDay ?? DEFAULT_HOURS_PER_DAY,
+          hoursPerDay: resolvedHoursPerDay,
           gracePeriodMinutes: dto.gracePeriodMinutes ?? 5,
         },
         include: this.employeeSelect(),
@@ -512,6 +527,29 @@ export class EmployeesService {
         ? this.normalizeOptionalString(dto.profession ?? dto.jobTitle)
         : undefined;
     const mobile = dto.mobile !== undefined ? this.normalizeOptionalString(dto.mobile) : undefined;
+
+    // hoursPerDay is ALWAYS derived from the schedule (scheduledStart/scheduledEnd).
+    // Any client-supplied hoursPerDay is ignored and overwritten. Derivation runs
+    // only when the schedule itself is being edited — unrelated updates to legacy
+    // records are never rejected for schedule reasons.
+    const isScheduleBeingUpdated =
+      dto.scheduledStart !== undefined || dto.scheduledEnd !== undefined;
+    let effectiveHoursPerDay: number | undefined;
+    if (isScheduleBeingUpdated) {
+      const effectiveScheduledStart = dto.scheduledStart ?? employee.scheduledStart ?? null;
+      const effectiveScheduledEnd = dto.scheduledEnd ?? employee.scheduledEnd ?? null;
+      const scheduleError = validateScheduleTimes(
+        effectiveScheduledStart,
+        effectiveScheduledEnd,
+      );
+      if (scheduleError) {
+        throw new BadRequestException(scheduleError);
+      }
+      effectiveHoursPerDay =
+        deriveHoursPerDayFromSchedule(effectiveScheduledStart, effectiveScheduledEnd) ??
+        employee.hoursPerDay ??
+        DEFAULT_HOURS_PER_DAY;
+    }
 
     const nextEmploymentStartDate =
       employmentStartDate === undefined ? employee.employmentStartDate : employmentStartDate;
@@ -614,7 +652,7 @@ export class EmployeesService {
         ...(employmentStartDate !== undefined && { employmentStartDate }),
         ...(terminationDate !== undefined && { terminationDate }),
         ...(dto.workDaysInPeriod !== undefined && { workDaysInPeriod: dto.workDaysInPeriod }),
-        ...(dto.hoursPerDay !== undefined && { hoursPerDay: dto.hoursPerDay }),
+        ...(effectiveHoursPerDay !== undefined && { hoursPerDay: effectiveHoursPerDay }),
         ...(dto.gracePeriodMinutes !== undefined && {
           gracePeriodMinutes: dto.gracePeriodMinutes,
         }),
@@ -1150,8 +1188,16 @@ export class EmployeesService {
         isFinanciallySettled: false,
       };
 
-      // If restorePreviousSettings is true, keep all previous data (salary, department, etc.)
-      // Otherwise, the data is already preserved in the employee record
+      // When restorePreviousSettings is false, the employee starts FRESH:
+      // previous salary config and financial history (bonuses, advances,
+      // penalties) are cleared inside the same transaction so nothing old
+      // silently carries over into the new employment.
+      if (!restorePreviousSettings) {
+        await tx.employeeSalary.deleteMany({ where: { employeeId: dto.employeeId } });
+        await tx.employeeBonus.deleteMany({ where: { employeeId: dto.employeeId } });
+        await tx.employeeAdvance.deleteMany({ where: { employeeId: dto.employeeId } });
+        await tx.employeePenalty.deleteMany({ where: { employeeId: dto.employeeId } });
+      }
 
       const updatedEmployee = await tx.employee.update({
         where: { employeeId: dto.employeeId },
@@ -1316,8 +1362,21 @@ export class EmployeesService {
       }
     }
 
-    // Execute queries
-    const [employees, total] = await Promise.all([
+    // The list and statistics are independent. Start all database work together
+    // so the endpoint has one query phase instead of two serial phases.
+    const now = new Date();
+    const currentMonthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+
+    const [
+      employees,
+      total,
+      currentMonthCount,
+      previousMonthsCount,
+      resignationsCount,
+      terminationsCount,
+      pendingSettlementCount,
+      byDepartment,
+    ] = await Promise.all([
       this.prisma.employee.findMany({
         where,
         orderBy: { terminationDate: 'desc' },
@@ -1326,20 +1385,6 @@ export class EmployeesService {
         include: this.employeeSelect(),
       }),
       this.prisma.employee.count({ where }),
-    ]);
-
-    // Calculate statistics
-    const now = new Date();
-    const currentMonthStart = new Date(now.getFullYear(), now.getMonth(), 1);
-
-    const [
-      currentMonthCount,
-      previousMonthsCount,
-      resignationsCount,
-      terminationsCount,
-      pendingSettlementCount,
-      byDepartment,
-    ] = await Promise.all([
       this.prisma.employee.count({
         where: {
           status: { in: ['resigned', 'terminated'] },

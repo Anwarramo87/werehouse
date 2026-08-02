@@ -3,6 +3,7 @@ import { BadRequestException } from '@nestjs/common';
 import { EmployeesService } from './employees.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { ShortCacheService } from '../common/cache/short-cache.service';
+import { NotificationsService } from '../notifications/notifications.service';
 
 describe('EmployeesService', () => {
   let service: EmployeesService;
@@ -29,6 +30,11 @@ describe('EmployeesService', () => {
     invalidatePrefix: jest.fn(),
   };
 
+  const notificationsMock = {
+    create: jest.fn().mockResolvedValue(undefined),
+    list: jest.fn().mockResolvedValue([]),
+  };
+
   beforeEach(async () => {
     jest.clearAllMocks();
 
@@ -37,6 +43,7 @@ describe('EmployeesService', () => {
         EmployeesService,
         { provide: PrismaService, useValue: prismaMock },
         { provide: ShortCacheService, useValue: shortCacheMock },
+        { provide: NotificationsService, useValue: notificationsMock },
       ],
     }).compile();
 

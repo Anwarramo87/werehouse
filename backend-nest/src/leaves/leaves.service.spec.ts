@@ -2,6 +2,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { LeavesService } from './leaves.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { ShortCacheService } from '../common/cache/short-cache.service';
+import { NotificationsService } from '../notifications/notifications.service';
 
 describe('LeavesService', () => {
   let service: LeavesService;
@@ -21,6 +22,11 @@ describe('LeavesService', () => {
     invalidatePrefix: jest.fn(),
   };
 
+  const notificationsMock = {
+    create: jest.fn().mockResolvedValue(undefined),
+    list: jest.fn().mockResolvedValue([]),
+  };
+
   beforeEach(async () => {
     jest.clearAllMocks();
     const module: TestingModule = await Test.createTestingModule({
@@ -28,6 +34,7 @@ describe('LeavesService', () => {
         LeavesService,
         { provide: PrismaService, useValue: prismaMock },
         { provide: ShortCacheService, useValue: shortCacheMock },
+        { provide: NotificationsService, useValue: notificationsMock },
       ],
     }).compile();
 
