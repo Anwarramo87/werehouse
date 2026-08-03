@@ -1712,6 +1712,7 @@ export class AttendanceService {
       schedStartMin: number,
       schedEndMin: number,
       delayAlreadyPenalized: number,
+      forgivenGraceMinutes = 0,
       isNightShift = false,
       scheduledEndEffMin = schedEndMin,
     ): number => {
@@ -1742,13 +1743,15 @@ export class AttendanceService {
 
       const scheduledWorkedMinutes = Math.round(scheduledWorkedMs / 60_000);
       const grossMissing = Math.max(0, requiredMin - scheduledWorkedMinutes);
-      // نطرح التأخير الصباحي لأنه يُعاقب عليه منفصلاً بـ 1.5×
-      return Math.max(0, grossMissing - delayAlreadyPenalized);
+      // نطرح التأخير الصباحي (يُعاقب عليه منفصلاً بـ 1.5×) ودقائق السماح المعفاة
+      // حتى لا تُحسب دقائق الـ grace المقدمة للتأخير كـ "دوام ناقص" مرة ثانية.
+      return Math.max(0, grossMissing - delayAlreadyPenalized - forgivenGraceMinutes);
     };
 
-    // ── Aggregate EARLY_LEAVE_MINUTES from DailyAttendanceLog for the period ──
-    // This picks up real-time calculated penalties written by the aggregation engine.
-    // نستخدمها كـ fallback فقط إذا حسابنا المباشر يعطي صفر.
+    // ── Aggregate MANUAL EARLY_LEAVE_MINUTES from DailyAttendanceLog for the period ──
+    // نستخدم فقط الإدخالات اليدوية (source='manual') كـ fallback لأنها إدخال إداري
+    // مقصود. السجلات 'calculated' تُستبعد: الحساب المباشر من البصمات أدق وأحدث،
+    // وقد تبقى سجلات calculated قديمة لأيام لم تعد فيها بصمات (نظيفة خطأ).
     const earlyLeaveLogs = await this.prisma.dailyAttendanceLog.findMany({
       where: {
         ...(employeeId ? { employeeId } : {}),
@@ -1757,6 +1760,7 @@ export class AttendanceService {
           lte: new Date(`${periodEnd}T23:59:59.999Z`),
         },
         recordType: 'EARLY_LEAVE_MINUTES',
+        source: 'manual',
       },
       select: { employeeId: true, date: true, value: true },
     });
@@ -1954,29 +1958,30 @@ export class AttendanceService {
         if (dayOfWeekForMissing === 5) continue; // الجمعة — لا خصم
         if (employeePublicHolidayDates && employeePublicHolidayDates.has(date)) continue; // عطلة رسمية (OTHER)
 
-        // تأخير هذا اليوم تحديداً
+        // تأخير هذا اليوم تحديداً (خام قبل السماح) — نحتفظ بدقائق السماح المعفاة
+        // حتى تُطرح من الدقائق الناقصة ولا تُخصم مرتين.
         const dayDelayInfo = [...firstInByDate.values()].find((x) => x.date === date);
-        const dayDelay = dayDelayInfo
-          ? (() => {
-              let rawLate: number;
-              if (dayDelayInfo.shiftPairMinutesLate !== null && dayDelayInfo.shiftPairMinutesLate > 0) {
-                rawLate = dayDelayInfo.shiftPairMinutesLate;
-              } else {
-                const utcMin = dayDelayInfo.timestamp.getUTCHours() * 60 + dayDelayInfo.timestamp.getUTCMinutes();
-                const localMin = (((utcMin + TIMEZONE_OFFSET_MINUTES) % 1440) + 1440) % 1440;
-                // closest scheduled-start instance (handles 00:00-start / night shifts)
-                const cand = [schedStartMin, schedStartMin + 1440];
-                let best = Infinity, startInstance = schedStartMin;
-                for (const c of cand) {
-                  const d = Math.abs(localMin - c);
-                  if (d < best) { best = d; startInstance = c; }
-                }
-                rawLate = startInstance - localMin < 0 ? localMin - startInstance : 0;
-              }
-              rawLate = Math.max(0, rawLate - (morningLeaveOffsetByDate.get(date) || 0));
-              return rawLate > empGracePeriod ? rawLate - empGracePeriod : 0;
-            })()
-          : 0;
+        let dayRawLate = 0;
+        if (dayDelayInfo) {
+          let rawLate: number;
+          if (dayDelayInfo.shiftPairMinutesLate !== null && dayDelayInfo.shiftPairMinutesLate > 0) {
+            rawLate = dayDelayInfo.shiftPairMinutesLate;
+          } else {
+            const utcMin = dayDelayInfo.timestamp.getUTCHours() * 60 + dayDelayInfo.timestamp.getUTCMinutes();
+            const localMin = (((utcMin + TIMEZONE_OFFSET_MINUTES) % 1440) + 1440) % 1440;
+            // closest scheduled-start instance (handles 00:00-start / night shifts)
+            const cand = [schedStartMin, schedStartMin + 1440];
+            let best = Infinity, startInstance = schedStartMin;
+            for (const c of cand) {
+              const d = Math.abs(localMin - c);
+              if (d < best) { best = d; startInstance = c; }
+            }
+            rawLate = startInstance - localMin < 0 ? localMin - startInstance : 0;
+          }
+          dayRawLate = Math.max(0, rawLate - (morningLeaveOffsetByDate.get(date) || 0));
+        }
+        const dayDelay = dayRawLate > empGracePeriod ? dayRawLate - empGracePeriod : 0;
+        const dayForgivenGrace = Math.min(dayRawLate, empGracePeriod);
 
         // حساب الدقائق الناقصة مباشرة من أزواج البصمات
         const isNightShift = schedEndMin <= schedStartMin;
@@ -1986,6 +1991,7 @@ export class AttendanceService {
           schedStartMin,
           schedEndMin,
           dayDelay,
+          dayForgivenGrace,
           isNightShift,
           scheduledEndEffMin,
         );
