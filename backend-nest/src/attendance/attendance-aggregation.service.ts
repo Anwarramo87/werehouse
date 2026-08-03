@@ -285,18 +285,14 @@ export class AttendanceAggregationService {
   }
 
   /**
-   * Calculate morning delay minutes from the first IN punch of the day.
-   *
-   * Strategy:
-   *  1. Use shiftPair.minutesLate if available on the first IN punch.
-   *  2. Otherwise compute from UTC timestamp → local time − scheduledStart.
-   *  3. Apply grace period: if delay ≤ grace, effective delay = 0.
+   * Raw morning late arrival (minutes AFTER the scheduled start, BEFORE grace).
+   * Used by both the delay calculation (post-grace) and the missing-minutes
+   * engine (to exclude the grace-forgiven portion from "missing" penalties).
    */
-  private calculateDelayFromPunches(
+  private calculateLateArrivalMinutes(
     punches: DailyPunchRecord[],
     scheduledStartMin: number,
-    gracePeriodMinutes: number,
-    isNightShift = false,
+    _isNightShift = false,
   ): number {
     const sorted = [...punches].sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
 
@@ -306,7 +302,7 @@ export class AttendanceAggregationService {
     // Prefer pre-calculated minutesLate from biometric shiftPair
     const shiftPairMinutes = this.extractMinutesLate(firstIn.shiftPair);
     if (shiftPairMinutes > 0) {
-      return Math.max(0, shiftPairMinutes - gracePeriodMinutes);
+      return shiftPairMinutes;
     }
 
     // Compute from UTC timestamp → local time
@@ -328,7 +324,24 @@ export class AttendanceAggregationService {
       }
     }
 
-    const rawDelay = Math.max(0, localArrivalMin - startInstance);
+    return Math.max(0, localArrivalMin - startInstance);
+  }
+
+  /**
+   * Calculate morning delay minutes from the first IN punch of the day.
+   *
+   * Strategy:
+   *  1. Use shiftPair.minutesLate if available on the first IN punch.
+   *  2. Otherwise compute from UTC timestamp → local time − scheduledStart.
+   *  3. Apply grace period: if delay ≤ grace, effective delay = 0.
+   */
+  private calculateDelayFromPunches(
+    punches: DailyPunchRecord[],
+    scheduledStartMin: number,
+    gracePeriodMinutes: number,
+    isNightShift = false,
+  ): number {
+    const rawDelay = this.calculateLateArrivalMinutes(punches, scheduledStartMin, isNightShift);
     return rawDelay > gracePeriodMinutes ? rawDelay - gracePeriodMinutes : 0;
   }
 
@@ -483,6 +496,22 @@ export class AttendanceAggregationService {
       this.logger.debug(
         `Skipping penalty calc for ${employeeId} on ${dateStr}: OTHER leave (notes=${otherLeave.notes ?? 'none'})`,
       );
+      await this.prisma.dailyAttendanceLog.deleteMany({
+        where: {
+          employeeId,
+          date: dateOnly,
+          source: 'calculated',
+          recordType: {
+            in: [
+              DailyRecordType.DELAY_MINUTES,
+              DailyRecordType.EARLY_LEAVE_MINUTES,
+              DailyRecordType.OVERTIME_MINUTES,
+              DailyRecordType.PAID_LEAVE,
+              DailyRecordType.UNPAID_LEAVE,
+            ],
+          },
+        },
+      });
       return null;
     }
 
@@ -501,6 +530,22 @@ export class AttendanceAggregationService {
       this.logger.debug(
         `Skipping penalty calc for ${employeeId} on ${dateStr}: full-day ${fullDayLeave.leaveType} leave`,
       );
+      await this.prisma.dailyAttendanceLog.deleteMany({
+        where: {
+          employeeId,
+          date: dateOnly,
+          source: 'calculated',
+          recordType: {
+            in: [
+              DailyRecordType.DELAY_MINUTES,
+              DailyRecordType.EARLY_LEAVE_MINUTES,
+              DailyRecordType.OVERTIME_MINUTES,
+              DailyRecordType.PAID_LEAVE,
+              DailyRecordType.UNPAID_LEAVE,
+            ],
+          },
+        },
+      });
       return null;
     }
 
@@ -519,6 +564,24 @@ export class AttendanceAggregationService {
     // If no punches at all, the employee is absent — skip missing-minutes calc.
     // (Absence is handled by separate absence logic in payroll.)
     if (punches.length === 0) {
+      // Clean any stale calculated logs left from a previous aggregation run
+      // (e.g. attendance records were removed after the logs were written).
+      await this.prisma.dailyAttendanceLog.deleteMany({
+        where: {
+          employeeId,
+          date: dateOnly,
+          source: 'calculated',
+          recordType: {
+            in: [
+              DailyRecordType.DELAY_MINUTES,
+              DailyRecordType.EARLY_LEAVE_MINUTES,
+              DailyRecordType.OVERTIME_MINUTES,
+              DailyRecordType.PAID_LEAVE,
+              DailyRecordType.UNPAID_LEAVE,
+            ],
+          },
+        },
+      });
       return null;
     }
 
@@ -565,6 +628,20 @@ export class AttendanceAggregationService {
     const morningLeaveOffset = Math.max(0, effectiveScheduledStartMin - scheduledStartMin);
     const calculatedDelayMinutes = Math.max(0, rawDelayMinutes - morningLeaveOffset);
 
+    // ── Step 4d: Grace-forgiven morning minutes ─────────────────────────────
+    // The grace period forgives the first `grace` minutes of morning lateness
+    // (delay = max(0, late − grace)). Those forgiven minutes are NOT penalized
+    // as delay, so they must also be excluded from the missing-time penalty —
+    // otherwise the grace is silently double-charged as "خروج مبكر/ناقص"
+    // (e.g. IN 08:10 with grace 5 → delay 5, but grossMissing 10 − delay 5 = 5
+    // would wrongly become missing minutes instead of 0).
+    const lateArrivalMinutes = this.calculateLateArrivalMinutes(
+      punches,
+      effectiveScheduledStartMin,
+      isNightShift,
+    );
+    const forgivenGraceMinutes = Math.min(lateArrivalMinutes, empGracePeriod);
+
     // ── Step 4c: (unused — missing minutes computed via grossMissingMinutes below) ──
 
     // ── Step 6: Write to DailyAttendanceLog inside a $transaction ─────────────
@@ -578,10 +655,14 @@ export class AttendanceAggregationService {
       // finalMissingMinutes = الناقص بعد استثناء التأخير (لأنه مُعاقب عليه منفصلاً)
       const delayMinutesSubtracted = calculatedDelayMinutes;
 
-      // ── Step C: finalMissing = grossMissing − delay − approvedLeave ──────
+      // ── Step C: finalMissing = grossMissing − delay − forgivenGrace − approvedLeave ──
       // لا نعتمد على rawEarlyLeaveMinutes لأنه يشوف آخر OUT فقط
       // ويفوّت الفجوات الداخلية (مثل خروج 10 ورجوع 12)
-      const netMissingAfterDelay = Math.max(0, grossMissingMinutes - calculatedDelayMinutes);
+      // forgivenGraceMinutes: دقائق السماح للتأخير الصباحي — معفاة من الخصم أصلاً
+      const netMissingAfterDelay = Math.max(
+        0,
+        grossMissingMinutes - calculatedDelayMinutes - forgivenGraceMinutes,
+      );
       const finalMissingMinutes = Math.max(0, netMissingAfterDelay - approvedLeaveMinutes);
 
       // ── Step D: Clean existing calculated logs for this date ─────────────
@@ -629,7 +710,7 @@ export class AttendanceAggregationService {
             recordType: DailyRecordType.EARLY_LEAVE_MINUTES,
             value: new Prisma.Decimal(finalMissingMinutes),
             source: 'calculated',
-            notes: `Auto-calculated: required=${requiredMinutes}min, worked=${actualWorkedMinutes}min, gross_missing=${grossMissingMinutes}min, delay=${calculatedDelayMinutes}min, leave_offset=${approvedLeaveMinutes}min → missing_penalty=${finalMissingMinutes}min`,
+            notes: `Auto-calculated: required=${requiredMinutes}min, worked=${actualWorkedMinutes}min, gross_missing=${grossMissingMinutes}min, delay=${calculatedDelayMinutes}min, grace_forgiven=${forgivenGraceMinutes}min, leave_offset=${approvedLeaveMinutes}min → missing_penalty=${finalMissingMinutes}min`,
           },
         });
         logsCreated.push(`EARLY_LEAVE_MINUTES=${finalMissingMinutes}`);
@@ -725,7 +806,7 @@ export class AttendanceAggregationService {
       `[${employeeId}] ${dateStr}: delay=${result.calculatedDelayMinutes}min, ` +
         `missing=${result.finalMissingMinutes}min, overtime=${result.overtimeMinutes}min ` +
         `(required=${requiredMinutes}, scheduledWorked=${actualWorkedMinutes}, ` +
-        `gross_missing=${result.grossMissingMinutes}, leave=${approvedLeaveMinutes})`,
+        `gross_missing=${result.grossMissingMinutes}, grace_forgiven=${forgivenGraceMinutes}, leave=${approvedLeaveMinutes})`,
     );
 
     return result;

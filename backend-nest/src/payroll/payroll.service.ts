@@ -26,7 +26,6 @@ import { AttendanceAggregationService } from '../attendance/attendance-aggregati
 import { AuthenticatedUser } from '../common/types/authenticated-user.types';
 import {
   PAYROLL_BATCH_SIZE,
-  WORK_DAYS_PER_MONTH,
   WORK_HOURS_PER_DAY,
   MINUTES_PER_HOUR as MINUTES_PER_HOUR_NUM,
   OVERTIME_MULTIPLIER,
@@ -35,8 +34,6 @@ import {
   PAYROLL_ROUNDING_UNIT,
 } from '../common/constants/payroll.constants';
 
-const STANDARD_WORK_DAYS = new Prisma.Decimal(WORK_DAYS_PER_MONTH);
-const STANDARD_HOURS_PER_DAY = new Prisma.Decimal(WORK_HOURS_PER_DAY);
 const MINUTES_PER_HOUR = new Prisma.Decimal(MINUTES_PER_HOUR_NUM);
 const MULTIPLIER_OVERTIME = new Prisma.Decimal(OVERTIME_MULTIPLIER);
 const MULTIPLIER_SICK_LEAVE = new Prisma.Decimal(SICK_LEAVE_DEDUCTION_RATIO);
@@ -467,6 +464,7 @@ export class PayrollService {
       hoursPerDayEmp,
       employee,
       salaryRecord,
+      transportAllowance: salaryRecord?.transportAllowance,
       inRecords,
       outRecords,
       sickHourlyLeaves,
@@ -498,7 +496,9 @@ export class PayrollService {
     salaryRecord?: {
       baseSalary?: Prisma.Decimal | number | null;
       livingAllowance?: Prisma.Decimal | number | null;
+      transportAllowance?: Prisma.Decimal | number | null;
     } | null;
+    transportAllowance?: Prisma.Decimal | number | null;
     inRecords: Array<{ date: string; timestamp: Date }>;
     outRecords: Array<{ date: string; timestamp: Date }>;
     sickHourlyLeaves: Array<{ startTime?: string | null; isHourly?: boolean | null }>;
@@ -526,6 +526,7 @@ export class PayrollService {
       periodLeaves,
       totalDelayMinutes,
       totalEarlyLeaveMinutes,
+      transportAllowance,
     } = params;
 
     // إعداد أوقات الدوام لحساب باقي يوم الإجازة المرضية (نصف أجر)
@@ -556,14 +557,16 @@ export class PayrollService {
       }
     }
 
-    // ── g3 formula: baseSalary + livingAllowance ──
+    // ── g3 formula: baseSalary + livingAllowance + transportAllowance ──
+    // المواصلات تدخل ضمن أساس الحساب (مثل الواجهة calcGross) فتُوزَّن على
+    // دقائق العمل الفعلية بدلاً من أن تُضاف مبلغاً ثابتاً على الراتب.
     const fallbackBaseSalary = Number(employee.hourlyRate || 0) * hoursPerDayEmp * workDays;
     const baseSalary = this.toDecimal(
       salaryRecord?.baseSalary ?? employee.baseSalary ?? fallbackBaseSalary,
     );
     const livingAllowance = this.toDecimal(salaryRecord?.livingAllowance ?? 0);
 
-    const g3 = baseSalary.plus(livingAllowance);
+    const g3 = baseSalary.plus(livingAllowance).plus(this.toDecimal(transportAllowance ?? 0));
     const employeeWorkDays = new Prisma.Decimal(workDays);
     const dailyWage = g3.div(employeeWorkDays);
     const hourlyWage = dailyWage.div(new Prisma.Decimal(hoursPerDayEmp));
@@ -2310,14 +2313,6 @@ export class PayrollService {
           .times(MULTIPLIER_OVERTIME)
           .times(this.toDecimal(overtimeRegularMinutes));
 
-        const leaveTotal =
-          absenceDays + sickLeaveDays + adminLeaveDays + unpaidLeaveDays + deathLeaveDays;
-        const transportAllowance = includeTransportationDeductions
-          ? transportAllowanceBase
-              .div(STANDARD_WORK_DAYS)
-              .times(this.toDecimal(Math.max(0, WORK_DAYS_PER_MONTH - leaveTotal)))
-          : transportAllowanceBase;
-
         // Get attendance-based salary using pre-fetched data (no DB round-trip).
         // Aggregation of DailyAttendanceLog (DELAY/EARLY_LEAVE/OVERTIME) already
         // ran once above for all employee-dates, and lateMinutes/earlyLeave are
@@ -2340,6 +2335,7 @@ export class PayrollService {
             scheduledEnd: employee.scheduledEnd,
           },
           salaryRecord,
+          transportAllowance: transportAllowanceBase,
           inRecords: inPunchesByEmployee.get(employee.employeeId) || [],
           outRecords: outPunchesByEmployee.get(employee.employeeId) || [],
           sickHourlyLeaves: empSickHourlyLeaves,
@@ -2348,8 +2344,8 @@ export class PayrollService {
           totalEarlyLeaveMinutes: earlyLeaveMinutesByEmployee.get(employee.employeeId) || 0,
         });
 
-        // Final Gross Pay
-        const grossPay = attendanceCalculatedSalary.plus(bonusAdjustment).plus(transportAllowance);
+        // Final Gross Pay — المواصلات مدمجة داخل attendanceCalculatedSalary (ضمن g3)
+        const grossPay = attendanceCalculatedSalary.plus(bonusAdjustment);
 
         // Deductions
         const busDeductionAmount = this.toDecimal(
@@ -2397,8 +2393,8 @@ export class PayrollService {
         if (insuranceAmount.greaterThan(0)) {
           anomalies.push(`Insurance deducted: ${insuranceAmount.toFixed(2)}`);
         }
-        if (transportAllowance.greaterThan(0)) {
-          anomalies.push(`Transport allowance added: ${transportAllowance.toFixed(2)}`);
+        if (transportAllowanceBase.greaterThan(0)) {
+          anomalies.push(`Transport allowance included in earned salary: ${transportAllowanceBase.toFixed(2)}`);
         }
         if (busDeductionAmount.greaterThan(0)) {
           anomalies.push(`Bus subscription deducted: ${busDeductionAmount.toFixed(2)}`);
