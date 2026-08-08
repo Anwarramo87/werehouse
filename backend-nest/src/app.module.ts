@@ -14,6 +14,9 @@ import { HealthModule } from './health/health.module';
 import { AttendanceModule } from './attendance/attendance.module';
 import { PayrollModule } from './payroll/payroll.module';
 import { InventoryModule } from './inventory/inventory.module';
+import { PurchasingModule } from './purchasing/purchasing.module';
+import { SalesModule } from './sales/sales.module';
+import { AccountingModule } from './accounting/accounting.module';
 import { ImportsModule } from './imports/imports.module';
 import { PrismaModule } from './prisma/prisma.module';
 import { RequestLoggingMiddleware } from './common/middleware/request-logging.middleware';
@@ -208,6 +211,9 @@ const queueInfraModules = queuesEnabled
     BiometricModule,
     PayrollModule,
     InventoryModule,
+    PurchasingModule,
+    SalesModule,
+    AccountingModule,
     ImportsModule,
     SalaryModule,
     AdvancesModule,

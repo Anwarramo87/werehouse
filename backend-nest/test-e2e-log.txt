@@ -1,0 +1,238 @@
+﻿node.exe : FAIL test/purchasing-sales-accounting.e2e-spec.ts (8.33 s)
+At C:\Program Files\nodejs\npx.ps1:29 char:3
++   & $NODE_EXE $NPX_CLI_JS $args
++   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (FAIL test/purch...pec.ts (8.33 s):String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+  Purchasing + Sales + Accounting flow (e2e)
+    ├ù purchasing: create supplier, purchase order and receive goods, updating stock (181 ms)
+    ├ù sales: create order, confirm reserves stock, deliver deducts it, payments guard (7 ms)
+    ├ù accounting: posting requires balanced entries and generates working reports (7 ms)
+    ├ù guards: unknown ids produce NotFound and wrong stock reservations are rejected (6 ms)
+
+  ΓùÅ Purchasing + Sales + Accounting flow (e2e) ΓÇ║ purchasing: create supplier, purchase order and receive goods, 
+updating stock
+
+    PrismaClientKnownRequestError: 
+    Invalid `prisma.product.create()` invocation in
+    
+C:\Users\BootCamp\Downloads\anwarfinly\back\werehouse\backend-nest\test\purchasing-sales-accounting.e2e-spec.ts:46:26
+
+      43 
+      44 beforeEach(async () => {
+      45   // seed a product for the whole flow
+    ΓåÆ 46   await prisma.product.create(
+
+    [0m [90m 44 |[39m   beforeEach([36masync[39m () [33m=>[39m {
+     [90m 45 |[39m     [90m// seed a product for the whole flow[39m
+    [31m[1m>[22m[39m[90m 46 |[39m     [36mawait[39m prisma[33m.[39mproduct[33m.[39mcreate({
+     [90m    |[39m     [31m[1m^[22m[39m
+     [90m 47 |[39m       data[33m:[39m {
+     [90m 48 |[39m         sku[33m:[39m testSku[33m,[39m
+     [90m 49 |[39m         name[33m:[39m [32m'E2E Test Product'[39m[33m,[39m[0m
+
+      at Gr.handleRequestError (node_modules/@prisma/client/src/runtime/RequestHandler.ts:237:13)
+      at Gr.handleAndLogRequestError (node_modules/@prisma/client/src/runtime/RequestHandler.ts:183:12)
+      at Gr.request (node_modules/@prisma/client/src/runtime/RequestHandler.ts:152:12)
+      at a (node_modules/@prisma/client/src/runtime/getPrismaClient.ts:938:24)
+      at Object.<anonymous> (test/purchasing-sales-accounting.e2e-spec.ts:46:5)
+
+  ΓùÅ Purchasing + Sales + Accounting flow (e2e) ΓÇ║ purchasing: create supplier, purchase order and receive goods, 
+updating stock
+
+    PrismaClientKnownRequestError: 
+    Invalid `prisma.journalEntryLine.deleteMany()` invocation in
+    
+C:\Users\BootCamp\Downloads\anwarfinly\back\werehouse\backend-nest\test\purchasing-sales-accounting.e2e-spec.ts:58:35
+
+      55 });
+      56 
+      57 afterEach(async () => {
+    ΓåÆ 58   await prisma.journalEntryLine.deleteMany(
+
+    [0m [90m 56 |[39m
+     [90m 57 |[39m   afterEach([36masync[39m () [33m=>[39m {
+    [31m[1m>[22m[39m[90m 58 |[39m     [36mawait[39m 
+prisma[33m.[39mjournalEntryLine[33m.[39mdeleteMany()[33m;[39m
+     [90m    |[39m     [31m[1m^[22m[39m
+     [90m 59 |[39m     [36mawait[39m prisma[33m.[39mjournalEntry[33m.[39mdeleteMany()[33m;[39m
+     [90m 60 |[39m     [36mawait[39m prisma[33m.[39maccount[33m.[39mdeleteMany()[33m;[39m
+     [90m 61 |[39m     [36mawait[39m prisma[33m.[39msalesPayment[33m.[39mdeleteMany()[33m;[39m[0m
+
+      at Gr.handleRequestError (node_modules/@prisma/client/src/runtime/RequestHandler.ts:237:13)
+      at Gr.handleAndLogRequestError (node_modules/@prisma/client/src/runtime/RequestHandler.ts:183:12)
+      at Gr.request (node_modules/@prisma/client/src/runtime/RequestHandler.ts:152:12)
+      at a (node_modules/@prisma/client/src/runtime/getPrismaClient.ts:938:24)
+      at Object.<anonymous> (test/purchasing-sales-accounting.e2e-spec.ts:58:5)
+
+  ΓùÅ Purchasing + Sales + Accounting flow (e2e) ΓÇ║ sales: create order, confirm reserves stock, deliver deducts it, 
+payments guard
+
+    PrismaClientKnownRequestError: 
+    Invalid `prisma.product.create()` invocation in
+    
+C:\Users\BootCamp\Downloads\anwarfinly\back\werehouse\backend-nest\test\purchasing-sales-accounting.e2e-spec.ts:46:26
+
+      43 
+      44 beforeEach(async () => {
+      45   // seed a product for the whole flow
+    ΓåÆ 46   await prisma.product.create(
+
+    [0m [90m 44 |[39m   beforeEach([36masync[39m () [33m=>[39m {
+     [90m 45 |[39m     [90m// seed a product for the whole flow[39m
+    [31m[1m>[22m[39m[90m 46 |[39m     [36mawait[39m prisma[33m.[39mproduct[33m.[39mcreate({
+     [90m    |[39m     [31m[1m^[22m[39m
+     [90m 47 |[39m       data[33m:[39m {
+     [90m 48 |[39m         sku[33m:[39m testSku[33m,[39m
+     [90m 49 |[39m         name[33m:[39m [32m'E2E Test Product'[39m[33m,[39m[0m
+
+      at Gr.handleRequestError (node_modules/@prisma/client/src/runtime/RequestHandler.ts:237:13)
+      at Gr.handleAndLogRequestError (node_modules/@prisma/client/src/runtime/RequestHandler.ts:183:12)
+      at Gr.request (node_modules/@prisma/client/src/runtime/RequestHandler.ts:152:12)
+      at a (node_modules/@prisma/client/src/runtime/getPrismaClient.ts:938:24)
+      at Object.<anonymous> (test/purchasing-sales-accounting.e2e-spec.ts:46:5)
+
+  ΓùÅ Purchasing + Sales + Accounting flow (e2e) ΓÇ║ sales: create order, confirm reserves stock, deliver deducts it, 
+payments guard
+
+    PrismaClientKnownRequestError: 
+    Invalid `prisma.journalEntryLine.deleteMany()` invocation in
+    
+C:\Users\BootCamp\Downloads\anwarfinly\back\werehouse\backend-nest\test\purchasing-sales-accounting.e2e-spec.ts:58:35
+
+      55 });
+      56 
+      57 afterEach(async () => {
+    ΓåÆ 58   await prisma.journalEntryLine.deleteMany(
+
+    [0m [90m 56 |[39m
+     [90m 57 |[39m   afterEach([36masync[39m () [33m=>[39m {
+    [31m[1m>[22m[39m[90m 58 |[39m     [36mawait[39m 
+prisma[33m.[39mjournalEntryLine[33m.[39mdeleteMany()[33m;[39m
+     [90m    |[39m     [31m[1m^[22m[39m
+     [90m 59 |[39m     [36mawait[39m prisma[33m.[39mjournalEntry[33m.[39mdeleteMany()[33m;[39m
+     [90m 60 |[39m     [36mawait[39m prisma[33m.[39maccount[33m.[39mdeleteMany()[33m;[39m
+     [90m 61 |[39m     [36mawait[39m prisma[33m.[39msalesPayment[33m.[39mdeleteMany()[33m;[39m[0m
+
+      at Gr.handleRequestError (node_modules/@prisma/client/src/runtime/RequestHandler.ts:237:13)
+      at Gr.handleAndLogRequestError (node_modules/@prisma/client/src/runtime/RequestHandler.ts:183:12)
+      at Gr.request (node_modules/@prisma/client/src/runtime/RequestHandler.ts:152:12)
+      at a (node_modules/@prisma/client/src/runtime/getPrismaClient.ts:938:24)
+      at Object.<anonymous> (test/purchasing-sales-accounting.e2e-spec.ts:58:5)
+
+  ΓùÅ Purchasing + Sales + Accounting flow (e2e) ΓÇ║ accounting: posting requires balanced entries and generates 
+working reports
+
+    PrismaClientKnownRequestError: 
+    Invalid `prisma.product.create()` invocation in
+    
+C:\Users\BootCamp\Downloads\anwarfinly\back\werehouse\backend-nest\test\purchasing-sales-accounting.e2e-spec.ts:46:26
+
+      43 
+      44 beforeEach(async () => {
+      45   // seed a product for the whole flow
+    ΓåÆ 46   await prisma.product.create(
+
+    [0m [90m 44 |[39m   beforeEach([36masync[39m () [33m=>[39m {
+     [90m 45 |[39m     [90m// seed a product for the whole flow[39m
+    [31m[1m>[22m[39m[90m 46 |[39m     [36mawait[39m prisma[33m.[39mproduct[33m.[39mcreate({
+     [90m    |[39m     [31m[1m^[22m[39m
+     [90m 47 |[39m       data[33m:[39m {
+     [90m 48 |[39m         sku[33m:[39m testSku[33m,[39m
+     [90m 49 |[39m         name[33m:[39m [32m'E2E Test Product'[39m[33m,[39m[0m
+
+      at Gr.handleRequestError (node_modules/@prisma/client/src/runtime/RequestHandler.ts:237:13)
+      at Gr.handleAndLogRequestError (node_modules/@prisma/client/src/runtime/RequestHandler.ts:183:12)
+      at Gr.request (node_modules/@prisma/client/src/runtime/RequestHandler.ts:152:12)
+      at a (node_modules/@prisma/client/src/runtime/getPrismaClient.ts:938:24)
+      at Object.<anonymous> (test/purchasing-sales-accounting.e2e-spec.ts:46:5)
+
+  ΓùÅ Purchasing + Sales + Accounting flow (e2e) ΓÇ║ accounting: posting requires balanced entries and generates 
+working reports
+
+    PrismaClientKnownRequestError: 
+    Invalid `prisma.journalEntryLine.deleteMany()` invocation in
+    
+C:\Users\BootCamp\Downloads\anwarfinly\back\werehouse\backend-nest\test\purchasing-sales-accounting.e2e-spec.ts:58:35
+
+      55 });
+      56 
+      57 afterEach(async () => {
+    ΓåÆ 58   await prisma.journalEntryLine.deleteMany(
+
+    [0m [90m 56 |[39m
+     [90m 57 |[39m   afterEach([36masync[39m () [33m=>[39m {
+    [31m[1m>[22m[39m[90m 58 |[39m     [36mawait[39m 
+prisma[33m.[39mjournalEntryLine[33m.[39mdeleteMany()[33m;[39m
+     [90m    |[39m     [31m[1m^[22m[39m
+     [90m 59 |[39m     [36mawait[39m prisma[33m.[39mjournalEntry[33m.[39mdeleteMany()[33m;[39m
+     [90m 60 |[39m     [36mawait[39m prisma[33m.[39maccount[33m.[39mdeleteMany()[33m;[39m
+     [90m 61 |[39m     [36mawait[39m prisma[33m.[39msalesPayment[33m.[39mdeleteMany()[33m;[39m[0m
+
+      at Gr.handleRequestError (node_modules/@prisma/client/src/runtime/RequestHandler.ts:237:13)
+      at Gr.handleAndLogRequestError (node_modules/@prisma/client/src/runtime/RequestHandler.ts:183:12)
+      at Gr.request (node_modules/@prisma/client/src/runtime/RequestHandler.ts:152:12)
+      at a (node_modules/@prisma/client/src/runtime/getPrismaClient.ts:938:24)
+      at Object.<anonymous> (test/purchasing-sales-accounting.e2e-spec.ts:58:5)
+
+  ΓùÅ Purchasing + Sales + Accounting flow (e2e) ΓÇ║ guards: unknown ids produce NotFound and wrong stock reservations 
+are rejected
+
+    PrismaClientKnownRequestError: 
+    Invalid `prisma.product.create()` invocation in
+    
+C:\Users\BootCamp\Downloads\anwarfinly\back\werehouse\backend-nest\test\purchasing-sales-accounting.e2e-spec.ts:46:26
+
+      43 
+      44 beforeEach(async () => {
+      45   // seed a product for the whole flow
+    ΓåÆ 46   await prisma.product.create(
+
+    [0m [90m 44 |[39m   beforeEach([36masync[39m () [33m=>[39m {
+     [90m 45 |[39m     [90m// seed a product for the whole flow[39m
+    [31m[1m>[22m[39m[90m 46 |[39m     [36mawait[39m prisma[33m.[39mproduct[33m.[39mcreate({
+     [90m    |[39m     [31m[1m^[22m[39m
+     [90m 47 |[39m       data[33m:[39m {
+     [90m 48 |[39m         sku[33m:[39m testSku[33m,[39m
+     [90m 49 |[39m         name[33m:[39m [32m'E2E Test Product'[39m[33m,[39m[0m
+
+      at Gr.handleRequestError (node_modules/@prisma/client/src/runtime/RequestHandler.ts:237:13)
+      at Gr.handleAndLogRequestError (node_modules/@prisma/client/src/runtime/RequestHandler.ts:183:12)
+      at Gr.request (node_modules/@prisma/client/src/runtime/RequestHandler.ts:152:12)
+      at a (node_modules/@prisma/client/src/runtime/getPrismaClient.ts:938:24)
+      at Object.<anonymous> (test/purchasing-sales-accounting.e2e-spec.ts:46:5)
+
+  ΓùÅ Purchasing + Sales + Accounting flow (e2e) ΓÇ║ guards: unknown ids produce NotFound and wrong stock reservations 
+are rejected
+
+    PrismaClientKnownRequestError: 
+    Invalid `prisma.journalEntryLine.deleteMany()` invocation in
+    
+C:\Users\BootCamp\Downloads\anwarfinly\back\werehouse\backend-nest\test\purchasing-sales-accounting.e2e-spec.ts:58:35
+
+      55 });
+      56 
+      57 afterEach(async () => {
+    ΓåÆ 58   await prisma.journalEntryLine.deleteMany(
+
+    [0m [90m 56 |[39m
+     [90m 57 |[39m   afterEach([36masync[39m () [33m=>[39m {
+    [31m[1m>[22m[39m[90m 58 |[39m     [36mawait[39m 
+prisma[33m.[39mjournalEntryLine[33m.[39mdeleteMany()[33m;[39m
+     [90m    |[39m     [31m[1m^[22m[39m
+     [90m 59 |[39m     [36mawait[39m prisma[33m.[39mjournalEntry[33m.[39mdeleteMany()[33m;[39m
+     [90m 60 |[39m     [36mawait[39m prisma[33m.[39maccount[33m.[39mdeleteMany()[33m;[39m
+     [90m 61 |[39m     [36mawait[39m prisma[33m.[39msalesPayment[33m.[39mdeleteMany()[33m;[39m[0m
+
+      at Gr.handleRequestError (node_modules/@prisma/client/src/runtime/RequestHandler.ts:237:13)
+      at Gr.handleAndLogRequestError (node_modules/@prisma/client/src/runtime/RequestHandler.ts:183:12)
+      at Gr.request (node_modules/@prisma/client/src/runtime/RequestHandler.ts:152:12)
+      at a (node_modules/@prisma/client/src/runtime/getPrismaClient.ts:938:24)
+      at Object.<anonymous> (test/purchasing-sales-accounting.e2e-spec.ts:58:5)
+
+Test Suites: 1 failed, 1 total
+Tests:       4 failed, 4 total
+Snapshots:   0 total
+Time:        8.58 s, estimated 15 s
+Ran all test suites matching test/purchasing-sales-accounting.e2e-spec.ts.

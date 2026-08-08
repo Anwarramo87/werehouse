@@ -41,6 +41,10 @@ export class InventoryService {
     ]);
   }
 
+  async invalidateCaches() {
+    await this.invalidateInventoryCaches();
+  }
+
   async listProducts(query: InventoryProductsQueryDto) {
     const { page, limit, skip } = resolvePagination(query);
 

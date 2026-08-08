@@ -67,6 +67,12 @@ export class AuthService {
     'manage_penalties',
     'manage_trash',
     'manage_backups',
+    'view_purchasing',
+    'edit_purchasing',
+    'view_sales',
+    'edit_sales',
+    'view_accounting',
+    'edit_accounting',
   ];
 
   constructor(
