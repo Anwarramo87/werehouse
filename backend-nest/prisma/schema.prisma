@@ -281,7 +281,10 @@ model Product {
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
-  stockLevels StockLevel[]
+  stockLevels       StockLevel[]
+  purchaseOrderItems PurchaseOrderItem[]
+  goodsReceiptItems  GoodsReceiptItem[]
+  salesOrderItems    SalesOrderItem[]
 
   @@index([createdAt])
   @@index([status, createdAt])
@@ -303,6 +306,224 @@ model StockLevel {
 
   @@unique([sku, location])
   @@map("stock_levels")
+}
+
+model Supplier {
+  id        String   @id @default(uuid()) @db.Uuid
+  name      String
+  phone     String?
+  email     String?
+  address   String?
+  taxNumber String?
+  status    String   @default("active") // active | inactive
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  purchaseOrders PurchaseOrder[]
+
+  @@index([name])
+  @@map("suppliers")
+}
+
+model PurchaseOrder {
+  id           String              @id @default(uuid()) @db.Uuid
+  poNumber     String              @unique
+  supplierId   String              @db.Uuid
+  status       String              @default("draft") // draft | sent | received | cancelled
+  orderDate    DateTime            @db.Date
+  expectedDate DateTime?           @db.Date
+  totalAmount  Decimal             @db.Decimal(12, 2)
+  createdBy    String              @db.Uuid
+  createdAt    DateTime            @default(now())
+  updatedAt    DateTime            @updatedAt
+
+  supplier      Supplier            @relation(fields: [supplierId], references: [id], onDelete: Restrict)
+  items         PurchaseOrderItem[]
+  goodsReceipts GoodsReceipt[]
+
+  @@index([supplierId])
+  @@index([status])
+  @@index([createdAt])
+  @@map("purchase_orders")
+}
+
+model PurchaseOrderItem {
+  id               String            @id @default(uuid()) @db.Uuid
+  purchaseOrderId  String            @db.Uuid
+  sku              String
+  quantity         Int
+  unitCost         Decimal           @db.Decimal(12, 2)
+  receivedQuantity Int               @default(0)
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+
+  purchaseOrder    PurchaseOrder     @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+  product          Product           @relation(fields: [sku], references: [sku], onDelete: Restrict)
+  goodsReceiptItems GoodsReceiptItem[]
+
+  @@index([purchaseOrderId])
+  @@index([sku])
+  @@map("purchase_order_items")
+}
+
+model GoodsReceipt {
+  id              String              @id @default(uuid()) @db.Uuid
+  receiptNumber   String              @unique
+  purchaseOrderId String              @db.Uuid
+  receivedBy      String              @db.Uuid
+  notes           String?
+  createdAt       DateTime            @default(now())
+  updatedAt       DateTime            @updatedAt
+
+  purchaseOrder   PurchaseOrder       @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+  items           GoodsReceiptItem[]
+
+  @@index([purchaseOrderId])
+  @@map("goods_receipts")
+}
+
+model GoodsReceiptItem {
+  id                  String            @id @default(uuid()) @db.Uuid
+  goodsReceiptId      String            @db.Uuid
+  purchaseOrderItemId String            @db.Uuid
+  sku                 String
+  quantity            Int
+  location            String
+  unitCost            Decimal           @db.Decimal(12, 2)
+  createdAt           DateTime          @default(now())
+
+  goodsReceipt        GoodsReceipt      @relation(fields: [goodsReceiptId], references: [id], onDelete: Cascade)
+  purchaseOrderItem   PurchaseOrderItem @relation(fields: [purchaseOrderItemId], references: [id], onDelete: Restrict)
+  product             Product           @relation(fields: [sku], references: [sku], onDelete: Restrict)
+
+  @@index([goodsReceiptId])
+  @@index([purchaseOrderItemId])
+  @@index([sku])
+  @@map("goods_receipt_items")
+}
+
+model Customer {
+  id        String   @id @default(uuid()) @db.Uuid
+  name      String
+  phone     String?
+  email     String?
+  address   String?
+  taxNumber String?
+  status    String   @default("active") // active | inactive
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  salesOrders SalesOrder[]
+
+  @@index([name])
+  @@map("customers")
+}
+
+model SalesOrder {
+  id           String              @id @default(uuid()) @db.Uuid
+  soNumber     String              @unique
+  customerId   String              @db.Uuid
+  status       String              @default("draft") // draft | confirmed | delivered | cancelled
+  orderDate    DateTime            @db.Date
+  expectedDate DateTime?           @db.Date
+  totalAmount  Decimal             @db.Decimal(12, 2)
+  paidAmount   Decimal             @default(0) @db.Decimal(12, 2)
+  createdBy    String              @db.Uuid
+  createdAt    DateTime            @default(now())
+  updatedAt    DateTime            @updatedAt
+
+  customer    Customer            @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  items       SalesOrderItem[]
+  payments    SalesPayment[]
+
+  @@index([customerId])
+  @@index([status])
+  @@index([createdAt])
+  @@map("sales_orders")
+}
+
+model SalesOrderItem {
+  id            String     @id @default(uuid()) @db.Uuid
+  salesOrderId  String     @db.Uuid
+  sku           String
+  quantity      Int
+  unitPrice     Decimal    @db.Decimal(12, 2)
+  location      String     @default("WH-A")
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
+
+  salesOrder    SalesOrder @relation(fields: [salesOrderId], references: [id], onDelete: Cascade)
+  product       Product    @relation(fields: [sku], references: [sku], onDelete: Restrict)
+
+  @@index([salesOrderId])
+  @@index([sku])
+  @@map("sales_order_items")
+}
+
+model SalesPayment {
+  id            String     @id @default(uuid()) @db.Uuid
+  salesOrderId  String     @db.Uuid
+  amount        Decimal    @db.Decimal(12, 2)
+  method        String     @default("cash") // cash | card | transfer
+  paidBy        String     @db.Uuid
+  notes         String?
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
+
+  salesOrder    SalesOrder @relation(fields: [salesOrderId], references: [id], onDelete: Cascade)
+
+  @@index([salesOrderId])
+  @@map("sales_payments")
+}
+
+model Account {
+  id          String          @id @default(uuid()) @db.Uuid
+  code        String          @unique
+  name        String
+  type        String          // asset | liability | equity | revenue | expense
+  isActive    Boolean         @default(true)
+  parentId    String?         @db.Uuid
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+
+  parent      Account?        @relation("AccountTree", fields: [parentId], references: [id], onDelete: Restrict)
+  children    Account[]       @relation("AccountTree")
+  journalLines JournalEntryLine[]
+
+  @@index([type])
+  @@index([parentId])
+  @@map("accounts")
+}
+
+model JournalEntry {
+  id          String              @id @default(uuid()) @db.Uuid
+  entryNumber String              @unique
+  entryDate   DateTime            @db.Date
+  description String
+  createdBy   String              @db.Uuid
+  createdAt   DateTime            @default(now())
+  updatedAt   DateTime            @updatedAt
+
+  lines       JournalEntryLine[]
+
+  @@index([entryDate])
+  @@map("journal_entries")
+}
+
+model JournalEntryLine {
+  id              String        @id @default(uuid()) @db.Uuid
+  journalEntryId  String        @db.Uuid
+  accountId       String        @db.Uuid
+  debit           Decimal       @default(0) @db.Decimal(12, 2)
+  credit          Decimal       @default(0) @db.Decimal(12, 2)
+  createdAt       DateTime      @default(now())
+
+  journalEntry    JournalEntry  @relation(fields: [journalEntryId], references: [id], onDelete: Cascade)
+  account         Account       @relation(fields: [accountId], references: [id], onDelete: Restrict)
+
+  @@index([journalEntryId])
+  @@index([accountId])
+  @@map("journal_entry_lines")
 }
 
 model ImportJob {
