@@ -1,4 +1,4 @@
-import { IsNotEmpty, IsNumber, IsString } from 'class-validator';
+import { IsNotEmpty, IsNumber, IsOptional, IsString, MaxLength } from 'class-validator';
 
 export class ReserveStockDto {
   @IsString()
@@ -7,11 +7,18 @@ export class ReserveStockDto {
 
   @IsString()
   @IsNotEmpty()
+  @MaxLength(120)
   location: string;
 
   @IsNumber()
   quantity: number;
 
   @IsString()
+  @MaxLength(500)
   reason: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(64)
+  referenceId?: string;
 }
