@@ -299,6 +299,7 @@ export class AuthService {
         passwordHash: hash,
         roleId: dto.roleId,
         status: dto.status || 'active',
+        photo: dto.photo,
       },
       include: { role: true },
     });
@@ -485,7 +486,12 @@ export class AuthService {
   }
 
   private toPublicAuthUser(user: any) {
-    return { id: user.id, username: user.username, role: user.role?.name || 'staff' };
+    return {
+      id: user.id,
+      username: user.username,
+      role: user.role?.name || 'staff',
+      photo: user.photo || null,
+    };
   }
 
   private hashChallenge(value: string) {

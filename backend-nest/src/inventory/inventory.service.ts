@@ -76,7 +76,22 @@ export class InventoryService {
     await Promise.all([
       this.shortCache.invalidatePrefix('inventory:stats'),
       this.shortCache.invalidatePrefix('inventory:alerts:low-stock'),
+      this.shortCache.invalidatePrefix('inventory:products'),
+      this.shortCache.invalidatePrefix('inventory:product:'),
+      this.shortCache.invalidatePrefix('inventory:categories'),
+      this.shortCache.invalidatePrefix('inventory:movements'),
+      this.shortCache.invalidatePrefix('inventory:warehouses'),
     ]);
+  }
+
+  private productsCacheKey(query: InventoryProductsQueryDto) {
+    const { page = 1, limit = 50, search = '', category = '', status = '' } = query;
+    return `inventory:products:${page}:${limit}:${search}:${category}:${status}`;
+  }
+
+  private movementsCacheKey(query: StockMovementQueryDto) {
+    const { page = 1, limit = 25, sku = '', type = '', location = '' } = query;
+    return `inventory:movements:${page}:${limit}:${sku}:${type}:${location}`;
   }
 
   /** Kept for backward compatibility (sales / purchasing call this). */
@@ -104,51 +119,55 @@ export class InventoryService {
   // ------------------------------------------------------------------ products
 
   async listProducts(query: InventoryProductsQueryDto) {
-    const { page, limit, skip } = resolvePagination(query, { defaultLimit: 50, maxLimit: 200 });
+    return this.shortCache.getOrSetJson(this.productsCacheKey(query), 15, async () => {
+      const { page, limit, skip } = resolvePagination(query, { defaultLimit: 50, maxLimit: 200 });
 
-    const where: Prisma.ProductWhereInput = {};
-    if (query.category) where.category = query.category;
-    if (query.status) where.status = query.status;
-    if (query.search) {
-      where.OR = [
-        { sku: { contains: query.search, mode: 'insensitive' } },
-        { name: { contains: query.search, mode: 'insensitive' } },
-      ];
-    }
+      const where: Prisma.ProductWhereInput = {};
+      if (query.category) where.category = query.category;
+      if (query.status) where.status = query.status;
+      if (query.search) {
+        where.OR = [
+          { sku: { contains: query.search, mode: 'insensitive' } },
+          { name: { contains: query.search, mode: 'insensitive' } },
+        ];
+      }
 
-    const [products, total, stockMap] = await Promise.all([
-      this.prisma.product.findMany({
-        where,
-        orderBy: { createdAt: 'desc' },
-        skip,
-        take: limit,
-      }),
-      this.prisma.product.count({ where }),
-      this.stockSummaryBySku(),
-    ]);
+      const [products, total, stockMap] = await Promise.all([
+        this.prisma.product.findMany({
+          where,
+          orderBy: { createdAt: 'desc' },
+          skip,
+          take: limit,
+        }),
+        this.prisma.product.count({ where }),
+        this.stockSummaryBySku(),
+      ]);
 
-    const enriched = products.map((product) => {
-      const stock = stockMap.get(product.sku) ?? { quantity: 0, reserved: 0, available: 0 };
-      return { ...product, totalQuantity: stock.quantity, totalReserved: stock.reserved, totalAvailable: stock.available };
+      const enriched = products.map((product) => {
+        const stock = stockMap.get(product.sku) ?? { quantity: 0, reserved: 0, available: 0 };
+        return { ...product, totalQuantity: stock.quantity, totalReserved: stock.reserved, totalAvailable: stock.available };
+      });
+
+      return paginatedResponse(enriched, page, limit, total);
     });
-
-    return paginatedResponse(enriched, page, limit, total);
   }
 
   async getProduct(productId: string) {
-    const product = await this.prisma.product.findUnique({ where: { id: productId } });
-    if (!product) throw new NotFoundException('Product not found');
+    return this.shortCache.getOrSetJson(`inventory:product:${productId}`, 15, async () => {
+      const product = await this.prisma.product.findUnique({ where: { id: productId } });
+      if (!product) throw new NotFoundException('Product not found');
 
-    const [stockLevels, recentMovements] = await Promise.all([
-      this.prisma.stockLevel.findMany({ where: { sku: product.sku }, orderBy: { updatedAt: 'desc' } }),
-      this.prisma.stockMovement.findMany({
-        where: { sku: product.sku },
-        orderBy: { createdAt: 'desc' },
-        take: 10,
-      }),
-    ]);
+      const [stockLevels, recentMovements] = await Promise.all([
+        this.prisma.stockLevel.findMany({ where: { sku: product.sku }, orderBy: { updatedAt: 'desc' } }),
+        this.prisma.stockMovement.findMany({
+          where: { sku: product.sku },
+          orderBy: { createdAt: 'desc' },
+          take: 10,
+        }),
+      ]);
 
-    return { product, stockLevels, recentMovements };
+      return { product, stockLevels, recentMovements };
+    });
   }
 
   async createProduct(dto: CreateProductDto, actor?: Actor, req?: Request) {
@@ -164,6 +183,7 @@ export class InventoryService {
         costPrice: new Prisma.Decimal(dto.costPrice),
         reorderLevel: dto.reorderLevel ?? 10,
         unit: dto.unit,
+        photo: dto.photo,
         status: 'active',
       },
     });
@@ -213,12 +233,14 @@ export class InventoryService {
   }
 
   async listCategories() {
-    const rows = await this.prisma.product.findMany({
-      distinct: ['category'],
-      select: { category: true },
-      orderBy: { category: 'asc' },
+    return this.shortCache.getOrSetJson('inventory:categories', 60, async () => {
+      const rows = await this.prisma.product.findMany({
+        distinct: ['category'],
+        select: { category: true },
+        orderBy: { category: 'asc' },
+      });
+      return rows.map((row) => row.category);
     });
-    return rows.map((row) => row.category);
   }
 
   // ------------------------------------------------------------------- stock
@@ -416,25 +438,27 @@ export class InventoryService {
   // ---------------------------------------------------------------- movements
 
   async listMovements(query: StockMovementQueryDto) {
-    const { page, limit, skip } = resolvePagination(query, { defaultLimit: 25, maxLimit: 100 });
+    return this.shortCache.getOrSetJson(this.movementsCacheKey(query), 10, async () => {
+      const { page, limit, skip } = resolvePagination(query, { defaultLimit: 25, maxLimit: 100 });
 
-    const where: Prisma.StockMovementWhereInput = {};
-    if (query.sku) where.sku = query.sku;
-    if (query.type) where.type = query.type as StockMovementType;
-    if (query.location) where.location = query.location;
+      const where: Prisma.StockMovementWhereInput = {};
+      if (query.sku) where.sku = query.sku;
+      if (query.type) where.type = query.type as StockMovementType;
+      if (query.location) where.location = query.location;
 
-    const [movements, total] = await Promise.all([
-      this.prisma.stockMovement.findMany({
-        where,
-        orderBy: { createdAt: 'desc' },
-        skip,
-        take: limit,
-        include: { product: { select: { name: true } } },
-      }),
-      this.prisma.stockMovement.count({ where }),
-    ]);
+      const [movements, total] = await Promise.all([
+        this.prisma.stockMovement.findMany({
+          where,
+          orderBy: { createdAt: 'desc' },
+          skip,
+          take: limit,
+          include: { product: { select: { name: true } } },
+        }),
+        this.prisma.stockMovement.count({ where }),
+      ]);
 
-    return paginatedResponse(movements, page, limit, total);
+      return paginatedResponse(movements, page, limit, total);
+    });
   }
 
   // ------------------------------------------------------------- low stock / stats
@@ -508,8 +532,10 @@ export class InventoryService {
   // --------------------------------------------------------------- warehouses
 
   async listWarehouses() {
-    const warehouses = await this.prisma.warehouse.findMany({ orderBy: { name: 'asc' } });
-    return warehouses;
+    return this.shortCache.getOrSetJson('inventory:warehouses', 60, async () => {
+      const warehouses = await this.prisma.warehouse.findMany({ orderBy: { name: 'asc' } });
+      return warehouses;
+    });
   }
 
   async createWarehouse(dto: CreateWarehouseDto, actor?: Actor, req?: Request) {
@@ -520,6 +546,7 @@ export class InventoryService {
       data: { name: dto.name, code: dto.code, address: dto.address, status: 'active' },
     });
 
+    await this.invalidateInventoryCaches();
     this.audit('inventory.warehouse.create', 'warehouse', warehouse.id, { name: warehouse.name, code: warehouse.code }, actor, req);
 
     return { message: 'Warehouse created successfully', warehouse };
@@ -544,6 +571,7 @@ export class InventoryService {
       },
     });
 
+    await this.invalidateInventoryCaches();
     this.audit('inventory.warehouse.update', 'warehouse', warehouse.id, { name: warehouse.name }, actor, req);
 
     return { message: 'Warehouse updated successfully', warehouse };
@@ -554,6 +582,7 @@ export class InventoryService {
     if (!warehouse) throw new NotFoundException('Warehouse not found');
 
     await this.prisma.warehouse.delete({ where: { id: warehouseId } });
+    await this.invalidateInventoryCaches();
     this.audit('inventory.warehouse.delete', 'warehouse', warehouseId, { name: warehouse.name }, actor, req);
 
     return { message: 'Warehouse deleted successfully' };

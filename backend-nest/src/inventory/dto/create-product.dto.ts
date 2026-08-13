@@ -30,4 +30,9 @@ export class CreateProductDto {
   @IsString()
   @MaxLength(40)
   unit?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(2_000_000)
+  photo?: string;
 }

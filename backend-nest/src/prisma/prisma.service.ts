@@ -8,8 +8,41 @@ import {
 } from '@nestjs/common';
 import { Prisma, PrismaClient } from '@prisma/client';
 import { PrismaPg } from '@prisma/adapter-pg';
-import { Pool } from 'pg';
+import { Client, ClientConfig, Pool } from 'pg';
 import { MetricsService } from '../common/metrics/metrics.service';
+
+// Runs the session-level statement timeout BEFORE the pool considers a new
+// connection ready for use. Doing it in the pool's `connect` event leaves the
+// SET queued while Prisma issues its first query on that client, which triggers
+// pg's "client.query() while already executing" deprecation warning.
+class StatementTimeoutClient extends Client {
+  private readonly statementTimeoutMs: number;
+
+  constructor(config?: string | ClientConfig) {
+    super(config);
+    this.statementTimeoutMs = Number(process.env.DATABASE_STATEMENT_TIMEOUT_MS || 30_000);
+  }
+
+  connect(): Promise<Client>;
+  connect(callback: (err: Error | null, client?: Client) => void): void;
+  connect(callback?: (err: Error | null, client?: Client) => void): Promise<Client> | void {
+    const sql = `SET statement_timeout = ${Math.round(this.statementTimeoutMs)}`;
+
+    if (callback) {
+      return super.connect((err: Error | null, client: Client) => {
+        if (err) {
+          callback(err);
+          return;
+        }
+        void this.query(sql, () => callback(null, client));
+      });
+    }
+
+    return super.connect().then((client) =>
+      this.query(sql).then(() => client),
+    );
+  }
+}
 
 type PrismaQueryEventClient = {
   $on(eventType: 'query', callback: (event: Prisma.QueryEvent) => void): void;
@@ -40,9 +73,6 @@ export class PrismaService
     // them at the Node level.
     const maxConnections = Number(process.env.DATABASE_MAX_CONNECTIONS || 20);
     const poolMax = Number.isFinite(maxConnections) && maxConnections > 0 ? maxConnections : 20;
-    // Bounded statement timeout (ms) so a slow/runaway query cannot hold one of
-    // the few pooled connections indefinitely and cause cascading exhaustion.
-    const statementTimeoutMs = Number(process.env.DATABASE_STATEMENT_TIMEOUT_MS || 30_000);
 
     const pool = new Pool({
       connectionString: process.env.DATABASE_URL,
@@ -59,20 +89,13 @@ export class PrismaService
       keepAliveInitialDelayMillis: 10_000,
       allowExitOnIdle: false,
       application_name: 'backend-nest',
+      // Runs `SET statement_timeout` before the pool releases each new client,
+      // so Prisma's first query never queues behind an in-flight SET (which
+      // triggers pg's "client.query() while already executing" deprecation).
+      // Applied per-session rather than via the startup `options` parameter:
+      // Neon's connection *pooler* rejects `statement_timeout` there (08P01).
+      Client: StatementTimeoutClient,
     });
-
-    // Bounded statement timeout so a slow/runaway query cannot hold one of the
-    // few pooled connections indefinitely. We set it per-session via `SET`
-    // rather than the startup `options` parameter: Neon's connection *pooler*
-    // rejects `statement_timeout` in the startup package (error 08P01), so it
-    // must be applied after the connection is established.
-    if (statementTimeoutMs > 0) {
-      pool.on('connect', (client: import('pg').PoolClient) => {
-        void client.query(
-          `SET statement_timeout = ${Math.round(statementTimeoutMs)}`,
-        );
-      });
-    }
 
     // Swallow pool-level errors so a single dead socket doesn't crash the process
     // or surface as an unhandledRejection. The pool auto-discards failed sockets.
