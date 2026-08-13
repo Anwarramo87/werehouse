@@ -216,6 +216,7 @@ export class EmployeesService {
           department: true,
           jobTitle: true,
           profession: true,
+          photo: true,
           status: true,
           biometricNumber: true,
           scheduledStart: true,
@@ -417,6 +418,7 @@ export class EmployeesService {
           passwordHash,
           roleId: dto.roleId || null,
           status: 'active',
+          photo: dto.photo,
         },
       });
 
@@ -432,6 +434,7 @@ export class EmployeesService {
           gender: dto.gender ?? null,
           jobTitle: profession,
           profession,
+          photo: dto.photo,
           hourlyRate: new Prisma.Decimal(resolvedHourlyRate),
           baseSalary:
             baseSalary !== null && baseSalary !== undefined ? new Prisma.Decimal(baseSalary) : null,
@@ -598,7 +601,12 @@ export class EmployeesService {
     }
 
     const updated = await this.prisma.$transaction(async (transaction) => {
-      if (loginName !== undefined || passwordHash !== undefined || dto.roleId !== undefined) {
+      if (
+        loginName !== undefined ||
+        passwordHash !== undefined ||
+        dto.roleId !== undefined ||
+        dto.photo !== undefined
+      ) {
         const existingUser = await transaction.user.findFirst({
           where: {
             id: employee.userId || undefined,
@@ -612,6 +620,7 @@ export class EmployeesService {
               ...(loginName !== undefined && { username: loginName, email: loginName }),
               ...(passwordHash !== undefined && { passwordHash }),
               ...(dto.roleId !== undefined && { roleId: dto.roleId }),
+              ...(dto.photo !== undefined && { photo: dto.photo }),
             },
           });
         }
@@ -646,6 +655,7 @@ export class EmployeesService {
         }),
         ...(profession !== undefined && { jobTitle: profession, profession }),
         ...(dto.roleId !== undefined && { roleId: dto.roleId }),
+        ...(dto.photo !== undefined && { photo: dto.photo }),
         ...(departmentName !== undefined && { department: departmentName }),
         ...(dto.scheduledStart !== undefined && { scheduledStart: dto.scheduledStart }),
         ...(dto.scheduledEnd !== undefined && { scheduledEnd: dto.scheduledEnd }),

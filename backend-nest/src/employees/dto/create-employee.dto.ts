@@ -216,4 +216,10 @@ export class CreateEmployeeDto {
   @IsString()
   @MaxLength(200)
   residence?: string;
+
+  @ApiPropertyOptional({ description: 'صورة الموظف (data URL أو رابط)', example: 'data:image/jpeg;base64,...' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(2_000_000)
+  photo?: string;
 }
