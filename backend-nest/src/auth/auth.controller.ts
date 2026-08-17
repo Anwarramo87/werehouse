@@ -136,7 +136,7 @@ export class AuthController implements OnModuleInit {
     );
     const { maxAge, ...cookieOptions } = this.getAuthCookieOptions();
     res.clearCookie(cookieName, cookieOptions);
-    res.clearCookie(refreshCookieName, this.getRefreshCookieOptions());
+    res.clearCookie(refreshCookieName, { ...this.getRefreshCookieOptions(), path: '/' });
     res.setHeader('Cache-Control', 'no-store');
     return { message: 'Logged out successfully' };
   }
@@ -300,7 +300,11 @@ export class AuthController implements OnModuleInit {
       secure: isProduction ? true : secureSetting || sameSite === 'none',
       sameSite,
       maxAge,
-      path: '/api/auth/refresh',
+      // Must be '/' so the browser sends the cookie on ALL paths including
+      // the Next.js proxy route /api/auth/refresh → backend /auth/refresh.
+      // A narrow path like '/api/auth/refresh' breaks when the frontend
+      // proxies through Next.js because the browser sees a different path.
+      path: '/',
       ...(domain ? { domain } : {}),
     } as const;
   }

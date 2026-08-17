@@ -48,6 +48,16 @@ export class GlobalExceptionFilter implements ExceptionFilter {
           message,
         }),
       );
+    } else if (statusCode >= 400) {
+      this.logger.warn(
+        JSON.stringify({
+          correlationId,
+          method: request.method,
+          path: request.originalUrl,
+          statusCode,
+          message,
+        }),
+      );
     }
 
     // Hint the frontend not to retry on client errors (4xx)
