@@ -719,13 +719,12 @@ export class EmployeesService {
             : (existingSalary?.lumpSumSalary ?? new Prisma.Decimal(0)),
       };
 
-      await transaction.employeeSalary.upsert({
+      const salaryRecord = await transaction.employeeSalary.upsert({
         where: { employeeId },
         update: salaryPayload,
         create: salaryPayload,
       });
 
-      const salaryRecord = await transaction.employeeSalary.findUnique({ where: { employeeId } });
       if (salaryRecord) {
         const mirror = buildEmployeeSalaryMirror(resolveSalary(updatedEmployee, salaryRecord));
         await transaction.employee.update({
@@ -738,7 +737,7 @@ export class EmployeesService {
         where: { employeeId },
         include: this.employeeSelect(),
       });
-    });
+    }, { timeout: 15000, maxWait: 10000 });
 
     await this.invalidateEmployeeCaches();
 
