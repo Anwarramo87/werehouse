@@ -4,7 +4,6 @@
 
 ## 1. High-Level Architecture
 
-```
 ┌─────────────────┐
 │  Excel Source   │
 │  (Employees,    │
