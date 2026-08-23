@@ -546,8 +546,8 @@ export class AuthService {
 
     if (attempts >= DEFAULT_MAX_LOGIN_ATTEMPTS) {
       const lockoutUntil = new Date(Date.now() + DEFAULT_LOCKOUT_MINUTES * 60_000);
-      await runUnscoped('login-lockout', () =>
-        this.prisma.user.update({
+      await runUnscoped('login-lockout', async () =>
+        await this.prisma.user.update({
           where: { id: user.id },
           data: { lockoutUntil, failedLoginAttempts: 0 },
         }),
@@ -555,8 +555,8 @@ export class AuthService {
       return { locked: true };
     }
 
-    await runUnscoped('login-failed-attempt', () =>
-      this.prisma.user.update({
+    await runUnscoped('login-failed-attempt', async () =>
+      await this.prisma.user.update({
         where: { id: user.id },
         data: { failedLoginAttempts: attempts },
       }),
