@@ -167,7 +167,7 @@ export class AttendanceService {
 
   private async safeGetEmployeeName(employeeId: string): Promise<string> {
     try {
-      const employee = await this.prisma.employee.findUnique({
+      const employee = await this.prisma.employee.findFirst({
         where: { employeeId },
         select: { name: true },
       });
@@ -275,7 +275,7 @@ export class AttendanceService {
   }
 
   private async assertEmployeeExists(employeeId: string) {
-    const employee = await this.prisma.employee.findUnique({ where: { employeeId } });
+    const employee = await this.prisma.employee.findFirst({ where: { employeeId } });
     if (!employee) {
       throw new BadRequestException(`Employee not found: ${employeeId}`);
     }
@@ -1581,7 +1581,7 @@ export class AttendanceService {
 
     const employees = employeeId
       ? [
-          await this.prisma.employee.findUnique({
+          await this.prisma.employee.findFirst({
             where: { employeeId },
             select: employeeSelect,
           }),

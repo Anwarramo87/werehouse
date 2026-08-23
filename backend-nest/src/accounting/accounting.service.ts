@@ -62,7 +62,7 @@ export class AccountingService {
       if (!parent) throw new NotFoundException('Parent account not found');
     }
 
-    const existing = await this.prisma.account.findUnique({ where: { code: dto.code } });
+    const existing = await this.prisma.account.findFirst({ where: { code: dto.code } });
     if (existing) throw new ConflictException('Account code already exists');
 
     const account = await this.prisma.account.create({
@@ -81,7 +81,7 @@ export class AccountingService {
     if (!existing) throw new NotFoundException('Account not found');
 
     if (dto.code && dto.code !== existing.code) {
-      const collision = await this.prisma.account.findUnique({ where: { code: dto.code } });
+      const collision = await this.prisma.account.findFirst({ where: { code: dto.code } });
       if (collision) throw new ConflictException('Account code already exists');
     }
     if (dto.parentId === accountId) {

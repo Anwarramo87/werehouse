@@ -1,3 +1,4 @@
+import { tenantKey } from '../common/tenant/tenant-key';
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
@@ -33,7 +34,7 @@ export class InsuranceService {
   }
 
   async getByEmployee(employeeId: string) {
-    const record = await this.prisma.employeeInsurance.findUnique({ where: { employeeId } });
+    const record = await this.prisma.employeeInsurance.findFirst({ where: { employeeId } });
     if (!record) throw new NotFoundException(`No insurance record for employee ${employeeId}`);
     return record;
   }
@@ -46,7 +47,7 @@ export class InsuranceService {
     };
 
     return this.prisma.employeeInsurance.upsert({
-      where: { employeeId },
+      where: tenantKey<Prisma.EmployeeInsuranceWhereUniqueInput>({ employeeId }),
       update: data,
       create: { employeeId, ...data },
     });
@@ -54,7 +55,9 @@ export class InsuranceService {
 
   async remove(employeeId: string) {
     await this.getByEmployee(employeeId);
-    await this.prisma.employeeInsurance.delete({ where: { employeeId } });
+    await this.prisma.employeeInsurance.delete({
+      where: tenantKey<Prisma.EmployeeInsuranceWhereUniqueInput>({ employeeId }),
+    });
     return { message: 'Insurance record deleted' };
   }
 }

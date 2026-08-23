@@ -1,0 +1,57 @@
+/**
+ * Models carrying a tenantId column, generated from prisma/schema.prisma.
+ *
+ * Anything NOT listed here is global -- currently only Role and Tenant -- and
+ * is never tenant-filtered. If you add a model with a tenantId column, add it
+ * here too, or its rows will be visible to every factory.
+ */
+export const TENANT_SCOPED_MODELS: Record<string, true> = {
+  user: true,
+  biometricCredential: true,
+  employee: true,
+  department: true,
+  leaveRequest: true,
+  device: true,
+  attendanceRecord: true,
+  dailyAttendanceLog: true,
+  product: true,
+  stockLevel: true,
+  warehouse: true,
+  stockMovement: true,
+  supplier: true,
+  purchaseOrder: true,
+  purchaseOrderItem: true,
+  goodsReceipt: true,
+  goodsReceiptItem: true,
+  customer: true,
+  salesOrder: true,
+  salesOrderItem: true,
+  salesPayment: true,
+  account: true,
+  journalEntry: true,
+  journalEntryLine: true,
+  importJob: true,
+  payrollRun: true,
+  payrollItem: true,
+  payrollReceipt: true,
+  payrollInput: true,
+  employeeSalary: true,
+  employeeAdvance: true,
+  deletedRecordHistory: true,
+  employeeInsurance: true,
+  employeeBonus: true,
+  employeePenalty: true,
+  terminationRecord: true,
+  financialSettlement: true,
+  rehireRecord: true,
+  bus: true,
+  busPassenger: true,
+  auditLog: true,
+  notification: true,
+};
+
+export function isTenantScoped(model?: string): boolean {
+  if (!model) return false;
+  const key = model[0].toLowerCase() + model.slice(1);
+  return TENANT_SCOPED_MODELS[key] === true;
+}

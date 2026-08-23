@@ -10,6 +10,8 @@ import { Prisma, PrismaClient } from '@prisma/client';
 import { PrismaPg } from '@prisma/adapter-pg';
 import { Client, ClientConfig, Pool } from 'pg';
 import { MetricsService } from '../common/metrics/metrics.service';
+import { tenantExtension } from '../common/tenant/tenant-extension';
+import { isTenantScoped } from '../common/tenant/tenant-models';
 
 // Runs the session-level statement timeout BEFORE the pool considers a new
 // connection ready for use. Doing it in the pool's `connect` event leaves the
@@ -112,6 +114,23 @@ export class PrismaService
     this.poolMax = poolMax;
     this.slowQueryThresholdMs = this.resolveSlowQueryThreshold();
     this.registerSlowQueryObserver();
+
+    // Tenant isolation. `$extends` returns a *new* client rather than mutating
+    // this one, so route the two things that touch tenant data through it:
+    // the model delegates, and `$transaction` (whose `tx` would otherwise be
+    // the unextended client and would silently skip every tenant filter).
+    // Everything else -- lifecycle hooks, pool helpers, `role`/`tenant`, raw
+    // queries -- stays on `this`.
+    const scoped = this.$extends(tenantExtension()) as unknown as Record<string, unknown>;
+    return new Proxy(this, {
+      get(target, prop, receiver) {
+        if (typeof prop === 'string' && (prop === '$transaction' || isTenantScoped(prop))) {
+          const value = scoped[prop];
+          return typeof value === 'function' ? value.bind(scoped) : value;
+        }
+        return Reflect.get(target, prop, receiver);
+      },
+    });
   }
 
   private resolveSlowQueryThreshold() {

@@ -1,3 +1,4 @@
+import { tenantKey } from '../common/tenant/tenant-key';
 import { BadRequestException, Injectable, NotFoundException, Optional } from '@nestjs/common';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Prisma } from '@prisma/client';
@@ -220,7 +221,7 @@ export class ImportsService {
   }
 
   async details(jobId: string) {
-    const job = await this.prisma.importJob.findUnique({ where: { jobId } });
+    const job = await this.prisma.importJob.findFirst({ where: { jobId } });
     if (!job) throw new NotFoundException('Import job not found');
 
     const errorSummary: Record<string, number> = {};
@@ -447,7 +448,7 @@ export class ImportsService {
   }
 
   async retry(jobId: string, userId: string) {
-    const original = await this.prisma.importJob.findUnique({ where: { jobId } });
+    const original = await this.prisma.importJob.findFirst({ where: { jobId } });
     if (!original) throw new NotFoundException('Import job not found');
 
     const retryJob = await this.prisma.importJob.create({
@@ -953,7 +954,7 @@ export class ImportsService {
             if (persist) {
               const roleId = await this.resolveRoleId(roleIdRaw, defaultRoleId);
               await this.prisma.employee.upsert({
-                where: { employeeId },
+                where: tenantKey<Prisma.EmployeeWhereUniqueInput>({ employeeId }),
                 update: {
                   name,
                   hourlyRate: new Prisma.Decimal(hourlyRate),
@@ -1048,7 +1049,7 @@ export class ImportsService {
 
             if (persist) {
               await this.prisma.product.upsert({
-                where: { sku },
+                where: tenantKey<Prisma.ProductWhereUniqueInput>({ sku }),
                 update: {
                   name,
                   category,

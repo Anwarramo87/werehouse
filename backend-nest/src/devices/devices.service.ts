@@ -1,3 +1,4 @@
+import { tenantKey } from '../common/tenant/tenant-key';
 import {
   BadRequestException,
   Injectable,
@@ -35,7 +36,7 @@ export class DevicesService {
   }
 
   async create(dto: CreateDeviceDto) {
-    const existing = await this.prisma.device.findUnique({ where: { deviceId: dto.deviceId } });
+    const existing = await this.prisma.device.findFirst({ where: { deviceId: dto.deviceId } });
 
     if (existing) {
       throw new BadRequestException('Device ID already exists');
@@ -57,19 +58,19 @@ export class DevicesService {
   }
 
   async getByDeviceId(deviceId: string) {
-    const device = await this.prisma.device.findUnique({ where: { deviceId } });
+    const device = await this.prisma.device.findFirst({ where: { deviceId } });
 
     if (!device) throw new NotFoundException('Device not found');
     return device;
   }
 
   async update(deviceId: string, dto: UpdateDeviceDto) {
-    const device = await this.prisma.device.findUnique({ where: { deviceId } });
+    const device = await this.prisma.device.findFirst({ where: { deviceId } });
 
     if (!device) throw new NotFoundException('Device not found');
 
     const updated = await this.prisma.device.update({
-      where: { deviceId },
+      where: tenantKey<Prisma.DeviceWhereUniqueInput>({ deviceId }),
       data: dto,
     });
 
@@ -80,7 +81,7 @@ export class DevicesService {
   }
 
   async stats(deviceId: string) {
-    const device = await this.prisma.device.findUnique({ where: { deviceId } });
+    const device = await this.prisma.device.findFirst({ where: { deviceId } });
 
     if (!device) throw new NotFoundException('Device not found');
 

@@ -9,6 +9,8 @@ import { PrismaService } from '../prisma/prisma.service';
 import { TokenRevocationService } from './token-revocation.service';
 import { ShortCacheService } from '../common/cache/short-cache.service';
 import { JWT_USER_CACHE_TTL_SECONDS } from '../common/constants/auth.constants';
+import { currentTenant, runUnscoped } from '../common/tenant/tenant-context';
+import { setRequestTenant } from '../common/tenant/tenant.middleware';
 
 type CachedAuthUser = {
   userId: string;
@@ -17,6 +19,7 @@ type CachedAuthUser = {
   role: string;
   roles: string[];
   permissions: string[];
+  tenantId: string | null;
 };
 
 @Injectable()
@@ -63,26 +66,45 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
 
     const resolved =
       cached ??
-      (await this.shortCache.getOrSetJson(cacheKey, JWT_USER_CACHE_TTL_SECONDS, async () => {
-        const user = await this.prisma.user.findUnique({
-          where: { id: payload.userId },
-          include: { role: true },
-        });
+      (await this.shortCache.getOrSetJson(cacheKey, JWT_USER_CACHE_TTL_SECONDS, async () =>
+        // Authenticating a principal is inherently cross-tenant: we look the
+        // user up by primary key precisely so we can discover which factory
+        // they belong to. Running it unscoped is safe because the lookup is
+        // keyed on the id inside an already signature-verified token.
+        runUnscoped('jwt-validate', async () => {
+          const user = await this.prisma.user.findUnique({
+            where: { id: payload.userId },
+            include: { role: true },
+          });
 
-        if (!user || user.status !== 'active') {
-          throw new UnauthorizedException('Account is no longer active');
-        }
+          if (!user || user.status !== 'active') {
+            throw new UnauthorizedException('Account is no longer active');
+          }
 
-        const roleName = user.role?.name || 'staff';
-        return {
-          userId: user.id,
-          username: user.username,
-          email: user.email ?? undefined,
-          role: roleName,
-          roles: [roleName],
-          permissions: user.role?.permissions || [],
-        };
-      }));
+          const roleName = user.role?.name || 'staff';
+          return {
+            userId: user.id,
+            username: user.username,
+            email: user.email ?? undefined,
+            role: roleName,
+            roles: [roleName],
+            permissions: user.role?.permissions || [],
+            tenantId: user.tenantId ?? null,
+          };
+        }),
+      ));
+
+    // Narrow this request to the factory the verified token belongs to. The
+    // tenant is taken from the database record, never from the request, so a
+    // caller cannot nominate a factory they do not own.
+    const scope = currentTenant();
+    if (scope) {
+      setRequestTenant(scope, {
+        role: resolved.role,
+        tenantId: resolved.tenantId,
+        username: resolved.username,
+      });
+    }
 
     return {
       ...resolved,

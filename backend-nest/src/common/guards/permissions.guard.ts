@@ -7,6 +7,10 @@ import {
 import { Reflector } from '@nestjs/core';
 import { PERMISSIONS_KEY } from '../decorators/permissions.decorator';
 import { IS_PUBLIC_KEY } from '../decorators/public.decorator';
+import {
+  SUPERADMIN_ONLY_PERMISSIONS,
+  SUPERADMIN_ROLE,
+} from '../tenant/tenant.constants';
 
 @Injectable()
 export class PermissionsGuard implements CanActivate {
@@ -35,11 +39,26 @@ export class PermissionsGuard implements CanActivate {
 
     const request = context.switchToHttp().getRequest();
     const userRoles: string[] = request.user?.roles || [];
-    if (userRoles.includes('admin')) {
+
+    // Only the Super Admin bypasses permission checks. A factory `admin` used
+    // to land here too, which made the two roles indistinguishable -- it now
+    // falls through to the explicit permission list below, and its queries are
+    // narrowed to its own factory by the Prisma tenant extension.
+    if (userRoles.includes(SUPERADMIN_ROLE)) {
       return true;
     }
 
     const userPermissions: string[] = request.user?.permissions || [];
+
+    // Defence in depth: these permissions are meaningless outside the Super
+    // Admin and must never be satisfied by a tenant-scoped principal, even if
+    // one is somehow attached to their role.
+    const wantsSuperadminOnly = requiredPermissions.some((p) =>
+      SUPERADMIN_ONLY_PERMISSIONS.includes(p),
+    );
+    if (wantsSuperadminOnly) {
+      throw new ForbiddenException('This operation is restricted to the super admin');
+    }
     const hasPermission = requiredPermissions.some((p) =>
       userPermissions.includes(p),
     );

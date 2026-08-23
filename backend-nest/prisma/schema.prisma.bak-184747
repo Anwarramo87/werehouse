@@ -6,62 +6,6 @@ datasource db {
   provider = "postgresql"
 }
 
-model Tenant {
-  id        String   @id @default(uuid()) @db.Uuid
-  name      String
-  code      String   @unique
-  status    String   @default("active") // active | suspended
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  users                           User[]
-  biometricCredentials            BiometricCredential[]
-  employees                       Employee[]
-  departments                     Department[]
-  leaveRequests                   LeaveRequest[]
-  devices                         Device[]
-  attendanceRecords               AttendanceRecord[]
-  dailyAttendanceLogs             DailyAttendanceLog[]
-  products                        Product[]
-  stockLevels                     StockLevel[]
-  warehouses                      Warehouse[]
-  stockMovements                  StockMovement[]
-  suppliers                       Supplier[]
-  purchaseOrders                  PurchaseOrder[]
-  purchaseOrderItems              PurchaseOrderItem[]
-  goodsReceipts                   GoodsReceipt[]
-  goodsReceiptItems               GoodsReceiptItem[]
-  customers                       Customer[]
-  salesOrders                     SalesOrder[]
-  salesOrderItems                 SalesOrderItem[]
-  salesPayments                   SalesPayment[]
-  accounts                        Account[]
-  journalEntrys                   JournalEntry[]
-  journalEntryLines               JournalEntryLine[]
-  importJobs                      ImportJob[]
-  payrollRuns                     PayrollRun[]
-  payrollItems                    PayrollItem[]
-  payrollReceipts                 PayrollReceipt[]
-  payrollInputs                   PayrollInput[]
-  employeeSalarys                 EmployeeSalary[]
-  employeeAdvances                EmployeeAdvance[]
-  deletedRecordHistorys           DeletedRecordHistory[]
-  employeeInsurances              EmployeeInsurance[]
-  employeeBonuss                  EmployeeBonus[]
-  employeePenaltys                EmployeePenalty[]
-  terminationRecords              TerminationRecord[]
-  financialSettlements            FinancialSettlement[]
-  rehireRecords                   RehireRecord[]
-  buss                            Bus[]
-  busPassengers                   BusPassenger[]
-  auditLogs                       AuditLog[]
-  notifications                   Notification[]
-
-  @@index([status])
-  @@map("tenants")
-}
-
-
 model Role {
   id          String     @id @default(uuid()) @db.Uuid
   name        String     @unique
@@ -77,8 +21,6 @@ model Role {
 
 model User {
   id                   String                @id @default(uuid()) @db.Uuid
-  tenantId  String?  @db.Uuid
-  tenant    Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   username             String                @unique
   email                String?               @unique
   passwordHash         String
@@ -95,14 +37,11 @@ model User {
   biometricCredentials BiometricCredential[]
 
   @@index([lockoutUntil])
-  @@index([tenantId])
   @@map("users")
 }
 
 model BiometricCredential {
   id           String    @id @default(uuid()) @db.Uuid
-  tenantId  String?  @db.Uuid
-  tenant    Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   keyId        String
   userId       String    @db.Uuid
   user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -112,22 +51,19 @@ model BiometricCredential {
   revokedAt    DateTime?
 
   @@unique([userId, keyId])
-  @@index([tenantId])
   @@map("biometric_credentials")
 }
 
 model Employee {
   id                        String                @id @default(uuid()) @db.Uuid
-  tenantId  String?  @db.Uuid
-  tenant    Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  employeeId                String
-  biometricNumber           Int?
+  employeeId                String                @unique
+  biometricNumber           Int?                  @unique
   name                      String
   userId                    String?               @unique @db.Uuid
   user                      User?                 @relation(fields: [userId], references: [id], onDelete: SetNull)
   mobile                    String?
   residence                 String?               @db.VarChar(200)
-  nationalId                String?
+  nationalId                String?               @unique
   dateOfBirth               DateTime?             @db.Date
   gender                    String?
   jobTitle                  String?
@@ -190,18 +126,12 @@ model Employee {
   @@index([status, createdAt])
   @@index([status, departmentId])
   @@index([departmentId, status])
-  @@unique([tenantId, employeeId])
-  @@unique([tenantId, biometricNumber])
-  @@unique([tenantId, nationalId])
-  @@index([tenantId])
   @@map("employees")
 }
 
 model Department {
   id            String     @id @default(uuid()) @db.Uuid
-  tenantId  String?  @db.Uuid
-  tenant    Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  name          String
+  name          String     @unique
   manager       String?
   establishedAt DateTime?
   employees     Employee[]
@@ -209,8 +139,6 @@ model Department {
   updatedAt     DateTime   @updatedAt
 
   @@index([createdAt])
-  @@unique([tenantId, name])
-  @@index([tenantId])
   @@map("departments")
 }
 
@@ -232,10 +160,8 @@ enum LeaveRequestStatus {
 
 model LeaveRequest {
   id         String             @id @default(uuid()) @db.Uuid
-  tenantId  String?  @db.Uuid
-  tenant    Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   employeeId String
-  employee   Employee?           @relation(fields: [tenantId, employeeId], references: [tenantId, employeeId], onDelete: Cascade)
+  employee   Employee           @relation(fields: [employeeId], references: [employeeId], onDelete: Cascade)
   leaveType  LeaveRequestType
   status     LeaveRequestStatus @default(PENDING)
   isPaid     Boolean            @default(false)
@@ -254,15 +180,12 @@ model LeaveRequest {
   @@index([employeeId, status])
   @@index([leaveType, status])
   @@index([startDate, endDate])
-  @@index([tenantId])
   @@map("leave_requests")
 }
 
 model Device {
   id        String    @id @default(uuid()) @db.Uuid
-  tenantId  String?  @db.Uuid
-  tenant    Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  deviceId  String
+  deviceId  String    @unique
   name      String
   location  String
   model     String    @default("ZK Teco")
@@ -275,17 +198,13 @@ model Device {
 
   @@index([status, createdAt])
   @@index([location, status, createdAt])
-  @@unique([tenantId, deviceId])
-  @@index([tenantId])
   @@map("devices")
 }
 
 model AttendanceRecord {
   id         String   @id @default(uuid()) @db.Uuid
-  tenantId  String?  @db.Uuid
-  tenant    Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   employeeId String
-  employee   Employee? @relation(fields: [tenantId, employeeId], references: [tenantId, employeeId], onDelete: Cascade)
+  employee   Employee @relation(fields: [employeeId], references: [employeeId], onDelete: Cascade)
   timestamp  DateTime
   type       String
   deviceId   String?
@@ -310,8 +229,7 @@ model AttendanceRecord {
   // Prevents duplicate punches (same employee + timestamp + type). The migration
   // de-duplicates existing rows (keeping the earliest by createdAt) before this
   // is applied. Application code also guards via a 30-minute re-punch window.
-  @@unique([tenantId, employeeId, timestamp, type])
-  @@index([tenantId])
+  @@unique([employeeId, timestamp, type])
   @@map("attendance_records")
 }
 
@@ -332,10 +250,8 @@ enum DailyRecordType {
 
 model DailyAttendanceLog {
   id         String          @id @default(uuid()) @db.Uuid
-  tenantId  String?  @db.Uuid
-  tenant    Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   employeeId String
-  employee   Employee?        @relation("DailyAttendanceLogs", fields: [tenantId, employeeId], references: [tenantId, employeeId], onDelete: Cascade)
+  employee   Employee        @relation("DailyAttendanceLogs", fields: [employeeId], references: [employeeId], onDelete: Cascade)
   date       DateTime        @db.Date
   recordType DailyRecordType
   value      Decimal         @db.Decimal(10, 2) // e.g., 1 (for 1 day) or 120 (for 120 minutes)
@@ -351,16 +267,13 @@ model DailyAttendanceLog {
   @@index([recordType, date])
   // Prevents duplicate calculated/manual log rows for the same employee+day+type.
   // Makes aggregateEmployeeDay's deleteMany+create idempotent under concurrency.
-  @@unique([tenantId, employeeId, date, recordType, source])
-  @@index([tenantId])
+  @@unique([employeeId, date, recordType, source])
   @@map("daily_attendance_logs")
 }
 
 model Product {
   id           String   @id @default(uuid()) @db.Uuid
-  tenantId  String?  @db.Uuid
-  tenant    Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  sku          String
+  sku          String   @unique
   name         String
   category     String
   unitPrice    Decimal  @db.Decimal(12, 2)
@@ -373,6 +286,7 @@ model Product {
   updatedAt    DateTime @updatedAt
 
   stockLevels       StockLevel[]
+  stockMovements    StockMovement[]
   purchaseOrderItems PurchaseOrderItem[]
   goodsReceiptItems  GoodsReceiptItem[]
   salesOrderItems    SalesOrderItem[]
@@ -380,15 +294,11 @@ model Product {
   @@index([createdAt])
   @@index([status, createdAt])
   @@index([category, status, createdAt])
-  @@unique([tenantId, sku])
-  @@index([tenantId])
   @@map("products")
 }
 
 model StockLevel {
   id        String   @id @default(uuid()) @db.Uuid
-  tenantId  String?  @db.Uuid
-  tenant    Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   sku       String
   location  String
   quantity  Int      @default(0)
@@ -397,27 +307,22 @@ model StockLevel {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  product Product? @relation(fields: [tenantId, sku], references: [tenantId, sku], onDelete: Cascade)
+  product Product? @relation(fields: [sku], references: [sku], onDelete: Cascade)
 
-  @@unique([tenantId, sku, location])
-  @@index([tenantId])
+  @@unique([sku, location])
   @@map("stock_levels")
 }
 
 model Warehouse {
   id        String    @id @default(uuid()) @db.Uuid
-  tenantId  String?  @db.Uuid
-  tenant    Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   name      String
-  code      String
+  code      String    @unique
   address   String?
   status    String    @default("active") // active | inactive
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
 
   @@index([status])
-  @@unique([tenantId, code])
-  @@index([tenantId])
   @@map("warehouses")
 }
 
@@ -431,8 +336,6 @@ enum StockMovementType {
 
 model StockMovement {
   id            String            @id @default(uuid()) @db.Uuid
-  tenantId  String?  @db.Uuid
-  tenant    Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   sku           String?
   type          StockMovementType
   quantity      Int // signed delta: +IN / -OUT / +-ADJUSTMENT / +RESERVE / -RELEASE
@@ -443,20 +346,19 @@ model StockMovement {
   createdById   String?           @db.Uuid
   createdAt     DateTime          @default(now())
 
+  product Product? @relation(fields: [sku], references: [sku], onDelete: SetNull)
+
   @@index([sku])
   @@index([sku, createdAt])
   @@index([location, createdAt])
   @@index([type, createdAt])
   @@index([createdById])
   @@index([createdAt])
-  @@index([tenantId])
   @@map("stock_movements")
 }
 
 model Supplier {
   id        String   @id @default(uuid()) @db.Uuid
-  tenantId  String?  @db.Uuid
-  tenant    Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   name      String
   phone     String?
   email     String?
@@ -469,15 +371,12 @@ model Supplier {
   purchaseOrders PurchaseOrder[]
 
   @@index([name])
-  @@index([tenantId])
   @@map("suppliers")
 }
 
 model PurchaseOrder {
   id           String              @id @default(uuid()) @db.Uuid
-  tenantId  String?  @db.Uuid
-  tenant    Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  poNumber     String
+  poNumber     String              @unique
   supplierId   String              @db.Uuid
   status       String              @default("draft") // draft | sent | received | cancelled
   orderDate    DateTime            @db.Date
@@ -494,15 +393,11 @@ model PurchaseOrder {
   @@index([supplierId])
   @@index([status])
   @@index([createdAt])
-  @@unique([tenantId, poNumber])
-  @@index([tenantId])
   @@map("purchase_orders")
 }
 
 model PurchaseOrderItem {
   id               String            @id @default(uuid()) @db.Uuid
-  tenantId  String?  @db.Uuid
-  tenant    Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   purchaseOrderId  String            @db.Uuid
   sku              String
   quantity         Int
@@ -512,20 +407,17 @@ model PurchaseOrderItem {
   updatedAt        DateTime          @updatedAt
 
   purchaseOrder    PurchaseOrder     @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
-  product          Product?           @relation(fields: [tenantId, sku], references: [tenantId, sku], onDelete: Restrict)
+  product          Product           @relation(fields: [sku], references: [sku], onDelete: Restrict)
   goodsReceiptItems GoodsReceiptItem[]
 
   @@index([purchaseOrderId])
   @@index([sku])
-  @@index([tenantId])
   @@map("purchase_order_items")
 }
 
 model GoodsReceipt {
   id              String              @id @default(uuid()) @db.Uuid
-  tenantId  String?  @db.Uuid
-  tenant    Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  receiptNumber   String
+  receiptNumber   String              @unique
   purchaseOrderId String              @db.Uuid
   receivedBy      String              @db.Uuid
   notes           String?
@@ -536,15 +428,11 @@ model GoodsReceipt {
   items           GoodsReceiptItem[]
 
   @@index([purchaseOrderId])
-  @@unique([tenantId, receiptNumber])
-  @@index([tenantId])
   @@map("goods_receipts")
 }
 
 model GoodsReceiptItem {
   id                  String            @id @default(uuid()) @db.Uuid
-  tenantId  String?  @db.Uuid
-  tenant    Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   goodsReceiptId      String            @db.Uuid
   purchaseOrderItemId String            @db.Uuid
   sku                 String
@@ -555,19 +443,16 @@ model GoodsReceiptItem {
 
   goodsReceipt        GoodsReceipt      @relation(fields: [goodsReceiptId], references: [id], onDelete: Cascade)
   purchaseOrderItem   PurchaseOrderItem @relation(fields: [purchaseOrderItemId], references: [id], onDelete: Restrict)
-  product             Product?           @relation(fields: [tenantId, sku], references: [tenantId, sku], onDelete: Restrict)
+  product             Product           @relation(fields: [sku], references: [sku], onDelete: Restrict)
 
   @@index([goodsReceiptId])
   @@index([purchaseOrderItemId])
   @@index([sku])
-  @@index([tenantId])
   @@map("goods_receipt_items")
 }
 
 model Customer {
   id        String   @id @default(uuid()) @db.Uuid
-  tenantId  String?  @db.Uuid
-  tenant    Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   name      String
   phone     String?
   email     String?
@@ -580,15 +465,12 @@ model Customer {
   salesOrders SalesOrder[]
 
   @@index([name])
-  @@index([tenantId])
   @@map("customers")
 }
 
 model SalesOrder {
   id           String              @id @default(uuid()) @db.Uuid
-  tenantId  String?  @db.Uuid
-  tenant    Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  soNumber     String
+  soNumber     String              @unique
   customerId   String              @db.Uuid
   status       String              @default("draft") // draft | confirmed | delivered | cancelled
   orderDate    DateTime            @db.Date
@@ -606,15 +488,11 @@ model SalesOrder {
   @@index([customerId])
   @@index([status])
   @@index([createdAt])
-  @@unique([tenantId, soNumber])
-  @@index([tenantId])
   @@map("sales_orders")
 }
 
 model SalesOrderItem {
   id            String     @id @default(uuid()) @db.Uuid
-  tenantId  String?  @db.Uuid
-  tenant    Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   salesOrderId  String     @db.Uuid
   sku           String
   quantity      Int
@@ -624,18 +502,15 @@ model SalesOrderItem {
   updatedAt     DateTime   @updatedAt
 
   salesOrder    SalesOrder @relation(fields: [salesOrderId], references: [id], onDelete: Cascade)
-  product       Product?    @relation(fields: [tenantId, sku], references: [tenantId, sku], onDelete: Restrict)
+  product       Product    @relation(fields: [sku], references: [sku], onDelete: Restrict)
 
   @@index([salesOrderId])
   @@index([sku])
-  @@index([tenantId])
   @@map("sales_order_items")
 }
 
 model SalesPayment {
   id            String     @id @default(uuid()) @db.Uuid
-  tenantId  String?  @db.Uuid
-  tenant    Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   salesOrderId  String     @db.Uuid
   amount        Decimal    @db.Decimal(12, 2)
   method        String     @default("cash") // cash | card | transfer
@@ -647,15 +522,12 @@ model SalesPayment {
   salesOrder    SalesOrder @relation(fields: [salesOrderId], references: [id], onDelete: Cascade)
 
   @@index([salesOrderId])
-  @@index([tenantId])
   @@map("sales_payments")
 }
 
 model Account {
   id          String          @id @default(uuid()) @db.Uuid
-  tenantId  String?  @db.Uuid
-  tenant    Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  code        String
+  code        String          @unique
   name        String
   type        String          // asset | liability | equity | revenue | expense
   isActive    Boolean         @default(true)
@@ -669,16 +541,12 @@ model Account {
 
   @@index([type])
   @@index([parentId])
-  @@unique([tenantId, code])
-  @@index([tenantId])
   @@map("accounts")
 }
 
 model JournalEntry {
   id          String              @id @default(uuid()) @db.Uuid
-  tenantId  String?  @db.Uuid
-  tenant    Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  entryNumber String
+  entryNumber String              @unique
   entryDate   DateTime            @db.Date
   description String
   createdBy   String              @db.Uuid
@@ -688,15 +556,11 @@ model JournalEntry {
   lines       JournalEntryLine[]
 
   @@index([entryDate])
-  @@unique([tenantId, entryNumber])
-  @@index([tenantId])
   @@map("journal_entries")
 }
 
 model JournalEntryLine {
   id              String        @id @default(uuid()) @db.Uuid
-  tenantId  String?  @db.Uuid
-  tenant    Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   journalEntryId  String        @db.Uuid
   accountId       String        @db.Uuid
   debit           Decimal       @default(0) @db.Decimal(12, 2)
@@ -708,15 +572,12 @@ model JournalEntryLine {
 
   @@index([journalEntryId])
   @@index([accountId])
-  @@index([tenantId])
   @@map("journal_entry_lines")
 }
 
 model ImportJob {
   id          String   @id @default(uuid()) @db.Uuid
-  tenantId  String?  @db.Uuid
-  tenant    Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  jobId       String
+  jobId       String   @unique
   entity      String
   fileName    String
   uploadedBy  String
@@ -732,16 +593,12 @@ model ImportJob {
   @@index([entity, uploadedAt])
   @@index([uploadedAt])
   @@index([status, uploadedAt])
-  @@unique([tenantId, jobId])
-  @@index([tenantId])
   @@map("import_jobs")
 }
 
 model PayrollRun {
   id              String           @id @default(uuid()) @db.Uuid
-  tenantId  String?  @db.Uuid
-  tenant    Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  runId           String
+  runId           String           @unique
   periodStart     DateTime         @db.Date
   periodEnd       DateTime         @db.Date
   periodType      String           @default("monthly")
@@ -765,15 +622,11 @@ model PayrollRun {
   @@index([approvalStatus, runDate])
   @@index([periodStart])
   @@index([periodStart, periodEnd])
-  @@unique([tenantId, runId])
-  @@index([tenantId])
   @@map("payroll_runs")
 }
 
 model PayrollItem {
   id                    String   @id @default(uuid()) @db.Uuid
-  tenantId  String?  @db.Uuid
-  tenant    Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   payrollRunId          String   @db.Uuid
   employeeId            String
   employeeName          String
@@ -798,19 +651,16 @@ model PayrollItem {
 
   run PayrollRun @relation(fields: [payrollRunId], references: [id], onDelete: Cascade)
 
-  @@unique([tenantId, payrollRunId, employeeId])
+  @@unique([payrollRunId, employeeId])
   @@index([payrollRunId])
   @@index([payrollRunId, employeeId])
-  @@index([tenantId])
   @@map("payroll_items")
 }
 
 model PayrollReceipt {
   id           String      @id @default(uuid()) @db.Uuid
-  tenantId  String?  @db.Uuid
-  tenant    Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   employeeId   String
-  employee     Employee?    @relation(fields: [tenantId, employeeId], references: [tenantId, employeeId], onDelete: Cascade)
+  employee     Employee    @relation(fields: [employeeId], references: [employeeId], onDelete: Cascade)
   month        String
   payrollRunId String?     @db.Uuid
   payrollRun   PayrollRun? @relation(fields: [payrollRunId], references: [id], onDelete: SetNull)
@@ -820,11 +670,10 @@ model PayrollReceipt {
   createdAt    DateTime    @default(now())
   updatedAt    DateTime    @updatedAt
 
-  @@unique([tenantId, employeeId, month])
+  @@unique([employeeId, month])
   @@index([month])
   @@index([payrollRunId])
   @@index([month, isReceived])
-  @@index([tenantId])
   @@map("payroll_receipts")
 }
 
@@ -833,10 +682,8 @@ model PayrollReceipt {
 // ---------------------------------------------------------------------------
 model PayrollInput {
   id                         String   @id @default(uuid()) @db.Uuid
-  tenantId  String?  @db.Uuid
-  tenant    Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   employeeId                 String
-  employee                   Employee? @relation(fields: [tenantId, employeeId], references: [tenantId, employeeId], onDelete: Cascade)
+  employee                   Employee @relation(fields: [employeeId], references: [employeeId], onDelete: Cascade)
   periodStart                DateTime @db.Date
   periodEnd                  DateTime @db.Date
   lateMinutes                Int      @default(0)
@@ -859,10 +706,9 @@ model PayrollInput {
   createdAt                  DateTime @default(now())
   updatedAt                  DateTime @updatedAt
 
-  @@unique([tenantId, employeeId, periodStart, periodEnd])
+  @@unique([employeeId, periodStart, periodEnd])
   @@index([periodStart, periodEnd])
   @@index([employeeId, periodStart])
-  @@index([tenantId])
   @@map("payroll_inputs")
 }
 
@@ -871,10 +717,8 @@ model PayrollInput {
 // ---------------------------------------------------------------------------
 model EmployeeSalary {
   id         String   @id @default(uuid()) @db.Uuid
-  tenantId  String?  @db.Uuid
-  tenant    Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  employeeId String
-  employee   Employee? @relation(fields: [tenantId, employeeId], references: [tenantId, employeeId], onDelete: Cascade)
+  employeeId String   @unique
+  employee   Employee @relation(fields: [employeeId], references: [employeeId], onDelete: Cascade)
 
   profession              String?
   baseSalary              Decimal  @db.Decimal(14, 2)
@@ -891,8 +735,6 @@ model EmployeeSalary {
   updatedAt               DateTime @updatedAt
 
   @@index([employeeId])
-  @@unique([tenantId, employeeId])
-  @@index([tenantId])
   @@map("employee_salaries")
 }
 
@@ -901,10 +743,8 @@ model EmployeeSalary {
 // ---------------------------------------------------------------------------
 model EmployeeAdvance {
   id                String   @id @default(uuid()) @db.Uuid
-  tenantId  String?  @db.Uuid
-  tenant    Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   employeeId        String
-  employee          Employee? @relation(fields: [tenantId, employeeId], references: [tenantId, employeeId], onDelete: Cascade)
+  employee          Employee @relation(fields: [employeeId], references: [employeeId], onDelete: Cascade)
   advanceType       String   @default("salary")
   totalAmount       Decimal  @db.Decimal(14, 2)
   installmentAmount Decimal  @default(0) @db.Decimal(14, 2)
@@ -920,14 +760,11 @@ model EmployeeAdvance {
   @@index([employeeId, remainingAmount])
   @@index([employeeId, period])
   @@index([period, createdAt])
-  @@index([tenantId])
   @@map("employee_advances")
 }
 
 model DeletedRecordHistory {
   id         String    @id @default(uuid()) @db.Uuid
-  tenantId  String?  @db.Uuid
-  tenant    Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   entityType String
   recordId   String
   payload    Json
@@ -939,7 +776,6 @@ model DeletedRecordHistory {
   @@index([entityType, recordId])
   @@index([entityType, deletedAt])
   @@index([entityType, restoredAt, deletedAt])
-  @@index([tenantId])
   @@map("deleted_record_history")
 }
 
@@ -948,18 +784,14 @@ model DeletedRecordHistory {
 // ---------------------------------------------------------------------------
 model EmployeeInsurance {
   id                   String    @id @default(uuid()) @db.Uuid
-  tenantId  String?  @db.Uuid
-  tenant    Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  employeeId           String
-  employee             Employee?  @relation(fields: [tenantId, employeeId], references: [tenantId, employeeId], onDelete: Cascade)
+  employeeId           String    @unique
+  employee             Employee  @relation(fields: [employeeId], references: [employeeId], onDelete: Cascade)
   insuranceSalary      Decimal   @db.Decimal(14, 2)
   socialSecurityNumber String?
   registrationDate     DateTime?
   createdAt            DateTime  @default(now())
   updatedAt            DateTime  @updatedAt
 
-  @@unique([tenantId, employeeId])
-  @@index([tenantId])
   @@map("employee_insurance")
 }
 
@@ -968,8 +800,6 @@ model EmployeeInsurance {
 // ---------------------------------------------------------------------------
 model EmployeeBonus {
   id         String @id @default(uuid()) @db.Uuid
-  tenantId  String?  @db.Uuid
-  tenant    Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   employeeId String
 
   bonusAmount      Decimal  @default(0) @db.Decimal(14, 2)
@@ -978,12 +808,11 @@ model EmployeeBonus {
   period           String? // e.g. "2026-04"
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
-  employee         Employee? @relation(fields: [tenantId, employeeId], references: [tenantId, employeeId], onDelete: Cascade)
+  employee         Employee @relation(fields: [employeeId], references: [employeeId], onDelete: Cascade)
 
   @@index([employeeId])
   @@index([employeeId, period])
   @@index([period, createdAt])
-  @@index([tenantId])
   @@map("employee_bonuses")
 }
 
@@ -992,8 +821,6 @@ model EmployeeBonus {
 // ---------------------------------------------------------------------------
 model EmployeePenalty {
   id         String   @id @default(uuid()) @db.Uuid
-  tenantId  String?  @db.Uuid
-  tenant    Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   employeeId String
   category   String
   amount     Decimal  @db.Decimal(14, 2)
@@ -1002,22 +829,19 @@ model EmployeePenalty {
   period     String? // "YYYY-MM" — auto-filled from issueDate
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
-  employee   Employee? @relation(fields: [tenantId, employeeId], references: [tenantId, employeeId], onDelete: Cascade)
+  employee   Employee @relation(fields: [employeeId], references: [employeeId], onDelete: Cascade)
 
   @@index([employeeId])
   @@index([employeeId, issueDate])
   @@index([employeeId, period])
   @@index([period, createdAt])
-  @@index([tenantId])
   @@map("employee_penalties")
 }
 
 model TerminationRecord {
   id              String   @id @default(uuid()) @db.Uuid
-  tenantId  String?  @db.Uuid
-  tenant    Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   employeeId      String
-  employee        Employee? @relation(fields: [tenantId, employeeId], references: [tenantId, employeeId], onDelete: Cascade)
+  employee        Employee @relation(fields: [employeeId], references: [employeeId], onDelete: Cascade)
   terminationDate DateTime @db.Date
   terminationType String
   reason          String
@@ -1034,16 +858,13 @@ model TerminationRecord {
   @@index([terminationType])
   @@index([processedBy])
   @@index([employeeId, terminationDate])
-  @@index([tenantId])
   @@map("termination_records")
 }
 
 model FinancialSettlement {
   id                String   @id @default(uuid()) @db.Uuid
-  tenantId  String?  @db.Uuid
-  tenant    Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   employeeId        String
-  employee          Employee? @relation(fields: [tenantId, employeeId], references: [tenantId, employeeId], onDelete: Cascade)
+  employee          Employee @relation(fields: [employeeId], references: [employeeId], onDelete: Cascade)
   settlementDate    DateTime @db.Date
   processedBy       String
   finalSalaryAmount Decimal  @db.Decimal(14, 2)
@@ -1060,16 +881,13 @@ model FinancialSettlement {
   @@index([status])
   @@index([processedBy])
   @@index([employeeId, status])
-  @@index([tenantId])
   @@map("financial_settlements")
 }
 
 model RehireRecord {
   id                    String   @id @default(uuid()) @db.Uuid
-  tenantId  String?  @db.Uuid
-  tenant    Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   employeeId            String
-  employee              Employee? @relation(fields: [tenantId, employeeId], references: [tenantId, employeeId], onDelete: Cascade)
+  employee              Employee @relation(fields: [employeeId], references: [employeeId], onDelete: Cascade)
   rehireDate            DateTime @db.Date
   processedBy           String
   previousTerminationId String?  @db.Uuid
@@ -1084,7 +902,6 @@ model RehireRecord {
   @@index([rehireDate])
   @@index([processedBy])
   @@index([employeeId, rehireDate])
-  @@index([tenantId])
   @@map("rehire_records")
 }
 
@@ -1093,11 +910,9 @@ model RehireRecord {
 // ---------------------------------------------------------------------------
 model Bus {
   id                   String         @id @default(uuid()) @db.Uuid
-  tenantId  String?  @db.Uuid
-  tenant    Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  busId                String // كود الباص
+  busId                String         @unique // كود الباص
   route                String // الخط / مسار الرحلة
-  plateNumber          String // رقم اللوحة
+  plateNumber          String         @unique // رقم اللوحة
   driverName           String // اسم السائق
   driverPhone          String // رقم السائق (10 أرقام سورية)
   totalCost            Decimal        @db.Decimal(14, 2) // التكلفة الإجمالية (ل.س)
@@ -1112,20 +927,15 @@ model Bus {
 
   @@index([status])
   @@index([route, status])
-  @@unique([tenantId, busId])
-  @@unique([tenantId, plateNumber])
-  @@index([tenantId])
   @@map("buses")
 }
 
 model BusPassenger {
   id               String    @id @default(uuid()) @db.Uuid
-  tenantId  String?  @db.Uuid
-  tenant    Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   busId            String    @db.Uuid
   bus              Bus       @relation(fields: [busId], references: [id], onDelete: Cascade)
   employeeId       String
-  employee         Employee?  @relation(fields: [tenantId, employeeId], references: [tenantId, employeeId], onDelete: Cascade)
+  employee         Employee  @relation(fields: [employeeId], references: [employeeId], onDelete: Cascade)
   name             String? // optional passenger name for display
   subscriptionDate DateTime  @default(now()) @db.Date
   terminationDate  DateTime? @db.Date // تاريخ انتهاء الاشتراك (عند الاستقالة/الإيقاف)
@@ -1133,10 +943,9 @@ model BusPassenger {
   createdAt        DateTime  @default(now())
   updatedAt        DateTime  @updatedAt
 
-  @@unique([tenantId, busId, employeeId])
+  @@unique([busId, employeeId])
   @@index([employeeId])
   @@index([busId, status])
-  @@index([tenantId])
   @@map("bus_passengers")
 }
 
@@ -1145,8 +954,6 @@ model BusPassenger {
 // =============================================================================
 model AuditLog {
   id String @id @default(cuid())
-  tenantId  String?  @db.Uuid
-  tenant    Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   /// من نفّذ العملية (userId)
   actorId String?
@@ -1179,7 +986,6 @@ model AuditLog {
   @@index([targetType, createdAt])
   @@index([targetId])
   @@index([action, createdAt])
-  @@index([tenantId])
   @@map("audit_logs")
 }
 
@@ -1205,8 +1011,6 @@ enum NotificationSeverity {
 
 model Notification {
   id           String               @id @default(uuid()) @db.Uuid
-  tenantId  String?  @db.Uuid
-  tenant    Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   type         NotificationType
   severity     NotificationSeverity @default(INFO)
 
@@ -1228,7 +1032,7 @@ model Notification {
   metadata     Json?
 
   /// مفتاح إلغاء التكرار (يستخدمه تنبيه الغياب لمنع التكرار في نفس اليوم)
-  dedupeKey    String?
+  dedupeKey    String?              @unique
 
   isRead       Boolean              @default(false)
   readAt       DateTime?
@@ -1245,7 +1049,5 @@ model Notification {
   @@index([isDismissed, type])
   @@index([type, createdAt])
   @@index([employeeId])
-  @@unique([tenantId, dedupeKey])
-  @@index([tenantId])
   @@map("notifications")
 }

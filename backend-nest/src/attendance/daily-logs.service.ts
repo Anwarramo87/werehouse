@@ -28,7 +28,7 @@ export class DailyLogsService {
    * التحقق من وجود الموظف
    */
   private async assertEmployeeExists(employeeId: string) {
-    const employee = await this.prisma.employee.findUnique({
+    const employee = await this.prisma.employee.findFirst({
       where: { employeeId },
     });
 

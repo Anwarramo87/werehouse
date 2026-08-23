@@ -82,9 +82,9 @@ export class FinancesService {
 
     // جلب كل البيانات المتعلقة بالموظف في استعلام واحد متوازي (Performance)
     const [employee, salary, insurance, bonuses, advances] = await Promise.all([
-      this.prisma.employee.findUnique({ where: { employeeId } }),
-      this.prisma.employeeSalary.findUnique({ where: { employeeId } }),
-      this.prisma.employeeInsurance.findUnique({ where: { employeeId } }),
+      this.prisma.employee.findFirst({ where: { employeeId } }),
+      this.prisma.employeeSalary.findFirst({ where: { employeeId } }),
+      this.prisma.employeeInsurance.findFirst({ where: { employeeId } }),
       this.prisma.employeeBonus.findMany({
         where: {
           employeeId,

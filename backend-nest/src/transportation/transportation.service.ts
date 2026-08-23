@@ -95,7 +95,7 @@ export class TransportationService {
 
   async createBus(dto: CreateBusDto) {
     // تحقق من عدم تكرار رقم اللوحة
-    const existing = await this.prisma.bus.findUnique({
+    const existing = await this.prisma.bus.findFirst({
       where: { plateNumber: dto.plateNumber },
     });
     if (existing) {
@@ -129,7 +129,7 @@ export class TransportationService {
 
     // تحقق من عدم تكرار رقم اللوحة عند التعديل
     if (dto.plateNumber && dto.plateNumber !== bus.plateNumber) {
-      const conflict = await this.prisma.bus.findUnique({
+      const conflict = await this.prisma.bus.findFirst({
         where: { plateNumber: dto.plateNumber },
       });
       if (conflict) {
@@ -201,7 +201,7 @@ export class TransportationService {
     if (!bus) throw new NotFoundException(`Bus not found: ${busId}`);
 
     // تحقق من وجود الموظف
-    const employee = await this.prisma.employee.findUnique({
+    const employee = await this.prisma.employee.findFirst({
       where: { employeeId: dto.employeeId },
     });
     if (!employee) {
@@ -243,8 +243,8 @@ export class TransportationService {
         where: { busId: bus.id, status: 'active' },
       });
 
-      const existing = await tx.busPassenger.findUnique({
-        where: { busId_employeeId: { busId: bus.id, employeeId: dto.employeeId } },
+      const existing = await tx.busPassenger.findFirst({
+        where: { busId: bus.id, employeeId: dto.employeeId },
       });
 
       // الراكب النشط الموجود مسبقاً لا يزيد العدد؛ غير ذلك نتحقق من السعة
@@ -304,8 +304,8 @@ export class TransportationService {
       );
     }
 
-    const passenger = await this.prisma.busPassenger.findUnique({
-      where: { busId_employeeId: { busId: bus.id, employeeId } },
+    const passenger = await this.prisma.busPassenger.findFirst({
+      where: { busId: bus.id, employeeId },
     });
     if (!passenger || passenger.status !== 'active') {
       throw new NotFoundException(`Passenger ${employeeId} not found on this bus`);

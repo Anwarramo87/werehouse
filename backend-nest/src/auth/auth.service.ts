@@ -27,6 +27,8 @@ import { BiometricChallengeService } from './biometric-challenge.service';
 import { RefreshTokenService } from './refresh-token.service';
 import { AuthCacheService } from './auth-cache.service';
 import { toFactoryDateKey, resolveTimezoneOffsetMinutes } from '../common/utils/timezone.util';
+import { runUnscoped } from '../common/tenant/tenant-context';
+import { MANAGE_TENANTS, SUPERADMIN_ROLE } from '../common/tenant/tenant.constants';
 
 type BiometricChallengePurpose = 'REGISTER' | 'LOGIN';
 
@@ -97,15 +99,20 @@ export class AuthService {
   async login(dto: LoginDto) {
     const normalizedUsername = dto.username.trim();
 
-    let user = await this.prisma.user.findFirst({
-      where: { username: normalizedUsername },
-    });
-
-    if (!user) {
-      user = await this.prisma.user.findFirst({
+    // Identity resolution is cross-tenant by definition: at this point we do
+    // not yet know which factory the credential belongs to -- discovering that
+    // is the whole point of the lookup. Usernames and emails remain globally
+    // unique precisely so this stays unambiguous. Everything after the lookup
+    // runs under the caller's own tenant via the JWT.
+    const user = await runUnscoped('login-lookup', async () => {
+      const byUsername = await this.prisma.user.findFirst({
+        where: { username: normalizedUsername },
+      });
+      if (byUsername) return byUsername;
+      return this.prisma.user.findFirst({
         where: { email: normalizedUsername },
       });
-    }
+    });
 
     // Check lockout BEFORE password comparison to prevent brute-force on locked accounts
     if (user && this.isAccountLocked(user.lockoutUntil)) {
@@ -123,10 +130,15 @@ export class AuthService {
       throw new UnauthorizedException('بيانات الدخول غير صحيحة');
     }
 
-    await this.prisma.user.update({
-      where: { id: user.id },
-      data: { failedLoginAttempts: 0, lockoutUntil: null, lastLogin: new Date() },
-    });
+    // Must be `async () => await ...`: a PrismaPromise is lazy, so returning it
+    // would defer execution until after this AsyncLocalStorage scope closed,
+    // and the query would run under the request's empty scope instead.
+    await runUnscoped('login-success', async () =>
+      await this.prisma.user.update({
+        where: { id: user.id },
+        data: { failedLoginAttempts: 0, lockoutUntil: null, lastLogin: new Date() },
+      }),
+    );
 
     // Explicitly fetch roles or use cached roles to build payload
     const allRoles = await this.getRoles();
@@ -332,6 +344,7 @@ export class AuthService {
   }
 
   async refreshSession(refreshToken: string): Promise<SessionResult> {
+    return runUnscoped('refresh-session', async () => {
     const userId = await this.refreshTokens.consume(refreshToken);
     if (!userId) {
       throw new UnauthorizedException('Refresh token expired or invalid');
@@ -348,6 +361,7 @@ export class AuthService {
 
     await this.authCache.invalidateUser(userId);
     return this.createSession(user, this.buildAuthPayload(user));
+  });
   }
 
   async rotateSessionIfNeeded(user: any) {
@@ -364,6 +378,7 @@ export class AuthService {
   }
 
   async ensureAdminBootstrap() {
+    return runUnscoped('bootstrap-admin', async () => {
     const adminRole =
       (await this.prisma.role.findUnique({ where: { name: 'admin' } })) ??
       (await this.prisma.role.create({ data: { name: 'admin', permissions: AuthService.ADMIN_PERMISSIONS } }));
@@ -387,12 +402,24 @@ export class AuthService {
         },
       });
     }
+  });
   }
 
   async ensureSuperadminBootstrap() {
-    const adminRole =
-      (await this.prisma.role.findUnique({ where: { name: 'admin' } })) ??
-      (await this.prisma.role.create({ data: { name: 'admin', permissions: AuthService.ADMIN_PERMISSIONS } }));
+    return runUnscoped('bootstrap-superadmin', async () => {
+    // The overseer needs its OWN role, distinct from the per-factory `admin`.
+    // They used to share the `admin` role, which is why the two were
+    // indistinguishable; PermissionsGuard now grants blanket access to
+    // `superadmin` only, so a factory admin no longer inherits overseer rights.
+    const superadminRole =
+      (await this.prisma.role.findUnique({ where: { name: SUPERADMIN_ROLE } })) ??
+      (await this.prisma.role.create({
+        data: {
+          name: SUPERADMIN_ROLE,
+          description: 'Overseer: sees every factory, manages tenants and global backups',
+          permissions: [...AuthService.ADMIN_PERMISSIONS, MANAGE_TENANTS],
+        },
+      }));
 
     const username = this.config.get<string>('SUPERADMIN_USERNAME', 'superadmin');
     const email = this.config.get<string>('SUPERADMIN_EMAIL', 'superadmin@warehouse.local');
@@ -410,11 +437,20 @@ export class AuthService {
           username,
           email,
           passwordHash: hash,
-          roleId: adminRole.id,
+          roleId: superadminRole.id,
+          // No tenantId: the overseer belongs to no single factory.
           status: 'active',
         },
       });
+    } else if (existingSuperadmin.roleId !== superadminRole.id) {
+      // Existing installs have a superadmin still carrying the shared `admin`
+      // role. Promote it, otherwise the guard change locks them out entirely.
+      await this.prisma.user.update({
+        where: { id: existingSuperadmin.id },
+        data: { roleId: superadminRole.id, tenantId: null },
+      });
     }
+  });
   }
 
   private async handleAutoAttendance(user: any, dto: BiometricLoginFinishDto) {
@@ -482,6 +518,7 @@ export class AuthService {
       email: user.email,
       role: user.role?.name || 'staff',
       permissions: user.role?.permissions || [],
+      tenantId: user.tenantId ?? null,
     };
   }
 
@@ -502,22 +539,28 @@ export class AuthService {
     return !!lockoutUntil && lockoutUntil.getTime() > Date.now();
   }
 
+  // Brute-force bookkeeping runs on a failed login, i.e. before any tenant is
+  // established, so it has to be unscoped like the lookup that preceded it.
   private async registerFailedLoginAttempt(user: any) {
     const attempts = (user.failedLoginAttempts || 0) + 1;
 
     if (attempts >= DEFAULT_MAX_LOGIN_ATTEMPTS) {
       const lockoutUntil = new Date(Date.now() + DEFAULT_LOCKOUT_MINUTES * 60_000);
-      await this.prisma.user.update({
-        where: { id: user.id },
-        data: { lockoutUntil, failedLoginAttempts: 0 },
-      });
+      await runUnscoped('login-lockout', () =>
+        this.prisma.user.update({
+          where: { id: user.id },
+          data: { lockoutUntil, failedLoginAttempts: 0 },
+        }),
+      );
       return { locked: true };
     }
 
-    await this.prisma.user.update({
-      where: { id: user.id },
-      data: { failedLoginAttempts: attempts },
-    });
+    await runUnscoped('login-failed-attempt', () =>
+      this.prisma.user.update({
+        where: { id: user.id },
+        data: { failedLoginAttempts: attempts },
+      }),
+    );
 
     return { locked: false };
   }

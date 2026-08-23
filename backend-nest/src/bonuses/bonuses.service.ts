@@ -1,3 +1,4 @@
+import { tenantKey } from '../common/tenant/tenant-key';
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { paginatedResponse, resolvePagination } from '../common/utils/pagination.util';
@@ -87,7 +88,7 @@ export class BonusesService {
       // Still update the employee's base salary if not using bulk-raise
       if (dto.employeeId !== 'ALL' && dto.bonusAmount && dto.bonusAmount > 0) {
         await this.prisma.employee.update({
-          where: { employeeId: dto.employeeId },
+          where: tenantKey<Prisma.EmployeeWhereUniqueInput>({ employeeId: dto.employeeId }),
           data: {
             baseSalary: {
               increment: new Prisma.Decimal(dto.bonusAmount),

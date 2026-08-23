@@ -1,3 +1,4 @@
+import { tenantKey } from '../common/tenant/tenant-key';
 import {
   BadRequestException,
   Injectable,
@@ -319,13 +320,11 @@ export class PayrollService {
     } as Prisma.PayrollInputUncheckedCreateInput;
 
     return this.prisma.payrollInput.upsert({
-      where: {
-        employeeId_periodStart_periodEnd: {
-          employeeId: dto.employeeId,
+      where: tenantKey<Prisma.PayrollInputWhereUniqueInput>({
+        employeeId: dto.employeeId,
           periodStart: this.toDateOnly(periodStart),
           periodEnd: this.toDateOnly(periodEnd),
-        },
-      },
+      }),
       update: data,
       create: data,
     });
@@ -352,11 +351,11 @@ export class PayrollService {
   ): Promise<Prisma.Decimal> {
     // Fetch salary config
     const [employee, salaryRecord] = await Promise.all([
-      this.prisma.employee.findUnique({
+      this.prisma.employee.findFirst({
         where: { employeeId },
         select: { hourlyRate: true, baseSalary: true, scheduledStart: true, scheduledEnd: true },
       }),
-      this.prisma.employeeSalary.findUnique({ where: { employeeId } }),
+      this.prisma.employeeSalary.findFirst({ where: { employeeId } }),
     ]);
 
     if (!employee) {
@@ -786,7 +785,7 @@ export class PayrollService {
     const monthEnd = new Date(Date.UTC(Number(yearStr), Number(monthStr), 0, 23, 59, 59, 999));
 
     // 1. Fetch employee record
-    const employee = await this.prisma.employee.findUnique({ where: { employeeId } });
+    const employee = await this.prisma.employee.findFirst({ where: { employeeId } });
     if (!employee) {
       throw new NotFoundException(`Employee with ID ${employeeId} not found.`);
     }
@@ -848,7 +847,7 @@ export class PayrollService {
       return sum.plus(this.toDecimal(p.amount));
     }, new Prisma.Decimal(0));
 
-    const employeeSalary = await this.prisma.employeeSalary.findUnique({ where: { employeeId } });
+    const employeeSalary = await this.prisma.employeeSalary.findFirst({ where: { employeeId } });
     const insuranceDeduction = this.toDecimal(employeeSalary?.insuranceAmount);
 
     // Calculate absenceDays for diagnostic logging (prorated earned salary already handles financial impact)
@@ -1321,7 +1320,7 @@ export class PayrollService {
   async upsertReceipt(employeeId: string, dto: UpsertPayrollReceiptDto, user?: AuthenticatedUser) {
     this.resolveMonthPeriod(dto.month);
 
-    const employee = await this.prisma.employee.findUnique({
+    const employee = await this.prisma.employee.findFirst({
       where: { employeeId },
       select: { employeeId: true },
     });
@@ -1351,12 +1350,10 @@ export class PayrollService {
 
     const payrollRunId = await this.resolveLatestPayrollRunIdForMonth(dto.month);
     const receipt = await this.prisma.payrollReceipt.upsert({
-      where: {
-        employeeId_month: {
-          employeeId,
+      where: tenantKey<Prisma.PayrollReceiptWhereUniqueInput>({
+        employeeId,
           month: dto.month,
-        },
-      },
+      }),
       update: {
         payrollRunId,
         isReceived: true,
@@ -1428,12 +1425,10 @@ export class PayrollService {
     const data = await this.prisma.$transaction(
       uniqueEmployeeIds.map((employeeId) =>
         this.prisma.payrollReceipt.upsert({
-          where: {
-            employeeId_month: {
-              employeeId,
+          where: tenantKey<Prisma.PayrollReceiptWhereUniqueInput>({
+            employeeId,
               month: dto.month,
-            },
-          },
+          }),
           update: {
             payrollRunId,
             isReceived: true,

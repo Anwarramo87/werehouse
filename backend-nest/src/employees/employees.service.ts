@@ -1,3 +1,4 @@
+import { tenantKey } from '../common/tenant/tenant-key';
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import * as bcrypt from 'bcryptjs';
@@ -488,7 +489,7 @@ export class EmployeesService {
   }
 
   async getByEmployeeId(employeeId: string) {
-    const employee = await this.prisma.employee.findUnique({
+    const employee = await this.prisma.employee.findFirst({
       where: { employeeId },
       include: this.employeeSelect(),
     });
@@ -500,10 +501,10 @@ export class EmployeesService {
 
   async update(employeeId: string, dto: UpdateEmployeeDto) {
     const [employee, existingSalary] = await Promise.all([
-      this.prisma.employee.findUnique({
+      this.prisma.employee.findFirst({
         where: { employeeId },
       }),
-      this.prisma.employeeSalary.findUnique({ where: { employeeId } }),
+      this.prisma.employeeSalary.findFirst({ where: { employeeId } }),
     ]);
 
     if (!employee) throw new NotFoundException('Employee not found');
@@ -675,7 +676,7 @@ export class EmployeesService {
       }
 
       const updatedEmployee = await transaction.employee.update({
-        where: { employeeId },
+        where: tenantKey<Prisma.EmployeeWhereUniqueInput>({ employeeId }),
         data: payload,
         include: this.employeeSelect(),
       });
@@ -720,7 +721,7 @@ export class EmployeesService {
       };
 
       const salaryRecord = await transaction.employeeSalary.upsert({
-        where: { employeeId },
+        where: tenantKey<Prisma.EmployeeSalaryWhereUniqueInput>({ employeeId }),
         update: salaryPayload,
         create: salaryPayload,
       });
@@ -728,12 +729,12 @@ export class EmployeesService {
       if (salaryRecord) {
         const mirror = buildEmployeeSalaryMirror(resolveSalary(updatedEmployee, salaryRecord));
         await transaction.employee.update({
-          where: { employeeId },
+          where: tenantKey<Prisma.EmployeeWhereUniqueInput>({ employeeId }),
           data: mirror,
         });
       }
 
-      return transaction.employee.findUnique({
+      return transaction.employee.findFirst({
         where: { employeeId },
         include: this.employeeSelect(),
       });
@@ -771,7 +772,7 @@ export class EmployeesService {
     };
 
     const salaryPromise = canViewSalary
-      ? this.prisma.employeeSalary.findUnique({ where: { employeeId } })
+      ? this.prisma.employeeSalary.findFirst({ where: { employeeId } })
       : Promise.resolve(null);
 
     const attendancePromise = canViewAttendance
@@ -907,7 +908,7 @@ export class EmployeesService {
     terminationType: string,
     successMessage: string,
   ) {
-    const employee = await this.prisma.employee.findUnique({ where: { employeeId } });
+    const employee = await this.prisma.employee.findFirst({ where: { employeeId } });
 
     if (!employee) throw new NotFoundException('Employee not found');
 
@@ -927,7 +928,7 @@ export class EmployeesService {
 
     const updated = await this.prisma.$transaction(async (tx) => {
       const updatedEmployee = await tx.employee.update({
-        where: { employeeId },
+        where: tenantKey<Prisma.EmployeeWhereUniqueInput>({ employeeId }),
         data: {
           status,
           terminationDate,
@@ -981,7 +982,7 @@ export class EmployeesService {
   }
 
   async terminateEmployee(dto: TerminateEmployeeBodyDto, user: AuthenticatedUser) {
-    const employee = await this.prisma.employee.findUnique({
+    const employee = await this.prisma.employee.findFirst({
       where: { employeeId: dto.employeeId },
     });
 
@@ -1017,7 +1018,7 @@ export class EmployeesService {
     const result = await this.prisma.$transaction(async (tx) => {
       // Update employee status
       const updated = await tx.employee.update({
-        where: { employeeId: dto.employeeId },
+        where: tenantKey<Prisma.EmployeeWhereUniqueInput>({ employeeId: dto.employeeId }),
         data: {
           status,
           terminationDate,
@@ -1113,7 +1114,7 @@ export class EmployeesService {
     const results = await this.prisma.$transaction(
       employees.map((emp) =>
         this.prisma.employee.update({
-          where: { employeeId: emp.employeeId },
+          where: tenantKey<Prisma.EmployeeWhereUniqueInput>({ employeeId: emp.employeeId }),
           data: {
             status,
             terminationDate,
@@ -1141,12 +1142,12 @@ export class EmployeesService {
   }
 
   async settle(employeeId: string) {
-    const employee = await this.prisma.employee.findUnique({ where: { employeeId } });
+    const employee = await this.prisma.employee.findFirst({ where: { employeeId } });
 
     if (!employee) throw new NotFoundException('Employee not found');
 
     const updated = await this.prisma.employee.update({
-      where: { employeeId },
+      where: tenantKey<Prisma.EmployeeWhereUniqueInput>({ employeeId }),
       data: {
         isSettled: true,
       },
@@ -1158,7 +1159,7 @@ export class EmployeesService {
 
   async rehireEmployee(dto: RehireEmployeeDto, user: AuthenticatedUser) {
     // 1. Validate employee exists and is resigned/terminated
-    const employee = await this.prisma.employee.findUnique({
+    const employee = await this.prisma.employee.findFirst({
       where: { employeeId: dto.employeeId },
     });
 
@@ -1209,7 +1210,7 @@ export class EmployeesService {
       }
 
       const updatedEmployee = await tx.employee.update({
-        where: { employeeId: dto.employeeId },
+        where: tenantKey<Prisma.EmployeeWhereUniqueInput>({ employeeId: dto.employeeId }),
         data: updateData,
         include: this.employeeSelect(),
       });
@@ -1246,7 +1247,7 @@ export class EmployeesService {
 
   async processFinancialSettlement(dto: FinancialSettlementDto, user: AuthenticatedUser) {
     // 1. Validate employee exists and is resigned/terminated
-    const employee = await this.prisma.employee.findUnique({
+    const employee = await this.prisma.employee.findFirst({
       where: { employeeId: dto.employeeId },
     });
 
@@ -1295,7 +1296,7 @@ export class EmployeesService {
 
       // 4. Update employee financial status
       const updatedEmployee = await tx.employee.update({
-        where: { employeeId: dto.employeeId },
+        where: tenantKey<Prisma.EmployeeWhereUniqueInput>({ employeeId: dto.employeeId }),
         data: {
           financialSettlementStatus: 'completed',
           financialSettlementDate: settlementDate,
@@ -1456,7 +1457,7 @@ export class EmployeesService {
   }
 
   async remove(employeeId: string, deletedBy?: string) {
-    const employee = await this.prisma.employee.findUnique({ where: { employeeId } });
+    const employee = await this.prisma.employee.findFirst({ where: { employeeId } });
 
     if (!employee) throw new NotFoundException('Employee not found');
 
@@ -1471,7 +1472,7 @@ export class EmployeesService {
       });
 
       await tx.employee.update({
-        where: { employeeId },
+        where: tenantKey<Prisma.EmployeeWhereUniqueInput>({ employeeId }),
         data: {
           status: 'terminated',
           terminationDate: employee.terminationDate || new Date(),
@@ -1495,7 +1496,7 @@ export class EmployeesService {
 
     await this.prisma.$transaction(async (tx) => {
       await tx.employee.update({
-        where: { employeeId: payload.employeeId },
+        where: tenantKey<Prisma.EmployeeWhereUniqueInput>({ employeeId: payload.employeeId }),
         data: {
           status: 'active',
           terminationDate: null,

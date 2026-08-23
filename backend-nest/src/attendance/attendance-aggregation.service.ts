@@ -415,7 +415,7 @@ export class AttendanceAggregationService {
     const dateOnly = this.toDateOnly(dateStr);
 
     // ── Step 1: Fetch employee schedule ──────────────────────────────────────
-    const employee = await this.prisma.employee.findUnique({
+    const employee = await this.prisma.employee.findFirst({
       where: { employeeId },
       select: {
         employeeId: true,

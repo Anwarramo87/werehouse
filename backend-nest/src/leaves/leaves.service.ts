@@ -1,3 +1,4 @@
+import { tenantKey } from '../common/tenant/tenant-key';
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma, LeaveRequestStatus, LeaveRequestType } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
@@ -77,7 +78,7 @@ export class LeavesService {
   }
 
   private async assertEmployeeExists(employeeId: string) {
-    const employee = await this.prisma.employee.findUnique({ where: { employeeId } });
+    const employee = await this.prisma.employee.findFirst({ where: { employeeId } });
     if (!employee) {
       throw new BadRequestException(`Employee not found: ${employeeId}`);
     }
@@ -122,7 +123,7 @@ export class LeavesService {
     }
 
     return {
-      employee: { connect: { employeeId: dto.employeeId } },
+      employee: { connect: tenantKey<Prisma.EmployeeWhereUniqueInput>({ employeeId: dto.employeeId }) },
       leaveType: dto.leaveType as LeaveRequestType,
       status: dto.status ? (dto.status as LeaveRequestStatus) : LeaveRequestStatus.APPROVED,
       isPaid: dto.isPaid ?? false,
@@ -196,9 +197,9 @@ export class LeavesService {
 
     if (delta.field === 'unpaidHours') {
       await tx.payrollInput.upsert({
-        where: {
-          employeeId_periodStart_periodEnd: { employeeId, periodStart, periodEnd },
-        },
+        where: tenantKey<Prisma.PayrollInputWhereUniqueInput>({
+          employeeId, periodStart, periodEnd,
+        }),
         update: { unpaidHours: { increment: new Prisma.Decimal(signedAmount) } },
         create: {
           employeeId,
@@ -213,9 +214,9 @@ export class LeavesService {
     const intAmount = Math.trunc(signedAmount);
     const field = delta.field;
     await tx.payrollInput.upsert({
-      where: {
-        employeeId_periodStart_periodEnd: { employeeId, periodStart, periodEnd },
-      },
+      where: tenantKey<Prisma.PayrollInputWhereUniqueInput>({
+        employeeId, periodStart, periodEnd,
+      }),
       update: { [field]: { increment: intAmount } } as Prisma.PayrollInputUpdateInput,
       create: {
         employeeId,
@@ -555,7 +556,7 @@ export class LeavesService {
 
     if (dto.employeeId !== undefined) {
       await this.assertEmployeeExists(dto.employeeId);
-      data.employee = { connect: { employeeId: dto.employeeId } };
+      data.employee = { connect: tenantKey<Prisma.EmployeeWhereUniqueInput>({ employeeId: dto.employeeId }) };
     }
     if (dto.leaveType !== undefined) data.leaveType = dto.leaveType as LeaveRequestType;
     if (dto.status !== undefined) data.status = dto.status as LeaveRequestStatus;

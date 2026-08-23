@@ -4,6 +4,7 @@ import { Prisma, NotificationType, NotificationSeverity } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeGateway, NotificationRealtimePayload } from '../realtime/realtime.gateway';
 import { toFactoryDateKey, factoryDateKeyDayOfWeek } from '../common/utils/timezone.util';
+import { tenantKey } from '../common/tenant/tenant-key';
 
 type CreateNotificationInput = {
   type: NotificationType;
@@ -48,7 +49,7 @@ export class NotificationsService implements OnModuleInit {
     try {
       // إلغاء التكرار: إن وُجد dedupeKey مسبقاً نتخطى الإنشاء.
       if (input.dedupeKey) {
-        const existing = await this.prisma.notification.findUnique({
+        const existing = await this.prisma.notification.findFirst({
           where: { dedupeKey: input.dedupeKey },
           select: { id: true },
         });
@@ -211,7 +212,7 @@ export class NotificationsService implements OnModuleInit {
         const lateMinutes = Math.floor((now.getTime() - employeeWorkStart.getTime()) / 60000);
 
         await this.prisma.notification.upsert({
-          where: { dedupeKey },
+          where: tenantKey<Prisma.NotificationWhereUniqueInput>({ dedupeKey }),
           create: {
             type: NotificationType.ABSENT,
             severity: NotificationSeverity.WARNING,
@@ -231,7 +232,7 @@ export class NotificationsService implements OnModuleInit {
         });
 
         // البثّ اللحظي حتى لو كان موجوداً مسبقاً (للتنبيه المتكرر)
-        const existing = await this.prisma.notification.findUnique({
+        const existing = await this.prisma.notification.findFirst({
           where: { dedupeKey },
         });
         if (existing && !existing.isDismissed) {

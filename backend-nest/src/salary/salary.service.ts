@@ -1,3 +1,4 @@
+import { tenantKey } from '../common/tenant/tenant-key';
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
@@ -72,7 +73,7 @@ export class SalaryService {
   }
 
   async getByEmployee(employeeId: string) {
-    const record = await this.prisma.employeeSalary.findUnique({ where: { employeeId } });
+    const record = await this.prisma.employeeSalary.findFirst({ where: { employeeId } });
     if (!record) throw new NotFoundException(`No salary record for employee ${employeeId}`);
     return this.withMonthlySalary(record);
   }
@@ -105,16 +106,16 @@ export class SalaryService {
     };
 
     const record = await this.prisma.employeeSalary.upsert({
-      where: { employeeId },
+      where: tenantKey<Prisma.EmployeeSalaryWhereUniqueInput>({ employeeId }),
       update: data,
       create: { employeeId, ...data },
     });
 
-    const employee = await this.prisma.employee.findUnique({ where: { employeeId } });
+    const employee = await this.prisma.employee.findFirst({ where: { employeeId } });
     if (employee) {
       const resolved = resolveSalary(employee, record);
       await this.prisma.employee.update({
-        where: { employeeId },
+        where: tenantKey<Prisma.EmployeeWhereUniqueInput>({ employeeId }),
         data: {
           ...buildEmployeeSalaryMirror(resolved),
           ...(dto.profession ? { profession: dto.profession, jobTitle: dto.profession } : {}),
@@ -128,7 +129,7 @@ export class SalaryService {
   }
 
   async remove(employeeId: string, deletedBy?: string) {
-    const record = await this.prisma.employeeSalary.findUnique({ where: { employeeId } });
+    const record = await this.prisma.employeeSalary.findFirst({ where: { employeeId } });
     if (!record) throw new NotFoundException(`No salary record for employee ${employeeId}`);
 
     // نقل السجل إلى سلة المهملات (حذف ناعم) بدلاً من الحذف النهائي
@@ -154,7 +155,9 @@ export class SalaryService {
         },
       });
 
-      await tx.employeeSalary.delete({ where: { employeeId } });
+      await tx.employeeSalary.delete({
+        where: tenantKey<Prisma.EmployeeSalaryWhereUniqueInput>({ employeeId }),
+      });
     });
 
     await this.invalidateDashboardCache();
@@ -173,14 +176,14 @@ export class SalaryService {
 
     const p = history.payload as Record<string, string | null | undefined>;
 
-    const employee = await this.prisma.employee.findUnique({ where: { employeeId: String(p.employeeId) } });
+    const employee = await this.prisma.employee.findFirst({ where: { employeeId: String(p.employeeId) } });
     if (!employee) {
       throw new NotFoundException(`لا يمكن الاستعادة — الموظف ${p.employeeId} غير موجود`);
     }
 
     return this.prisma.$transaction(async (tx) => {
       await tx.employeeSalary.upsert({
-        where: { employeeId: String(p.employeeId) },
+        where: tenantKey<Prisma.EmployeeSalaryWhereUniqueInput>({ employeeId: String(p.employeeId) }),
         create: {
           id: p.id ?? undefined,
           employeeId: String(p.employeeId),
@@ -250,7 +253,7 @@ export class SalaryService {
       const newBaseSalary = record.baseSalary.plus(raise);
       transactionOperations.push(
         this.prisma.employeeSalary.update({
-          where: { employeeId: record.employeeId },
+          where: tenantKey<Prisma.EmployeeSalaryWhereUniqueInput>({ employeeId: record.employeeId }),
           data: { baseSalary: newBaseSalary },
         }),
       );
@@ -258,7 +261,7 @@ export class SalaryService {
         const resolved = resolveSalary(record.employee, { ...record, baseSalary: newBaseSalary });
         transactionOperations.push(
           this.prisma.employee.update({
-            where: { employeeId: record.employeeId },
+            where: tenantKey<Prisma.EmployeeWhereUniqueInput>({ employeeId: record.employeeId }),
             data: buildEmployeeSalaryMirror(resolved),
           }),
         );

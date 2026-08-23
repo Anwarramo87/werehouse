@@ -39,7 +39,7 @@ export class PublicAttendanceController {
 
   private async safeGetEmployeeName(employeeId: string): Promise<string> {
     try {
-      const employee = await this.prisma.employee.findUnique({
+      const employee = await this.prisma.employee.findFirst({
         where: { employeeId },
         select: { name: true },
       });

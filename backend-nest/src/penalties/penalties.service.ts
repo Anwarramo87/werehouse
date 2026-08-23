@@ -18,7 +18,7 @@ export class PenaltiesService {
   ) {}
 
   private async assertEmployeeExists(employeeId: string) {
-    const employee = await this.prisma.employee.findUnique({ where: { employeeId } });
+    const employee = await this.prisma.employee.findFirst({ where: { employeeId } });
     if (!employee) {
       throw new BadRequestException(`Employee not found: ${employeeId}`);
     }

@@ -21,6 +21,7 @@ import { ImportsModule } from './imports/imports.module';
 import { PrismaModule } from './prisma/prisma.module';
 import { RequestLoggingMiddleware } from './common/middleware/request-logging.middleware';
 import { CsrfOriginCheckMiddleware } from './common/middleware/csrf-origin-check.middleware';
+import { TenantMiddleware } from './common/tenant/tenant.middleware';
 import { SalaryModule } from './salary/salary.module';
 import { AdvancesModule } from './advances/advances.module';
 import { InsuranceModule } from './insurance/insurance.module';
@@ -241,7 +242,10 @@ const queueInfraModules = queuesEnabled
 export class AppModule implements NestModule {
   configure(consumer: MiddlewareConsumer) {
     consumer
-      .apply(RequestLoggingMiddleware, CsrfOriginCheckMiddleware)
+      // TenantMiddleware must come first: it opens the AsyncLocalStorage scope
+      // that every downstream Prisma call reads. JwtStrategy then fills it in
+      // from the verified token. Without it the Prisma extension fails closed.
+      .apply(TenantMiddleware, RequestLoggingMiddleware, CsrfOriginCheckMiddleware)
       .forRoutes({ path: '*path', method: RequestMethod.ALL });
   }
 }

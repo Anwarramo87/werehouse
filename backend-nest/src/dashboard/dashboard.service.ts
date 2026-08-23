@@ -280,8 +280,8 @@ export class DashboardService {
     for (const rec of todayAttendanceRecords) {
       if (rec.type === 'IN' && !presentMap.has(rec.employeeId)) {
         presentMap.set(rec.employeeId, {
-          name: rec.employee.name,
-          department: rec.employee.department,
+          name: rec.employee!.name,
+          department: rec.employee!.department,
           checkIn: formatFactoryLocalTime(rec.timestamp),
           checkOut: null,
         });
@@ -320,10 +320,10 @@ export class DashboardService {
       const sp = rec.shiftPair as Record<string, unknown> | null;
       firstInMap.set(rec.employeeId, {
         timestamp: rec.timestamp,
-        scheduledStart: rec.employee.scheduledStart ?? null,
+        scheduledStart: rec.employee!.scheduledStart ?? null,
         shiftPairMinutesLate:
           sp?.minutesLate !== null && sp?.minutesLate !== undefined ? Number(sp.minutesLate) : null,
-        name: rec.employee.name,
+        name: rec.employee!.name,
       });
     }
 
@@ -375,15 +375,15 @@ export class DashboardService {
       if (overtimeMinutes <= 0) continue;
 
       const lastOut = lastOutMap.get(log.employeeId);
-      const scheduledEnd = log.employee.scheduledEnd || '16:00';
-      const resolved = resolveSalary(log.employee, log.employee.employeeSalary);
+      const scheduledEnd = log.employee!.scheduledEnd || '16:00';
+      const resolved = resolveSalary(log.employee!, log.employee!.employeeSalary);
       const overtimeHours = overtimeMinutes / 60;
       const overtimePay = Number((resolved.hourlyRate * overtimeHours * 1.5).toFixed(2));
 
       overtimeEmployees.push({
         employeeId: log.employeeId,
-        name: log.employee.name,
-        department: log.employee.department,
+        name: log.employee!.name,
+        department: log.employee!.department,
         scheduledEnd,
         actualCheckOut: lastOut ? formatFactoryLocalTime(lastOut.timestamp) : scheduledEnd,
         overtimeMinutes,
@@ -396,7 +396,7 @@ export class DashboardService {
     for (const rec of lastOutMap.values()) {
       if (overtimeEmployeeIds.has(rec.employeeId)) continue;
 
-      const scheduledEnd = rec.employee.scheduledEnd || '16:00';
+      const scheduledEnd = rec.employee!.scheduledEnd || '16:00';
 
       // Prefer shiftPair.overtimeMinutes (from biometric pairing) when available,
       // otherwise fall back to computing checkOut - scheduledEnd directly.
@@ -419,13 +419,13 @@ export class DashboardService {
       if (overtimeMinutes <= 0) continue;
 
       const overtimeHours = overtimeMinutes / 60;
-      const resolved = resolveSalary(rec.employee, rec.employee.employeeSalary);
+      const resolved = resolveSalary(rec.employee!, rec.employee!.employeeSalary);
       const overtimePay = Number((resolved.hourlyRate * overtimeHours * 1.5).toFixed(2));
 
       overtimeEmployees.push({
         employeeId: rec.employeeId,
-        name: rec.employee.name,
-        department: rec.employee.department,
+        name: rec.employee!.name,
+        department: rec.employee!.department,
         scheduledEnd,
         actualCheckOut: formatFactoryLocalTime(rec.timestamp),
         overtimeMinutes,

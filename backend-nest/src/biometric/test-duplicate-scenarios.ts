@@ -1,3 +1,5 @@
+import { tenantKey } from '../common/tenant/tenant-key';
+import { Prisma } from '@prisma/client';
 /**
  * 🧪 Test Duplicate Handling Scenarios
  * 
@@ -140,7 +142,7 @@ async function runLiveTest() {
   try {
     // Create test employee if doesn't exist
     await prisma.employee.upsert({
-      where: { employeeId: testEmployeeId },
+      where: tenantKey<Prisma.EmployeeWhereUniqueInput>({ employeeId: testEmployeeId }),
       update: {},
       create: {
         employeeId: testEmployeeId,

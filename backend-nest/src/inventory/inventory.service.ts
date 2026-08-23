@@ -171,7 +171,7 @@ export class InventoryService {
   }
 
   async createProduct(dto: CreateProductDto, actor?: Actor, req?: Request) {
-    const existing = await this.prisma.product.findUnique({ where: { sku: dto.sku } });
+    const existing = await this.prisma.product.findFirst({ where: { sku: dto.sku } });
     if (existing) throw new ConflictException('SKU already exists');
 
     const product = await this.prisma.product.create({
@@ -270,15 +270,15 @@ export class InventoryService {
       throw new BadRequestException('Change must be a non-zero number');
     }
 
-    const product = await this.prisma.product.findUnique({ where: { sku: dto.sku }, select: { sku: true } });
+    const product = await this.prisma.product.findFirst({ where: { sku: dto.sku }, select: { sku: true } });
     if (!product) throw new NotFoundException(`Product with SKU "${dto.sku}" not found`);
 
     const type: StockMovementType = dto.type ?? (change > 0 ? StockMovementType.IN : StockMovementType.OUT);
 
     // Block going below zero on hand for deductions.
     if (change < 0) {
-      const current = await this.prisma.stockLevel.findUnique({
-        where: { sku_location: { sku: dto.sku, location: dto.location } },
+      const current = await this.prisma.stockLevel.findFirst({
+        where: { sku: dto.sku, location: dto.location },
         select: { quantity: true },
       });
       if (!current) throw new NotFoundException('Stock level not found');
@@ -426,8 +426,8 @@ export class InventoryService {
   }
 
   private async assertStockLevelExistsOrThrow(sku: string, location: string) {
-    const stock = await this.prisma.stockLevel.findUnique({
-      where: { sku_location: { sku, location } },
+    const stock = await this.prisma.stockLevel.findFirst({
+      where: { sku, location },
       select: { id: true },
     });
     if (!stock) {
@@ -452,12 +452,30 @@ export class InventoryService {
           orderBy: { createdAt: 'desc' },
           skip,
           take: limit,
-          include: { product: { select: { name: true } } },
         }),
         this.prisma.stockMovement.count({ where }),
       ]);
 
-      return paginatedResponse(movements, page, limit, total);
+      // Movements no longer carry a foreign key to Product: an SKU is only
+      // unique within a factory now, and a composite FK with onDelete SetNull
+      // would try to null tenantId. Keeping `sku` denormalized also means the
+      // movement history survives a product being deleted, which is what an
+      // audit trail should do. Resolve the display names in one extra query.
+      const skus = [...new Set(movements.map((m) => m.sku).filter((s): s is string => !!s))];
+      const products = skus.length
+        ? await this.prisma.product.findMany({
+            where: { sku: { in: skus } },
+            select: { sku: true, name: true },
+          })
+        : [];
+      const nameBySku = new Map(products.map((p) => [p.sku, p.name]));
+
+      const enriched = movements.map((m) => ({
+        ...m,
+        product: m.sku ? { name: nameBySku.get(m.sku) ?? null } : null,
+      }));
+
+      return paginatedResponse(enriched, page, limit, total);
     });
   }
 
@@ -539,7 +557,7 @@ export class InventoryService {
   }
 
   async createWarehouse(dto: CreateWarehouseDto, actor?: Actor, req?: Request) {
-    const existing = await this.prisma.warehouse.findUnique({ where: { code: dto.code } });
+    const existing = await this.prisma.warehouse.findFirst({ where: { code: dto.code } });
     if (existing) throw new ConflictException('Warehouse code already exists');
 
     const warehouse = await this.prisma.warehouse.create({
@@ -557,7 +575,7 @@ export class InventoryService {
     if (!existing) throw new NotFoundException('Warehouse not found');
 
     if (dto.code && dto.code !== existing.code) {
-      const collision = await this.prisma.warehouse.findUnique({ where: { code: dto.code } });
+      const collision = await this.prisma.warehouse.findFirst({ where: { code: dto.code } });
       if (collision) throw new ConflictException('Warehouse code already exists');
     }
 
