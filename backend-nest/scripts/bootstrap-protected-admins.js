@@ -47,6 +47,7 @@ async function upsertProtectedUser(prisma, input) {
         passwordHash,
         roleId: input.roleId,
         status: 'active',
+        ...(input.tenantId ? { tenantId: input.tenantId } : {}),
       },
     });
   }
@@ -61,6 +62,7 @@ async function upsertProtectedUser(prisma, input) {
       passwordHash,
       roleId: input.roleId,
       status: 'active',
+      ...(input.tenantId ? { tenantId: input.tenantId } : {}),
     },
   });
 }
@@ -81,6 +83,14 @@ async function main() {
     const superUsername = (process.env.SUPERADMIN_USERNAME || 'superadmin').toLowerCase();
     const superEmail = (process.env.SUPERADMIN_EMAIL || 'superadmin@warehouse.local').toLowerCase();
     const superPassword = process.env.SUPERADMIN_PASSWORD || 'SuperAdmin@2026!';
+
+    // Ensure a default tenant exists for admin/developer users
+    let defaultTenant = await prisma.tenant.findUnique({ where: { code: 'default' } });
+    if (!defaultTenant) {
+      defaultTenant = await prisma.tenant.create({
+        data: { name: 'Default', code: 'default', status: 'active' },
+      });
+    }
 
     let adminRole = await prisma.role.findUnique({ where: { name: 'admin' } });
 
@@ -110,6 +120,7 @@ async function main() {
       email: adminEmail,
       password: adminPassword,
       roleId: adminRole.id,
+      tenantId: defaultTenant.id,
     });
 
     const devUser = await upsertProtectedUser(prisma, {
@@ -117,13 +128,25 @@ async function main() {
       email: devEmail,
       password: devPassword,
       roleId: adminRole.id,
+      tenantId: defaultTenant.id,
     });
+
+    let superadminRole = await prisma.role.findUnique({ where: { name: 'superadmin' } });
+    if (!superadminRole) {
+      superadminRole = await prisma.role.create({
+        data: {
+          name: 'superadmin',
+          description: 'Super administrator — sees all tenants',
+          permissions: [...ADMIN_PERMISSIONS, 'manage_roles', 'manage_tenants'],
+        },
+      });
+    }
 
     const superUser = await upsertProtectedUser(prisma, {
       username: superUsername,
       email: superEmail,
       password: superPassword,
-      roleId: adminRole.id,
+      roleId: superadminRole.id,
     });
 
     console.log('Protected admins ensured.');
