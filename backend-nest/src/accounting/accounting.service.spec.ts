@@ -12,6 +12,7 @@ describe('AccountingService', () => {
     journalEntryLine: Record<string, jest.Mock>;
   } = {
     account: {
+      findFirst: jest.fn(),
       findUnique: jest.fn(),
       findMany: jest.fn(),
       create: jest.fn(),
@@ -42,7 +43,7 @@ describe('AccountingService', () => {
 
   describe('createAccount', () => {
     it('throws ConflictException when the code already exists', async () => {
-      prismaMock.account.findUnique.mockResolvedValue({ id: 'acc-1', code: '1000' });
+      prismaMock.account.findFirst.mockResolvedValue({ id: 'acc-1', code: '1000' });
 
       await expect(
         service.createAccount({ code: '1000', name: 'Cash', type: 'asset' }),
@@ -50,7 +51,7 @@ describe('AccountingService', () => {
     });
 
     it('creates an account', async () => {
-      prismaMock.account.findUnique.mockResolvedValue(null);
+      prismaMock.account.findFirst.mockResolvedValue(null);
       prismaMock.account.create.mockResolvedValue({ id: 'acc-1', code: '1000', name: 'Cash' });
 
       const result = await service.createAccount({ code: '1000', name: 'Cash', type: 'asset' });

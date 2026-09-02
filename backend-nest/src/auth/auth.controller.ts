@@ -22,6 +22,7 @@ import { BiometricLoginStartDto } from './dto/biometric-login-start.dto';
 import { BiometricRegisterFinishDto } from './dto/biometric-register-finish.dto';
 import { BiometricRegisterStartDto } from './dto/biometric-register-start.dto';
 import { BiometricRevokeDto } from './dto/biometric-revoke.dto';
+import { SUPERADMIN_ROLE } from '../common/tenant/tenant.constants';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { PermissionsGuard } from '../common/guards/permissions.guard';
 import { Permissions } from '../common/decorators/permissions.decorator';
@@ -204,11 +205,22 @@ export class AuthController implements OnModuleInit {
     return this.authService.listUsers();
   }
 
+  // Gated on `manage_users`, not `manage_roles`. Assigning a user or employee to
+  // a role needs to *read* the role list, which is not privilege escalation --
+  // editing roles is, and that stays superadmin-only. Because `manage_roles` is
+  // in SUPERADMIN_ONLY_PERMISSIONS, naming it here made PermissionsGuard reject
+  // every factory admin, so the roles dropdown never loaded for them.
   @UseGuards(JwtAuthGuard, PermissionsGuard)
-  @Permissions('manage_roles')
+  @Permissions('manage_users')
   @Get('roles')
   async getRoles(@CurrentUser() user: AuthenticatedUser, @Req() req: Request) {
     const roles = await this.authService.getRoles();
+    // Only the overseer sees the permission matrix itself; everyone else gets
+    // just enough to render a role picker.
+    const canSeePermissions = (user?.roles || []).includes(SUPERADMIN_ROLE);
+    const payload = canSeePermissions
+      ? roles
+      : roles.map((role) => ({ id: role.id, name: role.name, description: role.description }));
     this.audit.log(
       {
         action: 'role.read',
@@ -219,7 +231,7 @@ export class AuthController implements OnModuleInit {
       },
       req,
     );
-    return roles;
+    return payload;
   }
 
   private setAuthCookie(res: Response, token: string) {

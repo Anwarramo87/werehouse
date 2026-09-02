@@ -245,11 +245,16 @@ export class AccountingService {
 
     const totals = new Map<string, { code: string; name: string; type: string; debit: number; credit: number }>();
     for (const line of lines) {
-      const key = line.account.code;
+      // `account` is typed optional because its foreign key is the composite
+      // (tenantId, accountId) and tenantId is nullable in the Prisma model.
+      // The column itself is NOT NULL and the relation was included, so the row
+      // is always present.
+      const account = line.account!;
+      const key = account.code;
       const current = totals.get(key) ?? {
-        code: line.account.code,
-        name: line.account.name,
-        type: line.account.type,
+        code: account.code,
+        name: account.name,
+        type: account.type,
         debit: 0,
         credit: 0,
       };

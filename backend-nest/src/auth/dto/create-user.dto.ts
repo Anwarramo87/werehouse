@@ -1,4 +1,4 @@
-import { IsEmail, IsNotEmpty, IsOptional, IsString, MinLength } from 'class-validator';   
+import { IsEmail, IsNotEmpty, IsOptional, IsString, IsUUID, MinLength } from 'class-validator';
 export class CreateUserDto {
   @IsString()
   @IsNotEmpty()
@@ -23,4 +23,13 @@ export class CreateUserDto {
   @IsOptional()
   @IsString()
   photo?: string;
+
+  /**
+   * Factory the new user belongs to. Only the super admin may set it -- a
+   * factory admin always creates users inside their own factory, and the value
+   * is ignored for them (see AuthService.createUser).
+   */
+  @IsOptional()
+  @IsUUID()
+  tenantId?: string;
 }

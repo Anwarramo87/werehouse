@@ -35,6 +35,9 @@ import {
   validateScheduleTimes,
 } from '../common/utils/work-hours.util';
 
+const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 const DEFAULT_PROFILE_RANGE_DAYS = 30;
 const DEFAULT_PROFILE_LIMIT = 200;
 
@@ -84,20 +87,64 @@ export class EmployeesService {
     return parsed;
   }
 
-  private async resolveDepartment(departmentName: string) {
+  private async resolveDepartment(departmentName: string, tx?: Pick<typeof this.prisma, "department">) {
     const normalizedName = this.normalizeDepartmentName(departmentName);
+    const client = tx ?? this.prisma;
 
-    const existing = await this.prisma.department.findFirst({
-      where: { name: { equals: normalizedName, mode: 'insensitive' } },
+    const existing = await client.department.findFirst({
+      where: { name: { equals: normalizedName, mode: "insensitive" } },
     });
 
     if (existing) {
       return existing;
     }
 
-    return this.prisma.department.create({
+    return client.department.create({
       data: { name: normalizedName },
     });
+  }
+
+  /**
+   * Turns a client-supplied roleId into a real Role uuid.
+   *
+   * Callers may legitimately send a role *name* ("admin") instead of an id --
+   * the roles dropdown falls back to a free-text field whenever GET /auth/roles
+   * is not permitted for the current user. Passing that straight to Prisma made
+   * Postgres fail the uuid cast and surfaced as a 500, so resolve by id first,
+   * then by name, and reject anything unknown with a 400.
+   */
+  private async resolveRoleId(
+    roleId: string | null | undefined,
+    tx?: Pick<typeof this.prisma, 'role'>,
+  ): Promise<string | null | undefined> {
+    if (roleId === undefined) {
+      return undefined;
+    }
+
+    const trimmed = typeof roleId === 'string' ? roleId.trim() : '';
+    if (!trimmed) {
+      return null;
+    }
+
+    const client = tx ?? this.prisma;
+
+    if (UUID_PATTERN.test(trimmed)) {
+      const byId = await client.role.findUnique({ where: { id: trimmed } });
+      if (!byId) {
+        throw new BadRequestException('Role not found');
+      }
+      return byId.id;
+    }
+
+    const byName = await client.role.findFirst({
+      where: { name: { equals: trimmed, mode: 'insensitive' } },
+    });
+
+    if (!byName) {
+      throw new BadRequestException(`Role not found: ${trimmed}`);
+    }
+
+    return byName.id;
   }
 
   private validateEmploymentDates(
@@ -327,7 +374,6 @@ export class EmployeesService {
     );
     const terminationDate = this.parseOptionalDate(dto.terminationDate, 'terminationDate');
     const departmentName = this.normalizeDepartmentName(dto.department);
-    const department = await this.resolveDepartment(departmentName);
     const profession = this.normalizeOptionalString(dto.profession ?? dto.jobTitle);
     const baseSalary = dto.baseSalary ?? null;
     const transportAllowanceOverride =
@@ -412,12 +458,15 @@ export class EmployeesService {
     const passwordHash = await bcrypt.hash(passwordToHash, BCRYPT_DEFAULT_ROUNDS);
 
     const created = await this.prisma.$transaction(async (transaction) => {
+      const department = await this.resolveDepartment(departmentName, transaction);
+      const roleId = (await this.resolveRoleId(dto.roleId, transaction)) ?? null;
+
       const user = await transaction.user.create({
         data: {
           username: loginName,
           email: loginName,
           passwordHash,
-          roleId: dto.roleId || null,
+          roleId,
           status: 'active',
           photo: dto.photo,
         },
@@ -445,7 +494,7 @@ export class EmployeesService {
               : null,
           transportAllowanceOverride,
           insuranceAmount,
-          roleId: dto.roleId || null,
+          roleId,
           department: department.name,
           departmentId: department.id,
           scheduledStart: dto.scheduledStart || null,
@@ -602,6 +651,8 @@ export class EmployeesService {
     }
 
     const updated = await this.prisma.$transaction(async (transaction) => {
+      const resolvedRoleId = await this.resolveRoleId(dto.roleId, transaction);
+
       if (
         loginName !== undefined ||
         passwordHash !== undefined ||
@@ -620,7 +671,7 @@ export class EmployeesService {
             data: {
               ...(loginName !== undefined && { username: loginName, email: loginName }),
               ...(passwordHash !== undefined && { passwordHash }),
-              ...(dto.roleId !== undefined && { roleId: dto.roleId }),
+              ...(resolvedRoleId !== undefined && { roleId: resolvedRoleId }),
               ...(dto.photo !== undefined && { photo: dto.photo }),
             },
           });
@@ -655,7 +706,7 @@ export class EmployeesService {
             dto.insuranceAmount === null ? null : new Prisma.Decimal(dto.insuranceAmount),
         }),
         ...(profession !== undefined && { jobTitle: profession, profession }),
-        ...(dto.roleId !== undefined && { roleId: dto.roleId }),
+        ...(resolvedRoleId !== undefined && { roleId: resolvedRoleId }),
         ...(dto.photo !== undefined && { photo: dto.photo }),
         ...(departmentName !== undefined && { department: departmentName }),
         ...(dto.scheduledStart !== undefined && { scheduledStart: dto.scheduledStart }),
@@ -670,7 +721,7 @@ export class EmployeesService {
       };
 
       if (departmentName !== undefined) {
-        const department = await this.resolveDepartment(departmentName);
+        const department = await this.resolveDepartment(departmentName, transaction);
         payload.department = department.name;
         payload.departmentId = department.id;
       }
@@ -953,7 +1004,9 @@ export class EmployeesService {
           await tx.employeeBonus.deleteMany({
             where: {
               employeeId,
-              bonusReason: { contains: busPassenger.bus.plateNumber },
+              // `bus` is typed optional only because the composite key
+              // (tenantId, busId) carries a nullable tenantId; busId is NOT NULL.
+              bonusReason: { contains: busPassenger.bus!.plateNumber },
             },
           });
         }
@@ -1055,7 +1108,9 @@ export class EmployeesService {
           await tx.employeeBonus.deleteMany({
             where: {
               employeeId: dto.employeeId,
-              bonusReason: { contains: busPassenger.bus.plateNumber },
+              // `bus` is typed optional only because the composite key
+              // (tenantId, busId) carries a nullable tenantId; busId is NOT NULL.
+              bonusReason: { contains: busPassenger.bus!.plateNumber },
             },
           });
         }
@@ -1354,7 +1409,7 @@ export class EmployeesService {
       ];
     }
 
-    // Filter by month (current or previous)
+    // Filter by month: current / previous / all, or an explicit YYYY-MM.
     if (query.month && query.month !== 'all') {
       const now = new Date();
       const currentMonthStart = new Date(now.getFullYear(), now.getMonth(), 1);
@@ -1368,6 +1423,13 @@ export class EmployeesService {
       } else if (query.month === 'previous') {
         where.terminationDate = {
           lt: currentMonthStart,
+        };
+      } else {
+        // Explicit calendar month. The DTO has already validated the shape.
+        const [year, month] = query.month.split('-').map(Number);
+        where.terminationDate = {
+          gte: new Date(year, month - 1, 1),
+          lte: new Date(year, month, 0, 23, 59, 59, 999),
         };
       }
     }

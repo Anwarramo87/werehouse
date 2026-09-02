@@ -8,6 +8,7 @@ import { PurchasingService } from '../src/purchasing/purchasing.service';
 import { SalesService } from '../src/sales/sales.service';
 import { AccountingService } from '../src/accounting/accounting.service';
 import { InventoryService } from '../src/inventory/inventory.service';
+import { runUnscoped, runWithTenant } from '../src/common/tenant/tenant-context';
 
 const TEST_TIMEOUT = 60000;
 
@@ -18,6 +19,15 @@ describe('Purchasing + Sales + Accounting flow (e2e)', () => {
   let sales: SalesService;
   let accounting: AccountingService;
   let inventory: InventoryService;
+
+  const TENANT = 'e2e00000-0000-4000-8000-00000000000e';
+
+  /**
+   * This suite predates multi-tenancy and called Prisma unscoped, which the
+   * extension now refuses. Every body runs inside one factory.
+   */
+  const asTenant = <T>(fn: () => Promise<T>): Promise<T> =>
+    runWithTenant({ tenantId: TENANT, bypass: false, actor: 'e2e' }, async () => await fn());
 
   const testSku = `E2E-SKU-${Date.now()}`;
   const location = 'WH-E2E';
@@ -40,9 +50,16 @@ describe('Purchasing + Sales + Accounting flow (e2e)', () => {
     sales = moduleRef.get(SalesService);
     accounting = moduleRef.get(AccountingService);
     inventory = moduleRef.get(InventoryService);
+
+    await runUnscoped('e2e-psa-setup', async () => {
+      await prisma.tenant.deleteMany({ where: { id: TENANT } });
+      await prisma.tenant.create({
+        data: { id: TENANT, name: 'PSA', code: `PSA-${Date.now()}`, status: 'active' },
+      });
+    });
   }, 120000);
 
-  beforeEach(async () => {
+  beforeEach(() => asTenant(async () => {
     await prisma.product.deleteMany({ where: { sku: testSku } });
     await prisma.product.create({
       data: {
@@ -53,9 +70,9 @@ describe('Purchasing + Sales + Accounting flow (e2e)', () => {
         costPrice: new Prisma.Decimal(55),
       },
     });
-  });
+  }));
 
-  afterEach(async () => {
+  afterEach(() => asTenant(async () => {
     // Scoped cleanup: only remove entities created by this test run.
     if (soId) await prisma.salesPayment.deleteMany({ where: { salesOrderId: soId } });
     if (soId) await prisma.salesOrderItem.deleteMany({ where: { salesOrderId: soId } });
@@ -75,13 +92,16 @@ describe('Purchasing + Sales + Accounting flow (e2e)', () => {
 
     await prisma.stockLevel.deleteMany({ where: { sku: testSku } });
     await prisma.product.deleteMany({ where: { sku: testSku } });
-  });
+  }));
 
   afterAll(async () => {
+    await runUnscoped('e2e-psa-teardown', async () => {
+      await prisma.tenant.deleteMany({ where: { id: TENANT } });
+    });
     if (moduleRef) await moduleRef.close();
   });
 
-  it('purchasing: create supplier, purchase order and receive goods, updating stock', async () => {
+  it('purchasing: create supplier, purchase order and receive goods, updating stock', () => asTenant(async () => {
     const sup = await purchasing.createSupplier({
       name: `E2E Supplier ${Date.now()}`,
       phone: '011-9999',
@@ -117,8 +137,11 @@ describe('Purchasing + Sales + Accounting flow (e2e)', () => {
     expect(receipt.updatedOrder.status).toBe('received');
     expect(receipt.receipt.items).toHaveLength(1);
 
-    const stock = await prisma.stockLevel.findUnique({
-      where: { sku_location: { sku: testSku, location } },
+    // The unique key became (tenantId, sku, location) when multi-tenancy landed,
+    // so `sku_location` no longer exists. findFirst is the right shape now: the
+    // tenant extension supplies tenantId, and (sku, location) is unique within it.
+    const stock = await prisma.stockLevel.findFirst({
+      where: { sku: testSku, location },
     });
     expect(stock?.quantity).toBe(20);
     expect(stock?.available).toBe(20);
@@ -130,9 +153,9 @@ describe('Purchasing + Sales + Accounting flow (e2e)', () => {
         userId,
       ),
     ).rejects.toBeInstanceOf(BadRequestException);
-  }, TEST_TIMEOUT);
+  }), TEST_TIMEOUT);
 
-  it('sales: create order, confirm reserves stock, deliver deducts it, payments guard', async () => {
+  it('sales: create order, confirm reserves stock, deliver deducts it, payments guard', () => asTenant(async () => {
     await inventory.adjustStock({ sku: testSku, location, change: 20, reason: 'seed' });
 
     const cust = await sales.createCustomer({ name: `E2E Customer ${Date.now()}` });
@@ -152,8 +175,8 @@ describe('Purchasing + Sales + Accounting flow (e2e)', () => {
 
     const confirmed = await sales.confirmSalesOrder(soId);
     expect(confirmed.order.status).toBe('confirmed');
-    const afterConfirm = await prisma.stockLevel.findUnique({
-      where: { sku_location: { sku: testSku, location } },
+    const afterConfirm = await prisma.stockLevel.findFirst({
+      where: { sku: testSku, location },
     });
     expect(afterConfirm?.reserved).toBe(5);
     expect(afterConfirm?.available).toBe(15);
@@ -170,17 +193,17 @@ describe('Purchasing + Sales + Accounting flow (e2e)', () => {
 
     const delivered = await sales.deliverSalesOrder(soId);
     expect(delivered.order.status).toBe('delivered');
-    const afterDeliver = await prisma.stockLevel.findUnique({
-      where: { sku_location: { sku: testSku, location } },
+    const afterDeliver = await prisma.stockLevel.findFirst({
+      where: { sku: testSku, location },
     });
     expect(afterDeliver?.quantity).toBe(15);
     expect(afterDeliver?.reserved).toBe(0);
     expect(afterDeliver?.available).toBe(15);
 
     await expect(sales.deliverSalesOrder(soId)).rejects.toBeInstanceOf(BadRequestException);
-  }, TEST_TIMEOUT);
+  }), TEST_TIMEOUT);
 
-  it('accounting: posting requires balanced entries and generates working reports', async () => {
+  it('accounting: posting requires balanced entries and generates working reports', () => asTenant(async () => {
     const cash = await accounting.createAccount({ code: '1000', name: 'Cash', type: 'asset' });
     const revenue = await accounting.createAccount({
       code: '4000',
@@ -240,9 +263,9 @@ describe('Purchasing + Sales + Accounting flow (e2e)', () => {
         userId,
       ),
     ).rejects.toBeInstanceOf(BadRequestException);
-  }, TEST_TIMEOUT);
+  }), TEST_TIMEOUT);
 
-  it('guards: unknown ids produce NotFound and missing stock is rejected', async () => {
+  it('guards: unknown ids produce NotFound and missing stock is rejected', () => asTenant(async () => {
     await expect(
       purchasing.getSupplier('00000000-0000-0000-0000-000000000000'),
     ).rejects.toBeInstanceOf(NotFoundException);
@@ -263,5 +286,5 @@ describe('Purchasing + Sales + Accounting flow (e2e)', () => {
         reason: 'test',
       }),
     ).rejects.toBeInstanceOf(NotFoundException);
-  }, TEST_TIMEOUT);
+  }), TEST_TIMEOUT);
 });

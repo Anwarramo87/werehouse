@@ -30,6 +30,7 @@ describe('SalesService', () => {
     },
     salesOrder: {
       findUnique: jest.fn(),
+      findUniqueOrThrow: jest.fn(),
       findFirst: jest.fn(),
       findMany: jest.fn(),
       count: jest.fn(),
@@ -57,6 +58,11 @@ describe('SalesService', () => {
     reserveStock: jest.fn().mockResolvedValue({ message: 'ok' }),
     adjustStock: jest.fn().mockResolvedValue({ message: 'ok' }),
     releaseReservation: jest.fn().mockResolvedValue({ message: 'ok' }),
+    // Confirm and deliver now enrol the stock work in their own transaction
+    // rather than running it beforehand, so these are the methods they reach for.
+    reserveStockWithin: jest.fn().mockResolvedValue({ id: 'sl-1' }),
+    applyStockChangeWithin: jest.fn().mockResolvedValue({ stockLevel: { id: 'sl-1' }, type: 'OUT' }),
+    releaseReservationWithin: jest.fn().mockResolvedValue({ id: 'sl-1' }),
     invalidateCaches: jest.fn().mockResolvedValue(undefined),
   };
 
@@ -138,6 +144,7 @@ describe('SalesService', () => {
       expect(createData.soNumber).toMatch(/^SO-\d{6}-\d{4}$/);
       expect(createData.status).toBe('draft');
       expect(Number(createData.totalAmount)).toBe(35);
+      // Back to a nested create: nested rows are stamped centrally now.
       expect(createData.items.create).toHaveLength(2);
       expect(result.message).toBe('Sales order created successfully');
     });
@@ -157,12 +164,18 @@ describe('SalesService', () => {
 
       const result = await service.confirmSalesOrder('so-1');
 
-      expect(inventoryMock.reserveStock).toHaveBeenCalledWith({
-        sku: 'SKU-001',
-        location: 'WH-A',
-        quantity: 2,
-        reason: expect.stringContaining('SO-001'),
-      });
+      // Called with the transaction client first: the reservation and the
+      // status change now commit together.
+      expect(inventoryMock.reserveStockWithin).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          sku: 'SKU-001',
+          location: 'WH-A',
+          quantity: 2,
+          reason: expect.stringContaining('SO-001'),
+        }),
+      );
+      expect(inventoryMock.reserveStock).not.toHaveBeenCalled();
       expect(prismaMock.salesOrder.update).toHaveBeenCalledWith(
         expect.objectContaining({ data: { status: 'confirmed' } }),
       );
@@ -178,7 +191,7 @@ describe('SalesService', () => {
       });
 
       await expect(service.confirmSalesOrder('so-1')).rejects.toBeInstanceOf(BadRequestException);
-      expect(inventoryMock.reserveStock).not.toHaveBeenCalled();
+      expect(inventoryMock.reserveStockWithin).not.toHaveBeenCalled();
     });
   });
 
@@ -196,18 +209,26 @@ describe('SalesService', () => {
 
       const result = await service.deliverSalesOrder('so-1');
 
-      expect(inventoryMock.adjustStock).toHaveBeenCalledWith({
-        sku: 'SKU-001',
-        location: 'WH-A',
-        change: -3,
-        reason: expect.stringContaining('SO-001'),
-      });
-      expect(inventoryMock.releaseReservation).toHaveBeenCalledWith({
-        sku: 'SKU-001',
-        location: 'WH-A',
-        quantity: 3,
-        reason: expect.stringContaining('SO-001'),
-      });
+      expect(inventoryMock.applyStockChangeWithin).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          sku: 'SKU-001',
+          location: 'WH-A',
+          change: -3,
+          reason: expect.stringContaining('SO-001'),
+          referenceType: 'sales_order',
+        }),
+      );
+      expect(inventoryMock.releaseReservationWithin).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          sku: 'SKU-001',
+          location: 'WH-A',
+          quantity: 3,
+          reason: expect.stringContaining('SO-001'),
+        }),
+      );
+      expect(inventoryMock.adjustStock).not.toHaveBeenCalled();
       expect(result.message).toBe('Sales order delivered and stock deducted');
     });
 

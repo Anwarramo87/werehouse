@@ -4,6 +4,7 @@ import { ZodValidationPipe } from 'nestjs-zod';
 import request from 'supertest';
 import { AppModule } from '../src/app.module';
 import { PrismaService } from '../src/prisma/prisma.service';
+import { runUnscoped } from '../src/common/tenant/tenant-context';
 
 describe('Employees Financial Settlement (e2e)', () => {
   let app: INestApplication;
@@ -37,21 +38,33 @@ describe('Employees Financial Settlement (e2e)', () => {
       .post('/api/auth/login')
       .send({
         username: 'admin',
-        password: 'admin123',
+        password: 'password123',
       });
 
-    authToken = loginResponse.body.accessToken;
+    authToken = loginResponse.body.token;
+
+    // Remove anything a previous failed run left behind: these suites create
+    // fixed employee ids, so a leftover row makes the next run fail on a
+    // conflict rather than on anything real.
+    await runUnscoped('e2e-pre-clean', async () => {
+      await prisma.rehireRecord.deleteMany({ where: { employeeId: { startsWith: 'EMP9' } } });
+      await prisma.financialSettlement.deleteMany({ where: { employeeId: { startsWith: 'EMP9' } } });
+      await prisma.terminationRecord.deleteMany({ where: { employeeId: { startsWith: 'EMP9' } } });
+      await prisma.employee.deleteMany({ where: { employeeId: { startsWith: 'EMP9' } } });
+      // The linked user survives the employee: username is globally unique,
+      // so a leftover one blocks recreating the fixture.
+      await prisma.user.deleteMany({ where: { username: { startsWith: 'test-' } } });
+    });
 
     // Create a test employee
     const createResponse = await request(app.getHttpServer())
       .post('/api/employees')
       .set('Authorization', `Bearer ${authToken}`)
       .send({
-        employeeId: 'TEST-SETTLE-001',
+        employeeId: 'EMP9101',
         name: 'Test Employee for Settlement',
         username: 'test-settle-user',
         password: 'test123',
-        roleId: '00000000-0000-0000-0000-000000000001',
         department: 'Test Department',
         baseSalary: 5000,
         hourlyRate: 25,
@@ -74,15 +87,15 @@ describe('Employees Financial Settlement (e2e)', () => {
   afterAll(async () => {
     // Clean up test data
     if (testEmployeeId) {
-      await prisma.financialSettlement.deleteMany({
+      await runUnscoped('e2e-cleanup', async () => await prisma.financialSettlement.deleteMany({
         where: { employeeId: testEmployeeId },
-      });
-      await prisma.terminationRecord.deleteMany({
+      }));
+      await runUnscoped('e2e-cleanup', async () => await prisma.terminationRecord.deleteMany({
         where: { employeeId: testEmployeeId },
-      });
-      await prisma.employee.deleteMany({
+      }));
+      await runUnscoped('e2e-cleanup', async () => await prisma.employee.deleteMany({
         where: { employeeId: testEmployeeId },
-      });
+      }));
     }
 
     await app.close();
@@ -119,7 +132,7 @@ describe('Employees Financial Settlement (e2e)', () => {
         .post('/api/employees/financial-settlement')
         .set('Authorization', `Bearer ${authToken}`)
         .send({
-          employeeId: 'NON-EXISTENT',
+          employeeId: 'EMP9999',
           settlementDate: new Date().toISOString(),
           finalSalaryAmount: 5000,
         })
@@ -145,12 +158,11 @@ describe('Employees Financial Settlement (e2e)', () => {
         .post('/api/employees')
         .set('Authorization', `Bearer ${authToken}`)
         .send({
-          employeeId: 'TEST-SETTLE-002',
+          employeeId: 'EMP9102',
           name: 'Test Employee 2',
           username: 'test-settle-user-2',
           password: 'test123',
-          roleId: '00000000-0000-0000-0000-000000000001',
-          department: 'Test Department',
+            department: 'Test Department',
           baseSalary: 5000,
           hourlyRate: 25,
         });
@@ -180,12 +192,12 @@ describe('Employees Financial Settlement (e2e)', () => {
         .expect(400);
 
       // Clean up
-      await prisma.terminationRecord.deleteMany({
+      await runUnscoped('e2e-cleanup', async () => await prisma.terminationRecord.deleteMany({
         where: { employeeId: employeeId2 },
-      });
-      await prisma.employee.deleteMany({
+      }));
+      await runUnscoped('e2e-cleanup', async () => await prisma.employee.deleteMany({
         where: { employeeId: employeeId2 },
-      });
+      }));
     });
 
     it('should fail without authentication', async () => {

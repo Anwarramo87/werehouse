@@ -20,6 +20,7 @@ describe('InsuranceService', () => {
   const prismaMock = {
     employeeInsurance: {
       findMany: jest.fn(),
+      findFirst: jest.fn(),
       findUnique: jest.fn(),
       upsert: jest.fn(),
       delete: jest.fn(),
@@ -71,12 +72,12 @@ describe('InsuranceService', () => {
 
   describe('getByEmployee', () => {
     it('throws NotFoundException when no record exists', async () => {
-      prismaMock.employeeInsurance.findUnique.mockResolvedValue(null);
+      prismaMock.employeeInsurance.findFirst.mockResolvedValue(null);
       await expect(service.getByEmployee('UNKNOWN')).rejects.toBeInstanceOf(NotFoundException);
     });
 
     it('returns the insurance record when found', async () => {
-      prismaMock.employeeInsurance.findUnique.mockResolvedValue(insuranceRecord);
+      prismaMock.employeeInsurance.findFirst.mockResolvedValue(insuranceRecord);
       const result = await service.getByEmployee('EMP000001');
       expect(result.employeeId).toBe('EMP000001');
     });
@@ -113,12 +114,12 @@ describe('InsuranceService', () => {
 
   describe('remove', () => {
     it('throws NotFoundException when record does not exist', async () => {
-      prismaMock.employeeInsurance.findUnique.mockResolvedValue(null);
+      prismaMock.employeeInsurance.findFirst.mockResolvedValue(null);
       await expect(service.remove('UNKNOWN')).rejects.toBeInstanceOf(NotFoundException);
     });
 
     it('deletes the record and returns success message', async () => {
-      prismaMock.employeeInsurance.findUnique.mockResolvedValue(insuranceRecord);
+      prismaMock.employeeInsurance.findFirst.mockResolvedValue(insuranceRecord);
       prismaMock.employeeInsurance.delete.mockResolvedValue(insuranceRecord);
 
       const result = await service.remove('EMP000001');

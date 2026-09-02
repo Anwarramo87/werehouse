@@ -3,7 +3,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { afterAll, beforeAll, describe, expect, it } from '@jest/globals';
 import request from 'supertest';
 import cookieParser from 'cookie-parser';
-import * as XLSX from 'xlsx';
+import * as ExcelJS from 'exceljs';
 import { AppModule } from '../src/app.module';
 
 function extractCookies(rawCookieHeader: string[] | string | undefined) {
@@ -14,15 +14,17 @@ function extractCookies(rawCookieHeader: string[] | string | undefined) {
       : [];
 }
 
-function buildWorkbookBuffer() {
-  const workbook = XLSX.utils.book_new();
-  const worksheet = XLSX.utils.aoa_to_sheet([
-    ['employeeId', 'name', 'email', 'hourlyRate'],
-    ['EMP901', 'Excel User', 'excel.user@example.com', '15.5'],
-  ]);
-
-  XLSX.utils.book_append_sheet(workbook, worksheet, 'Employees');
-  return XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' });
+/**
+ * Built with exceljs, which the application already depends on, rather than the
+ * `xlsx` package this file used to import -- that was never in package.json, so
+ * the suite failed to compile and had not run in some time.
+ */
+async function buildWorkbookBuffer(): Promise<Buffer> {
+  const workbook = new ExcelJS.Workbook();
+  const sheet = workbook.addWorksheet('Employees');
+  sheet.addRow(['employeeId', 'name', 'email', 'hourlyRate']);
+  sheet.addRow(['EMP901', 'Excel User', 'excel.user@example.com', '15.5']);
+  return Buffer.from(await workbook.xlsx.writeBuffer());
 }
 
 describe('Imports API (e2e)', () => {
@@ -150,7 +152,7 @@ describe('Imports API (e2e)', () => {
   });
 
   it('accepts workbook content uploaded with legacy .xls extension', async () => {
-    const workbookBuffer = buildWorkbookBuffer();
+    const workbookBuffer = await buildWorkbookBuffer();
 
     const response = await request(app.getHttpServer())
       .post('/api/imports/employees/validate')

@@ -1,4 +1,14 @@
 import { BadRequestException, NotFoundException } from '@nestjs/common';
+
+const TEST_TENANT_ID = '11111111-1111-1111-1111-111111111111';
+
+// The stock mutations are raw SQL and must narrow themselves to a factory by
+// hand. Run every case as a factory user so that narrowing is exercised.
+jest.mock('../common/tenant/tenant-context', () => ({
+  ...jest.requireActual('../common/tenant/tenant-context'),
+  currentTenant: () => ({ tenantId: TEST_TENANT_ID, bypass: false }),
+}));
+
 import { Test, TestingModule } from '@nestjs/testing';
 import { InventoryService } from './inventory.service';
 import { PrismaService } from '../prisma/prisma.service';
@@ -20,19 +30,29 @@ describe('InventoryService stock mutations', () => {
   };
 
   const movementCreate = jest.fn().mockResolvedValue({ id: 'movement-1' });
+
+  // Product and stock-level lookups moved inside the transaction, so that the
+  // checks observe the same snapshot as the write. The transaction client and
+  // the top-level client therefore share these mocks: a test that arranges
+  // `prismaMock.product.findFirst` is arranging the in-transaction call too.
+  const productFindFirst = jest.fn();
+  const stockLevelFindFirst = jest.fn();
+
   const txMock = {
     $queryRaw: jest.fn(),
     stockMovement: { create: movementCreate },
+    product: { findFirst: productFindFirst },
+    stockLevel: { findFirst: stockLevelFindFirst },
   };
 
   const prismaMock = {
     $queryRaw: jest.fn(),
     $transaction: jest.fn(async (callback: (tx: unknown) => unknown) => callback(txMock)),
     product: {
-      findUnique: jest.fn(),
+      findFirst: productFindFirst,
     },
     stockLevel: {
-      findUnique: jest.fn(),
+      findFirst: stockLevelFindFirst,
     },
   };
 
@@ -82,7 +102,7 @@ describe('InventoryService stock mutations', () => {
           },
         ];
       });
-      prismaMock.stockLevel.findUnique.mockResolvedValue({ id: 'stock-1' });
+      prismaMock.stockLevel.findFirst.mockResolvedValue({ id: 'stock-1' });
 
       const results = await Promise.allSettled([
         service.reserveStock({
@@ -117,7 +137,7 @@ describe('InventoryService stock mutations', () => {
 
       expect(txMock.$queryRaw).toHaveBeenCalledTimes(1);
       expect(movementCreate).toHaveBeenCalledTimes(1);
-      expect(prismaMock.stockLevel.findUnique).not.toHaveBeenCalled();
+      expect(prismaMock.stockLevel.findFirst).not.toHaveBeenCalled();
       expect(result.stockLevel.reserved).toBe(6);
       expect(result.stockLevel.available).toBe(4);
       expect(shortCacheMock.invalidatePrefix).toHaveBeenCalledWith('inventory:stats');
@@ -126,7 +146,7 @@ describe('InventoryService stock mutations', () => {
 
     it('throws NotFoundException when stock level does not exist', async () => {
       txMock.$queryRaw.mockResolvedValue([]);
-      prismaMock.stockLevel.findUnique.mockResolvedValue(null);
+      prismaMock.stockLevel.findFirst.mockResolvedValue(null);
 
       await expect(
         service.reserveStock({
@@ -140,7 +160,7 @@ describe('InventoryService stock mutations', () => {
 
     it('throws BadRequestException when available stock is insufficient', async () => {
       txMock.$queryRaw.mockResolvedValue([]);
-      prismaMock.stockLevel.findUnique.mockResolvedValue({ id: 'stock-1' });
+      prismaMock.stockLevel.findFirst.mockResolvedValue({ id: 'stock-1' });
 
       await expect(
         service.reserveStock({
@@ -171,7 +191,7 @@ describe('InventoryService stock mutations', () => {
 
     it('throws BadRequestException when release exceeds reserved amount', async () => {
       txMock.$queryRaw.mockResolvedValue([]);
-      prismaMock.stockLevel.findUnique.mockResolvedValue({ id: 'stock-1' });
+      prismaMock.stockLevel.findFirst.mockResolvedValue({ id: 'stock-1' });
 
       await expect(
         service.releaseReservation({
@@ -184,9 +204,51 @@ describe('InventoryService stock mutations', () => {
     });
   });
 
+  // Raw SQL bypasses the Prisma tenant extension, so nothing narrows these
+  // statements automatically. Without the tenant predicate a WHERE on
+  // sku+location matches the same SKU in every other factory.
+  describe('tenant isolation of the raw stock SQL', () => {
+    const sqlFrom = (call: unknown[]) => (call[0] as string[]).join('?');
+
+    it('scopes the reservation update to the caller factory', async () => {
+      txMock.$queryRaw.mockResolvedValue([stockRow]);
+
+      await service.reserveStock({ sku: 'SKU-001', location: 'WH-A', quantity: 1, reason: 'test' });
+
+      const call = txMock.$queryRaw.mock.calls[0];
+      expect(sqlFrom(call)).toContain('"tenantId" =');
+      expect(call).toContain(TEST_TENANT_ID);
+    });
+
+    it('scopes the release update to the caller factory', async () => {
+      txMock.$queryRaw.mockResolvedValue([stockRow]);
+
+      await service.releaseReservation({ sku: 'SKU-001', location: 'WH-A', quantity: 1, reason: 'test' });
+
+      const call = txMock.$queryRaw.mock.calls[0];
+      expect(sqlFrom(call)).toContain('"tenantId" =');
+      expect(call).toContain(TEST_TENANT_ID);
+    });
+
+    it('stamps the factory on insert and conflicts on the real unique index', async () => {
+      prismaMock.product.findFirst.mockResolvedValue({ sku: 'SKU-001' });
+      txMock.$queryRaw.mockResolvedValue([stockRow]);
+
+      await service.adjustStock({ sku: 'SKU-001', location: 'WH-A', change: 5, reason: 'test' });
+
+      const call = txMock.$queryRaw.mock.calls[0];
+      const sql = sqlFrom(call);
+      expect(sql).toContain('"tenantId"');
+      // (sku, location) alone is not a unique index -- naming it made Postgres
+      // reject the statement outright.
+      expect(sql).toContain('ON CONFLICT ("tenantId", sku, location)');
+      expect(call).toContain(TEST_TENANT_ID);
+    });
+  });
+
   describe('adjustStock', () => {
     it('uses an atomic upsert update', async () => {
-      prismaMock.product.findUnique.mockResolvedValue({ sku: 'SKU-001' });
+      prismaMock.product.findFirst.mockResolvedValue({ sku: 'SKU-001' });
       txMock.$queryRaw.mockResolvedValue([{ ...stockRow, quantity: 15, available: 11 }]);
 
       const result = await service.adjustStock({
@@ -196,15 +258,15 @@ describe('InventoryService stock mutations', () => {
         reason: 'restock',
       });
 
-      expect(prismaMock.product.findUnique).toHaveBeenCalledTimes(1);
+      expect(prismaMock.product.findFirst).toHaveBeenCalledTimes(1);
       expect(txMock.$queryRaw).toHaveBeenCalledTimes(1);
       expect(result.stockLevel.quantity).toBe(15);
       expect(result.stockLevel.available).toBe(11);
     });
 
     it('throws BadRequestException when a deduction exceeds on-hand quantity', async () => {
-      prismaMock.product.findUnique.mockResolvedValue({ sku: 'SKU-001' });
-      prismaMock.stockLevel.findUnique.mockResolvedValue({ quantity: 2 });
+      prismaMock.product.findFirst.mockResolvedValue({ sku: 'SKU-001' });
+      prismaMock.stockLevel.findFirst.mockResolvedValue({ quantity: 2 });
 
       await expect(
         service.adjustStock({

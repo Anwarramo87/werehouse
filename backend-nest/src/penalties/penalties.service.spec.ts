@@ -21,7 +21,7 @@ describe('PenaltiesService', () => {
   let service: PenaltiesService;
 
   const prismaMock = {
-    employee: { findUnique: jest.fn() },
+    employee: { findUnique: jest.fn(), findFirst: jest.fn() },
     employeePenalty: {
       findMany: jest.fn(),
       findUnique: jest.fn(),
@@ -69,21 +69,21 @@ describe('PenaltiesService', () => {
 
   describe('create', () => {
     it('throws BadRequestException when employee does not exist', async () => {
-      prismaMock.employee.findUnique.mockResolvedValue(null);
+      prismaMock.employee.findFirst.mockResolvedValue(null);
       await expect(
         service.create({ employeeId: 'UNKNOWN', category: 'absence', amount: 100, issueDate: '2026-01-01' }),
       ).rejects.toBeInstanceOf(BadRequestException);
     });
 
     it('throws BadRequestException for invalid issueDate', async () => {
-      prismaMock.employee.findUnique.mockResolvedValue({ employeeId: 'EMP000001' });
+      prismaMock.employee.findFirst.mockResolvedValue({ employeeId: 'EMP000001' });
       await expect(
         service.create({ employeeId: 'EMP000001', category: 'absence', amount: 100, issueDate: 'not-a-date' }),
       ).rejects.toBeInstanceOf(BadRequestException);
     });
 
     it('creates penalty and invalidates cache', async () => {
-      prismaMock.employee.findUnique.mockResolvedValue({ employeeId: 'EMP000001' });
+      prismaMock.employee.findFirst.mockResolvedValue({ employeeId: 'EMP000001' });
       prismaMock.employeePenalty.create.mockResolvedValue(penaltyRecord);
 
       const result = await service.create({

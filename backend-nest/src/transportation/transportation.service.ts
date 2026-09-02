@@ -185,7 +185,9 @@ export class TransportationService {
     // Build a map: employeeId → { route, plateNumber }
     const map = new Map<string, { route: string; plateNumber: string }>();
     for (const p of activePassengers) {
-      map.set(p.employeeId, { route: p.bus.route, plateNumber: p.bus.plateNumber });
+      // `bus` is typed optional only because the composite key (tenantId, busId)
+      // carries a nullable tenantId; busId itself is NOT NULL and was included.
+      map.set(p.employeeId, { route: p.bus!.route, plateNumber: p.bus!.plateNumber });
     }
     return Object.fromEntries(map);
   }
@@ -226,7 +228,7 @@ export class TransportationService {
     });
     if (activeOnOtherBus) {
       throw new ConflictException(
-        `الموظف ${dto.employeeId} مشترك بالفعل بالباص "${activeOnOtherBus.bus.route}" (${activeOnOtherBus.bus.plateNumber}). يرجى إزالة اشتراكه من الباص الآخر أولاً.`,
+        `الموظف ${dto.employeeId} مشترك بالفعل بالباص "${activeOnOtherBus.bus!.route}" (${activeOnOtherBus.bus!.plateNumber}). يرجى إزالة اشتراكه من الباص الآخر أولاً.`,
       );
     }
 
@@ -711,7 +713,7 @@ export class TransportationService {
           breakdowns.push({
             employeeId: empId,
             busId: passenger.busId,
-            busRoute: passenger.bus.route,
+            busRoute: passenger.bus!.route,
             transportCost: cost,
             month: targetMonth.toISOString().slice(0, 7),
             calculatedDate: new Date().toISOString(),

@@ -94,6 +94,12 @@ model User {
   employee             Employee?
   biometricCredentials BiometricCredential[]
 
+  // Referenced by tenant-composite foreign keys: Postgres requires the
+
+  // referenced columns to carry a unique constraint.
+
+  @@unique([tenantId, id])
+
   @@index([lockoutUntil])
   @@index([tenantId])
   @@map("users")
@@ -105,7 +111,7 @@ model BiometricCredential {
   tenant    Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   keyId        String
   userId       String    @db.Uuid
-  user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user         User?     @relation(fields: [tenantId, userId], references: [tenantId, id], onDelete: Cascade)
   publicKeyDer Bytes
   deviceName   String?
   createdAt    DateTime  @default(now())
@@ -468,6 +474,12 @@ model Supplier {
 
   purchaseOrders PurchaseOrder[]
 
+  // Referenced by tenant-composite foreign keys: Postgres requires the
+
+  // referenced columns to carry a unique constraint.
+
+  @@unique([tenantId, id])
+
   @@index([name])
   @@index([tenantId])
   @@map("suppliers")
@@ -487,9 +499,15 @@ model PurchaseOrder {
   createdAt    DateTime            @default(now())
   updatedAt    DateTime            @updatedAt
 
-  supplier      Supplier            @relation(fields: [supplierId], references: [id], onDelete: Restrict)
+  supplier      Supplier?           @relation(fields: [tenantId, supplierId], references: [tenantId, id], onDelete: Restrict)
   items         PurchaseOrderItem[]
   goodsReceipts GoodsReceipt[]
+
+  // Referenced by tenant-composite foreign keys: Postgres requires the
+
+  // referenced columns to carry a unique constraint.
+
+  @@unique([tenantId, id])
 
   @@index([supplierId])
   @@index([status])
@@ -511,9 +529,15 @@ model PurchaseOrderItem {
   createdAt        DateTime          @default(now())
   updatedAt        DateTime          @updatedAt
 
-  purchaseOrder    PurchaseOrder     @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+  purchaseOrder    PurchaseOrder?    @relation(fields: [tenantId, purchaseOrderId], references: [tenantId, id], onDelete: Cascade)
   product          Product?           @relation(fields: [tenantId, sku], references: [tenantId, sku], onDelete: Restrict)
   goodsReceiptItems GoodsReceiptItem[]
+
+  // Referenced by tenant-composite foreign keys: Postgres requires the
+
+  // referenced columns to carry a unique constraint.
+
+  @@unique([tenantId, id])
 
   @@index([purchaseOrderId])
   @@index([sku])
@@ -532,8 +556,14 @@ model GoodsReceipt {
   createdAt       DateTime            @default(now())
   updatedAt       DateTime            @updatedAt
 
-  purchaseOrder   PurchaseOrder       @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+  purchaseOrder   PurchaseOrder?      @relation(fields: [tenantId, purchaseOrderId], references: [tenantId, id], onDelete: Cascade)
   items           GoodsReceiptItem[]
+
+  // Referenced by tenant-composite foreign keys: Postgres requires the
+
+  // referenced columns to carry a unique constraint.
+
+  @@unique([tenantId, id])
 
   @@index([purchaseOrderId])
   @@unique([tenantId, receiptNumber])
@@ -553,8 +583,8 @@ model GoodsReceiptItem {
   unitCost            Decimal           @db.Decimal(12, 2)
   createdAt           DateTime          @default(now())
 
-  goodsReceipt        GoodsReceipt      @relation(fields: [goodsReceiptId], references: [id], onDelete: Cascade)
-  purchaseOrderItem   PurchaseOrderItem @relation(fields: [purchaseOrderItemId], references: [id], onDelete: Restrict)
+  goodsReceipt        GoodsReceipt?     @relation(fields: [tenantId, goodsReceiptId], references: [tenantId, id], onDelete: Cascade)
+  purchaseOrderItem   PurchaseOrderItem? @relation(fields: [tenantId, purchaseOrderItemId], references: [tenantId, id], onDelete: Restrict)
   product             Product?           @relation(fields: [tenantId, sku], references: [tenantId, sku], onDelete: Restrict)
 
   @@index([goodsReceiptId])
@@ -579,6 +609,12 @@ model Customer {
 
   salesOrders SalesOrder[]
 
+  // Referenced by tenant-composite foreign keys: Postgres requires the
+
+  // referenced columns to carry a unique constraint.
+
+  @@unique([tenantId, id])
+
   @@index([name])
   @@index([tenantId])
   @@map("customers")
@@ -599,9 +635,15 @@ model SalesOrder {
   createdAt    DateTime            @default(now())
   updatedAt    DateTime            @updatedAt
 
-  customer    Customer            @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  customer    Customer?           @relation(fields: [tenantId, customerId], references: [tenantId, id], onDelete: Restrict)
   items       SalesOrderItem[]
   payments    SalesPayment[]
+
+  // Referenced by tenant-composite foreign keys: Postgres requires the
+
+  // referenced columns to carry a unique constraint.
+
+  @@unique([tenantId, id])
 
   @@index([customerId])
   @@index([status])
@@ -623,7 +665,7 @@ model SalesOrderItem {
   createdAt     DateTime   @default(now())
   updatedAt     DateTime   @updatedAt
 
-  salesOrder    SalesOrder @relation(fields: [salesOrderId], references: [id], onDelete: Cascade)
+  salesOrder    SalesOrder? @relation(fields: [tenantId, salesOrderId], references: [tenantId, id], onDelete: Cascade)
   product       Product?    @relation(fields: [tenantId, sku], references: [tenantId, sku], onDelete: Restrict)
 
   @@index([salesOrderId])
@@ -644,7 +686,7 @@ model SalesPayment {
   createdAt     DateTime   @default(now())
   updatedAt     DateTime   @updatedAt
 
-  salesOrder    SalesOrder @relation(fields: [salesOrderId], references: [id], onDelete: Cascade)
+  salesOrder    SalesOrder? @relation(fields: [tenantId, salesOrderId], references: [tenantId, id], onDelete: Cascade)
 
   @@index([salesOrderId])
   @@index([tenantId])
@@ -663,9 +705,15 @@ model Account {
   createdAt   DateTime        @default(now())
   updatedAt   DateTime        @updatedAt
 
-  parent      Account?        @relation("AccountTree", fields: [parentId], references: [id], onDelete: Restrict)
+  parent      Account?        @relation("AccountTree", fields: [tenantId, parentId], references: [tenantId, id], onDelete: Restrict)
   children    Account[]       @relation("AccountTree")
   journalLines JournalEntryLine[]
+
+  // Referenced by tenant-composite foreign keys: Postgres requires the
+
+  // referenced columns to carry a unique constraint.
+
+  @@unique([tenantId, id])
 
   @@index([type])
   @@index([parentId])
@@ -687,6 +735,12 @@ model JournalEntry {
 
   lines       JournalEntryLine[]
 
+  // Referenced by tenant-composite foreign keys: Postgres requires the
+
+  // referenced columns to carry a unique constraint.
+
+  @@unique([tenantId, id])
+
   @@index([entryDate])
   @@unique([tenantId, entryNumber])
   @@index([tenantId])
@@ -703,8 +757,8 @@ model JournalEntryLine {
   credit          Decimal       @default(0) @db.Decimal(12, 2)
   createdAt       DateTime      @default(now())
 
-  journalEntry    JournalEntry  @relation(fields: [journalEntryId], references: [id], onDelete: Cascade)
-  account         Account       @relation(fields: [accountId], references: [id], onDelete: Restrict)
+  journalEntry    JournalEntry? @relation(fields: [tenantId, journalEntryId], references: [tenantId, id], onDelete: Cascade)
+  account         Account?      @relation(fields: [tenantId, accountId], references: [tenantId, id], onDelete: Restrict)
 
   @@index([journalEntryId])
   @@index([accountId])
@@ -760,6 +814,12 @@ model PayrollRun {
   items           PayrollItem[]
   receipts        PayrollReceipt[]
 
+  // Referenced by tenant-composite foreign keys: Postgres requires the
+
+  // referenced columns to carry a unique constraint.
+
+  @@unique([tenantId, id])
+
   @@index([runDate])
   @@index([status, runDate])
   @@index([approvalStatus, runDate])
@@ -796,7 +856,7 @@ model PayrollItem {
   createdAt             DateTime @default(now())
   updatedAt             DateTime @updatedAt
 
-  run PayrollRun @relation(fields: [payrollRunId], references: [id], onDelete: Cascade)
+  run PayrollRun? @relation(fields: [tenantId, payrollRunId], references: [tenantId, id], onDelete: Cascade)
 
   @@unique([tenantId, payrollRunId, employeeId])
   @@index([payrollRunId])
@@ -1110,6 +1170,12 @@ model Bus {
   createdAt            DateTime       @default(now())
   updatedAt            DateTime       @updatedAt
 
+  // Referenced by tenant-composite foreign keys: Postgres requires the
+
+  // referenced columns to carry a unique constraint.
+
+  @@unique([tenantId, id])
+
   @@index([status])
   @@index([route, status])
   @@unique([tenantId, busId])
@@ -1123,7 +1189,7 @@ model BusPassenger {
   tenantId  String?  @db.Uuid
   tenant    Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   busId            String    @db.Uuid
-  bus              Bus       @relation(fields: [busId], references: [id], onDelete: Cascade)
+  bus              Bus?      @relation(fields: [tenantId, busId], references: [tenantId, id], onDelete: Cascade)
   employeeId       String
   employee         Employee?  @relation(fields: [tenantId, employeeId], references: [tenantId, employeeId], onDelete: Cascade)
   name             String? // optional passenger name for display

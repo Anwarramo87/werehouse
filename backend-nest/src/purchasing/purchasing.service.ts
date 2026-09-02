@@ -4,6 +4,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import { randomUUID } from 'crypto';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { InventoryService } from '../inventory/inventory.service';
@@ -368,8 +369,45 @@ export class PurchasingService {
       });
     }
 
+    // Idempotency. `receiptNumber` is unique per factory, so a client that sends
+    // the same one twice -- a retry after a timeout -- gets the original receipt
+    // back rather than receiving the goods a second time. Checked here for a fast
+    // answer, and enforced for real by the unique constraint inside the
+    // transaction below, which is what makes two concurrent retries safe.
+    if (dto.receiptNumber) {
+      const existingReceipt = await this.prisma.goodsReceipt.findFirst({
+        where: { receiptNumber: dto.receiptNumber },
+        include: { items: true },
+      });
+      if (existingReceipt) {
+        if (existingReceipt.purchaseOrderId !== purchaseOrderId) {
+          throw new ConflictException(
+            `Receipt number ${dto.receiptNumber} already exists on a different purchase order`,
+          );
+        }
+        // findUniqueOrThrow, not findUnique: the order was located at the top of
+        // this method, so it exists, and a nullable return here would make the
+        // idempotent branch's shape differ from the success branch's.
+        const currentOrder = await this.prisma.purchaseOrder.findUniqueOrThrow({
+          where: { id: purchaseOrderId },
+          include: { items: true },
+        });
+        return {
+          message: 'Goods already received for this receipt number',
+          idempotent: true,
+          receipt: existingReceipt,
+          updatedOrder: currentOrder,
+        };
+      }
+    }
+
     const result = await this.prisma.$transaction(async (tx) => {
-      const receiptNumber = `GR-${Date.now()}`;
+      // A millisecond timestamp collides when two receipts land in the same
+      // millisecond, and `@@unique([tenantId, receiptNumber])` turns that into a
+      // 500. The random suffix removes the collision; a caller who wants a stable
+      // identifier supplies `receiptNumber` and gets idempotency with it.
+      const receiptNumber =
+        dto.receiptNumber ?? `GR-${Date.now()}-${randomUUID().slice(0, 8)}`;
 
       for (const incoming of receiptItems) {
         await tx.purchaseOrderItem.update({
@@ -412,21 +450,34 @@ export class PurchasingService {
         include: { items: true },
       });
 
+      // Stock moves inside the SAME transaction as the paperwork.
+      //
+      // This used to run in a loop after the transaction committed, on the
+      // reasoning that each adjustment was atomic in itself. It was -- and that
+      // was beside the point: a failure between the commit and the loop, or on
+      // the second of three items, left goods marked received that had never
+      // entered stock, with nothing to reconcile the two. Receipt, received
+      // quantities, order status and stock now succeed or fail as one unit.
+      for (const adj of stockAdjustments) {
+        await this.inventory.applyStockChangeWithin(tx, {
+          sku: adj.sku,
+          location: adj.location,
+          change: adj.change,
+          reason: `Purchase order ${order.poNumber} received`,
+          referenceType: 'purchase_order',
+          referenceId: purchaseOrderId,
+          createdById: userId,
+        });
+      }
+
       return { receipt, updatedOrder };
     });
 
-    // Update stock outside the transaction: each adjustment is atomic itself.
-    for (const adj of stockAdjustments) {
-      await this.inventory.adjustStock({
-        sku: adj.sku,
-        location: adj.location,
-        change: adj.change,
-        reason: `Purchase order ${order.poNumber} received`,
-      });
-    }
-
+    // Non-transactional by nature, and deliberately outside: a cache is not a
+    // system of record, and failing to clear one must not roll back a receipt.
     await this.invalidatePoCaches();
-    return { message: 'Goods received successfully', ...result };
+
+    return { message: 'Goods received successfully', idempotent: false, ...result };
   }
 
   async removePurchaseOrder(purchaseOrderId: string) {

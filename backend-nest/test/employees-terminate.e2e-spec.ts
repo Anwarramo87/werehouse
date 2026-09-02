@@ -1,9 +1,10 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { ZodValidationPipe } from 'nestjs-zod';
-import * as request from 'supertest';
+import request from 'supertest';
 import { AppModule } from '../src/app.module';
 import { PrismaService } from '../src/prisma/prisma.service';
+import { runUnscoped } from '../src/common/tenant/tenant-context';
 
 describe('Employees Termination (e2e)', () => {
   let app: INestApplication;
@@ -37,21 +38,33 @@ describe('Employees Termination (e2e)', () => {
       .post('/api/auth/login')
       .send({
         username: 'admin',
-        password: 'admin123',
+        password: 'password123',
       });
 
-    authToken = loginResponse.body.accessToken;
+    authToken = loginResponse.body.token;
+
+    // Remove anything a previous failed run left behind: these suites create
+    // fixed employee ids, so a leftover row makes the next run fail on a
+    // conflict rather than on anything real.
+    await runUnscoped('e2e-pre-clean', async () => {
+      await prisma.rehireRecord.deleteMany({ where: { employeeId: { startsWith: 'EMP9' } } });
+      await prisma.financialSettlement.deleteMany({ where: { employeeId: { startsWith: 'EMP9' } } });
+      await prisma.terminationRecord.deleteMany({ where: { employeeId: { startsWith: 'EMP9' } } });
+      await prisma.employee.deleteMany({ where: { employeeId: { startsWith: 'EMP9' } } });
+      // The linked user survives the employee: username is globally unique,
+      // so a leftover one blocks recreating the fixture.
+      await prisma.user.deleteMany({ where: { username: { startsWith: 'test-' } } });
+    });
 
     // Create a test employee
     const createResponse = await request(app.getHttpServer())
       .post('/api/employees')
       .set('Authorization', `Bearer ${authToken}`)
       .send({
-        employeeId: 'TEST-TERM-001',
+        employeeId: 'EMP9301',
         name: 'Test Employee for Termination',
         username: 'test-terminate-user',
         password: 'test123',
-        roleId: '00000000-0000-0000-0000-000000000001',
         department: 'Test Department',
         baseSalary: 5000,
         hourlyRate: 25,
@@ -63,9 +76,9 @@ describe('Employees Termination (e2e)', () => {
   afterAll(async () => {
     // Clean up test employee
     if (testEmployeeId) {
-      await prisma.employee.deleteMany({
+      await runUnscoped('e2e-cleanup', async () => await prisma.employee.deleteMany({
         where: { employeeId: testEmployeeId },
-      });
+      }));
     }
 
     await app.close();
@@ -99,7 +112,7 @@ describe('Employees Termination (e2e)', () => {
         .post('/api/employees/terminate')
         .set('Authorization', `Bearer ${authToken}`)
         .send({
-          employeeId: 'NON-EXISTENT',
+          employeeId: 'EMP9999',
           terminationDate: new Date().toISOString(),
           terminationType: 'termination',
           reason: 'Performance issues',

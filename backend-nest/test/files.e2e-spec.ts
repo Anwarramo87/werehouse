@@ -1,4 +1,4 @@
-import { INestApplication } from '@nestjs/common';
+import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { afterAll, beforeAll, describe, expect, it } from '@jest/globals';
 import request from 'supertest';
@@ -46,6 +46,18 @@ describe('Files API (e2e)', () => {
     app = moduleFixture.createNestApplication();
     app.setGlobalPrefix('api');
     app.use(cookieParser());
+    // Mirror main.ts. Without it the DTO's `@Type(() => Number)` never runs, so
+    // `?limit=10` arrives as the string "10", `Number.isFinite` rejects it, and
+    // the service silently falls back to its default of 20 -- which is what this
+    // suite was reporting as a failure. Production has always had the pipe.
+    app.useGlobalPipes(
+      new ValidationPipe({
+        whitelist: true,
+        forbidNonWhitelisted: true,
+        transform: true,
+        transformOptions: { enableImplicitConversion: true },
+      }),
+    );
     await app.init();
 
     const loginResponse = await request(app.getHttpServer())

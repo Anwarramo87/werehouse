@@ -323,22 +323,31 @@ export class SalesService {
       throw new BadRequestException('Sales order is already processed');
     }
 
-    // Reserve stock per item. Each reserveStock call is atomic; if one fails the
-    // order stays in draft and the caller can retry after fixing stock.
-    for (const item of existing.items) {
-      await this.inventory.reserveStock({
-        sku: item.sku,
-        location: item.location,
-        quantity: item.quantity,
-        reason: `Sales order ${existing.soNumber} confirmed`,
-      });
-    }
+    // Reservation and the status change commit together.
+    //
+    // This used to reserve each line in its own transaction and then update the
+    // status, on the reasoning that a failure left the order in draft to retry.
+    // It did not: lines reserved before the failing one stayed reserved, so a
+    // retry reserved them a second time and quietly double-counted the stock.
+    const order = await this.prisma.$transaction(async (tx) => {
+      for (const item of existing.items) {
+        await this.inventory.reserveStockWithin(tx, {
+          sku: item.sku,
+          location: item.location,
+          quantity: item.quantity,
+          reason: `Sales order ${existing.soNumber} confirmed`,
+          referenceId: salesOrderId,
+        });
+      }
 
-    const order = await this.prisma.salesOrder.update({
-      where: { id: salesOrderId },
-      data: { status: 'confirmed' },
-      include: { items: true },
+      return tx.salesOrder.update({
+        where: { id: salesOrderId },
+        data: { status: 'confirmed' },
+        include: { items: true },
+      });
     });
+
+    await this.inventory.invalidateCaches();
 
     await this.invalidateOrderCaches();
     return { message: 'Sales order confirmed and stock reserved', order };
@@ -356,26 +365,38 @@ export class SalesService {
 
     // Decrease quantity then release the reservation: net effect is quantity -qty,
     // reserved -qty, available unchanged.
-    for (const item of existing.items) {
-      await this.inventory.adjustStock({
-        sku: item.sku,
-        location: item.location,
-        change: -item.quantity,
-        reason: `Sales order ${existing.soNumber} delivered`,
-      });
-      await this.inventory.releaseReservation({
-        sku: item.sku,
-        location: item.location,
-        quantity: item.quantity,
-        reason: `Sales order ${existing.soNumber} delivered`,
-      });
-    }
+    //
+    // All of it commits with the status change. Previously each line ran two
+    // independent transactions before the status update, so a failure part-way
+    // through left stock deducted for some lines on an order still marked
+    // confirmed -- with nothing to reconcile the two.
+    const order = await this.prisma.$transaction(async (tx) => {
+      for (const item of existing.items) {
+        await this.inventory.applyStockChangeWithin(tx, {
+          sku: item.sku,
+          location: item.location,
+          change: -item.quantity,
+          reason: `Sales order ${existing.soNumber} delivered`,
+          referenceType: 'sales_order',
+          referenceId: salesOrderId,
+        });
+        await this.inventory.releaseReservationWithin(tx, {
+          sku: item.sku,
+          location: item.location,
+          quantity: item.quantity,
+          reason: `Sales order ${existing.soNumber} delivered`,
+          referenceId: salesOrderId,
+        });
+      }
 
-    const order = await this.prisma.salesOrder.update({
-      where: { id: salesOrderId },
-      data: { status: 'delivered' },
-      include: { items: true },
+      return tx.salesOrder.update({
+        where: { id: salesOrderId },
+        data: { status: 'delivered' },
+        include: { items: true },
+      });
     });
+
+    await this.inventory.invalidateCaches();
 
     await this.invalidateOrderCaches();
     return { message: 'Sales order delivered and stock deducted', order };

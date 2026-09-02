@@ -4,7 +4,10 @@ describe('SalaryService — calculateAllowances', () => {
   it('calculates difference and allowances exactly for provided scenario', () => {
     // Arrange: instantiate with a minimal mock PrismaService
     const mockPrisma: any = {};
-    const svc = new SalaryService(mockPrisma);
+    // SalaryService gained a ShortCacheService dependency; calculateAllowances is
+    // pure and never reaches it, so a stub is enough to construct the service.
+    const mockCache: any = { getOrSetJson: async (_k: string, _t: number, fn: () => unknown) => fn() };
+    const svc = new SalaryService(mockPrisma, mockCache);
 
     const dto = {
       salary: 10_000_000,

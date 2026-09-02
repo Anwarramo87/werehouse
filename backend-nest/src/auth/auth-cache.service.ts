@@ -28,4 +28,13 @@ export class AuthCacheService {
   async invalidateAllRoles(): Promise<void> {
     await this.cache.del(ROLES_CACHE_KEY);
   }
+
+  /**
+   * Drops every cached principal. Needed after a role's permissions change:
+   * the permission list is copied into each `jwt-user:` entry, so without this
+   * live sessions keep enforcing the old list until the TTL lapses.
+   */
+  async invalidateAllUsers(): Promise<void> {
+    await this.cache.invalidatePrefix(this.jwtUserPrefix);
+  }
 }

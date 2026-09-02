@@ -8,6 +8,7 @@ import {
 import { Prisma, StockMovementType } from '@prisma/client';
 import { Request } from 'express';
 import { PrismaService } from '../prisma/prisma.service';
+import { currentTenant } from '../common/tenant/tenant-context';
 import { paginatedResponse, paginationMeta, resolvePagination } from '../common/utils/pagination.util';
 import { AuditService } from '../common/services/audit.service';
 import { ShortCacheService } from '../common/cache/short-cache.service';
@@ -85,8 +86,18 @@ export class InventoryService {
   }
 
   private productsCacheKey(query: InventoryProductsQueryDto) {
-    const { page = 1, limit = 50, search = '', category = '', status = '' } = query;
-    return `inventory:products:${page}:${limit}:${search}:${category}:${status}`;
+    const {
+      page = 1,
+      limit = 50,
+      search = '',
+      category = '',
+      status = '',
+      sortBy = '',
+      sortDir = '',
+    } = query;
+    // Sort belongs in the key: without it, two differently-ordered requests
+    // would serve each other's cached page.
+    return `inventory:products:${page}:${limit}:${search}:${category}:${status}:${sortBy}:${sortDir}`;
   }
 
   private movementsCacheKey(query: StockMovementQueryDto) {
@@ -132,10 +143,16 @@ export class InventoryService {
         ];
       }
 
+      // The DTO whitelists the column, so this cannot name anything arbitrary.
+      // Newest-first stays the default, which is what the list showed before.
+      const orderBy: Prisma.ProductOrderByWithRelationInput = query.sortBy
+        ? { [query.sortBy]: query.sortDir ?? 'asc' }
+        : { createdAt: 'desc' };
+
       const [products, total, stockMap] = await Promise.all([
         this.prisma.product.findMany({
           where,
-          orderBy: { createdAt: 'desc' },
+          orderBy,
           skip,
           take: limit,
         }),
@@ -264,21 +281,55 @@ export class InventoryService {
     return { sku, locations: stockLevels.length, stockLevels };
   }
 
-  async adjustStock(dto: AdjustStockDto, actor?: Actor, req?: Request) {
-    const change = Math.round(Number(dto.change));
+  /**
+   * The stock mutation itself, executed inside a caller-supplied transaction.
+   *
+   * Split out of `adjustStock` so that operations which must be atomic with a
+   * stock change -- a goods receipt, for instance -- can enrol it in their own
+   * transaction instead of committing the paperwork and the stock separately.
+   * `adjustStock` below still opens its own transaction, so the standalone
+   * behaviour is unchanged.
+   *
+   * Validation that must observe the same snapshot as the write (product exists,
+   * sufficient stock on hand) is performed HERE, inside the transaction, rather
+   * than by the caller beforehand.
+   *
+   * Returns the updated row; the caller owns cache invalidation and audit,
+   * neither of which is transactional.
+   */
+  async applyStockChangeWithin(
+    tx: Prisma.TransactionClient,
+    input: {
+      sku: string;
+      location: string;
+      change: number;
+      type?: StockMovementType;
+      reason?: string | null;
+      referenceType?: string;
+      referenceId?: string;
+      createdById?: string;
+    },
+  ): Promise<{ stockLevel: StockLevelRow; type: StockMovementType }> {
+    const change = Math.round(Number(input.change));
     if (!Number.isFinite(change) || change === 0) {
       throw new BadRequestException('Change must be a non-zero number');
     }
 
-    const product = await this.prisma.product.findFirst({ where: { sku: dto.sku }, select: { sku: true } });
-    if (!product) throw new NotFoundException(`Product with SKU "${dto.sku}" not found`);
+    const tenantId = this.requireTenantId('Stock adjustment');
 
-    const type: StockMovementType = dto.type ?? (change > 0 ? StockMovementType.IN : StockMovementType.OUT);
+    const product = await tx.product.findFirst({
+      where: { sku: input.sku },
+      select: { sku: true },
+    });
+    if (!product) throw new NotFoundException(`Product with SKU "${input.sku}" not found`);
+
+    const type: StockMovementType =
+      input.type ?? (change > 0 ? StockMovementType.IN : StockMovementType.OUT);
 
     // Block going below zero on hand for deductions.
     if (change < 0) {
-      const current = await this.prisma.stockLevel.findFirst({
-        where: { sku: dto.sku, location: dto.location },
+      const current = await tx.stockLevel.findFirst({
+        where: { sku: input.sku, location: input.location },
         select: { quantity: true },
       });
       if (!current) throw new NotFoundException('Stock level not found');
@@ -287,34 +338,52 @@ export class InventoryService {
       }
     }
 
-    const stockLevel = await this.prisma.$transaction(async (tx) => {
-      const rows = await tx.$queryRaw<StockLevelRow[]>`
-        INSERT INTO stock_levels (id, sku, location, quantity, reserved, available, "createdAt", "updatedAt")
-        VALUES (gen_random_uuid(), ${dto.sku}, ${dto.location}, ${Math.max(0, change)}, 0, ${Math.max(0, change)}, NOW(), NOW())
-        ON CONFLICT (sku, location) DO UPDATE SET
-          quantity = GREATEST(0, stock_levels.quantity + ${change}),
-          available = GREATEST(0, GREATEST(0, stock_levels.quantity + ${change}) - stock_levels.reserved),
-          "updatedAt" = NOW()
-        RETURNING id, sku, location, quantity, reserved, available, "createdAt", "updatedAt"
-      `;
-      const updated = rows[0];
-      if (!updated) throw new BadRequestException('Stock adjustment failed');
+    // ON CONFLICT must name a real unique index. The only one on this table is
+    // ("tenantId", sku, location) -- the previous (sku, location) target did
+    // not exist, so this statement failed outright.
+    const rows = await tx.$queryRaw<StockLevelRow[]>`
+      INSERT INTO stock_levels (id, "tenantId", sku, location, quantity, reserved, available, "createdAt", "updatedAt")
+      VALUES (gen_random_uuid(), ${tenantId}::uuid, ${input.sku}, ${input.location}, ${Math.max(0, change)}, 0, ${Math.max(0, change)}, NOW(), NOW())
+      ON CONFLICT ("tenantId", sku, location) DO UPDATE SET
+        quantity = GREATEST(0, stock_levels.quantity + ${change}),
+        available = GREATEST(0, GREATEST(0, stock_levels.quantity + ${change}) - stock_levels.reserved),
+        "updatedAt" = NOW()
+      RETURNING id, sku, location, quantity, reserved, available, "createdAt", "updatedAt"
+    `;
+    const updated = rows[0];
+    if (!updated) throw new BadRequestException('Stock adjustment failed');
 
-      await tx.stockMovement.create({
-        data: {
-          sku: dto.sku,
-          type,
-          quantity: change,
-          location: dto.location,
-          reason: dto.reason || null,
-          referenceType: dto.referenceType,
-          referenceId: dto.referenceId,
-          createdById: actor?.userId,
-        },
-      });
-
-      return updated;
+    await tx.stockMovement.create({
+      data: {
+        sku: input.sku,
+        type,
+        quantity: change,
+        location: input.location,
+        reason: input.reason || null,
+        referenceType: input.referenceType,
+        referenceId: input.referenceId,
+        createdById: input.createdById,
+      },
     });
+
+    return { stockLevel: updated, type };
+  }
+
+  async adjustStock(dto: AdjustStockDto, actor?: Actor, req?: Request) {
+    const change = Math.round(Number(dto.change));
+
+    const { stockLevel, type } = await this.prisma.$transaction((tx) =>
+      this.applyStockChangeWithin(tx as Prisma.TransactionClient, {
+        sku: dto.sku,
+        location: dto.location,
+        change: dto.change,
+        type: dto.type,
+        reason: dto.reason,
+        referenceType: dto.referenceType,
+        referenceId: dto.referenceId,
+        createdById: actor?.userId,
+      }),
+    );
 
     await this.invalidateInventoryCaches();
     this.audit(
@@ -329,40 +398,137 @@ export class InventoryService {
     return { message: 'Stock adjusted successfully', stockLevel };
   }
 
-  async reserveStock(dto: ReserveStockDto, actor?: Actor, req?: Request) {
-    const quantity = Math.round(Number(dto.quantity));
+  /**
+   * Reserves stock inside a caller-supplied transaction.
+   *
+   * Split out for the same reason as `applyStockChangeWithin`: confirming a
+   * sales order has to reserve every line and flip the order's status as one
+   * unit. The conditional UPDATE (`available >= quantity`) is what makes it
+   * safe under concurrency -- two callers racing for the last unit cannot both
+   * match the predicate.
+   */
+  async reserveStockWithin(
+    tx: Prisma.TransactionClient,
+    input: {
+      sku: string;
+      location: string;
+      quantity: number;
+      reason?: string;
+      referenceId?: string;
+      createdById?: string;
+    },
+  ): Promise<StockLevelRow> {
+    const quantity = Math.round(Number(input.quantity));
     if (!Number.isFinite(quantity) || quantity <= 0) {
       throw new BadRequestException('Quantity must be a positive number');
     }
 
-    const rows = await this.prisma.$transaction(async (tx) => {
-      const result = await tx.$queryRaw<StockLevelRow[]>`
-        UPDATE stock_levels
-        SET reserved = reserved + ${quantity}, available = available - ${quantity}, "updatedAt" = NOW()
-        WHERE sku = ${dto.sku} AND location = ${dto.location} AND available >= ${quantity}
-        RETURNING id, sku, location, quantity, reserved, available, "createdAt", "updatedAt"
-      `;
-      if (result.length === 0) return result;
+    const tenantId = this.requireTenantId('Stock reservation');
 
-      await tx.stockMovement.create({
-        data: {
-          sku: dto.sku,
-          type: StockMovementType.RESERVE,
-          quantity,
-          location: dto.location,
-          reason: dto.reason || 'Reserved',
-          referenceId: dto.referenceId,
-          createdById: actor?.userId,
-        },
-      });
-
-      return result;
-    });
+    const rows = await tx.$queryRaw<StockLevelRow[]>`
+      UPDATE stock_levels
+      SET reserved = reserved + ${quantity}, available = available - ${quantity}, "updatedAt" = NOW()
+      WHERE "tenantId" = ${tenantId}::uuid
+        AND sku = ${input.sku} AND location = ${input.location} AND available >= ${quantity}
+      RETURNING id, sku, location, quantity, reserved, available, "createdAt", "updatedAt"
+    `;
 
     if (rows.length === 0) {
-      await this.assertStockLevelExistsOrThrow(dto.sku, dto.location);
+      const existing = await tx.stockLevel.findFirst({
+        where: { sku: input.sku, location: input.location },
+        select: { id: true },
+      });
+      if (!existing) {
+        throw new NotFoundException(
+          `Stock level not found for SKU "${input.sku}" at "${input.location}"`,
+        );
+      }
       throw new BadRequestException('Insufficient stock available');
     }
+
+    await tx.stockMovement.create({
+      data: {
+        sku: input.sku,
+        type: StockMovementType.RESERVE,
+        quantity,
+        location: input.location,
+        reason: input.reason || 'Reserved',
+        referenceId: input.referenceId,
+        createdById: input.createdById,
+      },
+    });
+
+    return rows[0];
+  }
+
+  /** Releases a reservation inside a caller-supplied transaction. */
+  async releaseReservationWithin(
+    tx: Prisma.TransactionClient,
+    input: {
+      sku: string;
+      location: string;
+      quantity: number;
+      reason?: string;
+      referenceId?: string;
+      createdById?: string;
+    },
+  ): Promise<StockLevelRow> {
+    const quantity = Math.round(Number(input.quantity));
+    if (!Number.isFinite(quantity) || quantity <= 0) {
+      throw new BadRequestException('Quantity must be a positive number');
+    }
+
+    const tenantId = this.requireTenantId('Reservation release');
+
+    const rows = await tx.$queryRaw<StockLevelRow[]>`
+      UPDATE stock_levels
+      SET reserved = reserved - ${quantity}, available = available + ${quantity}, "updatedAt" = NOW()
+      WHERE "tenantId" = ${tenantId}::uuid
+        AND sku = ${input.sku} AND location = ${input.location} AND reserved >= ${quantity}
+      RETURNING id, sku, location, quantity, reserved, available, "createdAt", "updatedAt"
+    `;
+
+    if (rows.length === 0) {
+      const existing = await tx.stockLevel.findFirst({
+        where: { sku: input.sku, location: input.location },
+        select: { id: true },
+      });
+      if (!existing) {
+        throw new NotFoundException(
+          `Stock level not found for SKU "${input.sku}" at "${input.location}"`,
+        );
+      }
+      throw new BadRequestException('Cannot release more than reserved');
+    }
+
+    await tx.stockMovement.create({
+      data: {
+        sku: input.sku,
+        type: StockMovementType.RELEASE,
+        quantity: -quantity,
+        location: input.location,
+        reason: input.reason || 'Released',
+        referenceId: input.referenceId,
+        createdById: input.createdById,
+      },
+    });
+
+    return rows[0];
+  }
+
+  async reserveStock(dto: ReserveStockDto, actor?: Actor, req?: Request) {
+    const quantity = Math.round(Number(dto.quantity));
+
+    const rows = await this.prisma.$transaction((tx) =>
+      this.reserveStockWithin(tx as Prisma.TransactionClient, {
+        sku: dto.sku,
+        location: dto.location,
+        quantity: dto.quantity,
+        reason: dto.reason,
+        referenceId: dto.referenceId,
+        createdById: actor?.userId,
+      }).then((row) => [row]),
+    );
 
     await this.invalidateInventoryCaches();
     this.audit(
@@ -379,38 +545,17 @@ export class InventoryService {
 
   async releaseReservation(dto: ReserveStockDto, actor?: Actor, req?: Request) {
     const quantity = Math.round(Number(dto.quantity));
-    if (!Number.isFinite(quantity) || quantity <= 0) {
-      throw new BadRequestException('Quantity must be a positive number');
-    }
 
-    const rows = await this.prisma.$transaction(async (tx) => {
-      const result = await tx.$queryRaw<StockLevelRow[]>`
-        UPDATE stock_levels
-        SET reserved = reserved - ${quantity}, available = available + ${quantity}, "updatedAt" = NOW()
-        WHERE sku = ${dto.sku} AND location = ${dto.location} AND reserved >= ${quantity}
-        RETURNING id, sku, location, quantity, reserved, available, "createdAt", "updatedAt"
-      `;
-      if (result.length === 0) return result;
-
-      await tx.stockMovement.create({
-        data: {
-          sku: dto.sku,
-          type: StockMovementType.RELEASE,
-          quantity: -quantity,
-          location: dto.location,
-          reason: dto.reason || 'Released',
-          referenceId: dto.referenceId,
-          createdById: actor?.userId,
-        },
-      });
-
-      return result;
-    });
-
-    if (rows.length === 0) {
-      await this.assertStockLevelExistsOrThrow(dto.sku, dto.location);
-      throw new BadRequestException('Cannot release more than reserved');
-    }
+    const rows = await this.prisma.$transaction((tx) =>
+      this.releaseReservationWithin(tx as Prisma.TransactionClient, {
+        sku: dto.sku,
+        location: dto.location,
+        quantity: dto.quantity,
+        reason: dto.reason,
+        referenceId: dto.referenceId,
+        createdById: actor?.userId,
+      }).then((row) => [row]),
+    );
 
     await this.invalidateInventoryCaches();
     this.audit(
@@ -423,6 +568,28 @@ export class InventoryService {
     );
 
     return { message: 'Reservation released successfully', stockLevel: rows[0] };
+  }
+
+  /**
+   * The factory these stock rows belong to.
+   *
+   * The three stock mutations below are raw SQL, and raw SQL does NOT pass
+   * through the Prisma tenant extension -- nothing narrows their WHERE clause
+   * for us. Without an explicit tenantId a `WHERE sku = ... AND location = ...`
+   * matches the same SKU in every other factory and silently rewrites their
+   * stock, so the id is threaded in by hand here and asserted before use.
+   */
+  private requireTenantId(operation: string): string {
+    const scope = currentTenant();
+    const tenantId = scope?.tenantId;
+    if (!tenantId) {
+      // The super admin has no factory of its own; a stock mutation has to name
+      // the factory it applies to, so there is nothing sensible to write here.
+      throw new BadRequestException(
+        `${operation} must be performed from within a factory account`,
+      );
+    }
+    return tenantId;
   }
 
   private async assertStockLevelExistsOrThrow(sku: string, location: string) {

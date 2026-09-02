@@ -41,6 +41,16 @@ services:
     environment:
       NODE_ENV: production
       PORT: 5001
+      # DO NOT REMOVE THIS LINE.
+      #
+      # `env_file: .env` above carries the deployed DATABASE_URL, and this
+      # service's command runs `prisma migrate deploy`. Compose gives
+      # `environment:` precedence over `env_file:`, so this line is the only
+      # thing pointing that migration at the local `postgres` container rather
+      # than at whatever `.env` names. Delete it and `docker compose up` would
+      # migrate the deployed database from a developer's laptop.
+      #
+      # test/db-safety.e2e-spec.ts fails if this line goes missing.
       DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-warehouse_systemfinly}?schema=public
       REDIS_URL: redis://redis:6379
       JWT_EXPIRE: 15m

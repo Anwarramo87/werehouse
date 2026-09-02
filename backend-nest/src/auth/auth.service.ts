@@ -27,7 +27,7 @@ import { BiometricChallengeService } from './biometric-challenge.service';
 import { RefreshTokenService } from './refresh-token.service';
 import { AuthCacheService } from './auth-cache.service';
 import { toFactoryDateKey, resolveTimezoneOffsetMinutes } from '../common/utils/timezone.util';
-import { runUnscoped } from '../common/tenant/tenant-context';
+import { currentTenant, runUnscoped } from '../common/tenant/tenant-context';
 import { MANAGE_TENANTS, SUPERADMIN_ROLE } from '../common/tenant/tenant.constants';
 
 type BiometricChallengePurpose = 'REGISTER' | 'LOGIN';
@@ -52,12 +52,12 @@ export class AuthService {
     'view_devices',
     'manage_devices',
     'manage_users',
-    'manage_roles',
     'view_attendance',
     'edit_attendance',
     'view_payroll',
     'run_payroll',
     'approve_payroll',
+    'delete_payroll',
     'view_inventory',
     'edit_inventory',
     'view_imports',
@@ -75,6 +75,7 @@ export class AuthService {
     'edit_sales',
     'view_accounting',
     'edit_accounting',
+    'notifications.view',
   ];
 
   constructor(
@@ -304,6 +305,29 @@ export class AuthService {
 
   async createUser(dto: CreateUserDto) {
     const hash = await bcrypt.hash(dto.password, this.bcryptRounds());
+
+    // A factory admin runs with bypass=false, so the tenant extension stamps
+    // their own tenantId onto the row and dto.tenantId is ignored -- they can
+    // only ever create users inside their own factory. The super admin runs
+    // with bypass=true, which skips stamping entirely: without naming a factory
+    // the new user would land with tenantId NULL, and a non-superadmin with no
+    // factory fails every tenant-scoped query with a 500.
+    const scope = currentTenant();
+    const tenantId = scope?.bypass ? (dto.tenantId ?? null) : (scope?.tenantId ?? null);
+
+    if (scope?.bypass && !tenantId) {
+      throw new BadRequestException(
+        'tenantId is required: a user must belong to a factory',
+      );
+    }
+
+    if (tenantId) {
+      const tenant = await this.prisma.tenant.findUnique({ where: { id: tenantId } });
+      if (!tenant) {
+        throw new BadRequestException('Factory not found');
+      }
+    }
+
     const user = await this.prisma.user.create({
       data: {
         username: dto.username,
@@ -312,6 +336,7 @@ export class AuthService {
         roleId: dto.roleId,
         status: dto.status || 'active',
         photo: dto.photo,
+        ...(tenantId ? { tenantId } : {}),
       },
       include: { role: true },
     });
@@ -377,11 +402,40 @@ export class AuthService {
     return null;
   }
 
+  /**
+   * Grants any permission the role is missing from its canonical list.
+   *
+   * `permissions` used to be written only when the role row was first created,
+   * so a permission added to ADMIN_PERMISSIONS later never reached an existing
+   * install -- every endpoint gated on it answered 403 forever. Union rather
+   * than overwrite so permissions an operator added by hand survive.
+   */
+  private async reconcileRolePermissions(
+    role: { id: string; permissions: string[] },
+    canonical: string[],
+  ) {
+    const missing = canonical.filter((p) => !role.permissions.includes(p));
+    if (missing.length === 0) {
+      return role;
+    }
+
+    const updated = await this.prisma.role.update({
+      where: { id: role.id },
+      data: { permissions: [...role.permissions, ...missing] },
+    });
+    await this.authCache.invalidateAllRoles();
+    await this.authCache.invalidateAllUsers();
+    return updated;
+  }
+
   async ensureAdminBootstrap() {
     return runUnscoped('bootstrap-admin', async () => {
-    const adminRole =
-      (await this.prisma.role.findUnique({ where: { name: 'admin' } })) ??
-      (await this.prisma.role.create({ data: { name: 'admin', permissions: AuthService.ADMIN_PERMISSIONS } }));
+    const existingAdminRole = await this.prisma.role.findUnique({ where: { name: 'admin' } });
+    const adminRole = existingAdminRole
+      ? await this.reconcileRolePermissions(existingAdminRole, AuthService.ADMIN_PERMISSIONS)
+      : await this.prisma.role.create({
+          data: { name: 'admin', permissions: AuthService.ADMIN_PERMISSIONS },
+        });
 
     const password = this.config.get<string>('ADMIN_BOOTSTRAP_PASSWORD');
     if (!password && this.config.get('NODE_ENV') === 'production') {
@@ -411,15 +465,23 @@ export class AuthService {
     // They used to share the `admin` role, which is why the two were
     // indistinguishable; PermissionsGuard now grants blanket access to
     // `superadmin` only, so a factory admin no longer inherits overseer rights.
-    const superadminRole =
-      (await this.prisma.role.findUnique({ where: { name: SUPERADMIN_ROLE } })) ??
-      (await this.prisma.role.create({
-        data: {
-          name: SUPERADMIN_ROLE,
-          description: 'Overseer: sees every factory, manages tenants and global backups',
-          permissions: [...AuthService.ADMIN_PERMISSIONS, MANAGE_TENANTS],
-        },
-      }));
+    const superadminPermissions = [
+      ...AuthService.ADMIN_PERMISSIONS,
+      MANAGE_TENANTS,
+      'manage_roles',
+    ];
+    const existingSuperadminRole = await this.prisma.role.findUnique({
+      where: { name: SUPERADMIN_ROLE },
+    });
+    const superadminRole = existingSuperadminRole
+      ? await this.reconcileRolePermissions(existingSuperadminRole, superadminPermissions)
+      : await this.prisma.role.create({
+          data: {
+            name: SUPERADMIN_ROLE,
+            description: 'Overseer: sees every factory, manages tenants and global backups',
+            permissions: superadminPermissions,
+          },
+        });
 
     const username = this.config.get<string>('SUPERADMIN_USERNAME', 'superadmin');
     const email = this.config.get<string>('SUPERADMIN_EMAIL', 'superadmin@warehouse.local');

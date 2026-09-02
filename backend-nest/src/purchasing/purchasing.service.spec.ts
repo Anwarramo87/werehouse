@@ -14,6 +14,7 @@ describe('PurchasingService', () => {
     purchaseOrder: Record<string, jest.Mock>;
     purchaseOrderItem: Record<string, jest.Mock>;
     goodsReceipt: Record<string, jest.Mock>;
+    goodsReceiptItem: Record<string, jest.Mock>;
     $transaction: jest.Mock;
   } = {
     supplier: {
@@ -30,6 +31,7 @@ describe('PurchasingService', () => {
     },
     purchaseOrder: {
       findUnique: jest.fn(),
+      findUniqueOrThrow: jest.fn(),
       findFirst: jest.fn(),
       findMany: jest.fn(),
       count: jest.fn(),
@@ -37,11 +39,20 @@ describe('PurchasingService', () => {
       update: jest.fn(),
       delete: jest.fn(),
     },
+    // Order and receipt items are written as separate top-level createMany
+    // calls now, so the tenant extension stamps them; a nested create left
+    // tenantId null and the NOT NULL constraint rejected it.
     purchaseOrderItem: {
       update: jest.fn(),
+      createMany: jest.fn(),
     },
     goodsReceipt: {
       create: jest.fn(),
+      findFirst: jest.fn(),
+      findUniqueOrThrow: jest.fn(),
+    },
+    goodsReceiptItem: {
+      createMany: jest.fn(),
     },
     $transaction: jest.fn(),
   };
@@ -52,6 +63,11 @@ describe('PurchasingService', () => {
 
   const inventoryMock = {
     adjustStock: jest.fn().mockResolvedValue({ message: 'ok' }),
+    // Goods receipt now enrols the stock change in its own transaction rather
+    // than calling adjustStock afterwards, so this is the method it reaches for.
+    applyStockChangeWithin: jest
+      .fn()
+      .mockResolvedValue({ stockLevel: { id: 'stock-1' }, type: 'IN' }),
     invalidateCaches: jest.fn().mockResolvedValue(undefined),
   };
 
@@ -139,6 +155,8 @@ describe('PurchasingService', () => {
       prismaMock.product.count.mockResolvedValue(2);
       prismaMock.purchaseOrder.findFirst.mockResolvedValue(null);
       prismaMock.purchaseOrder.create.mockResolvedValue({ id: 'po-1' });
+      prismaMock.purchaseOrderItem.createMany.mockResolvedValue({ count: 2 });
+      prismaMock.purchaseOrder.findUniqueOrThrow.mockResolvedValue({ id: 'po-1', items: [] });
 
       const result = await service.createPurchaseOrder(
         {
@@ -155,6 +173,8 @@ describe('PurchasingService', () => {
       expect(createData.poNumber).toMatch(/^PO-\d{6}-\d{4}$/);
       expect(createData.status).toBe('draft');
       expect(Number(createData.totalAmount)).toBe(35);
+      // Back to a nested create: the tenant extension now stamps nested rows
+      // centrally, so the call site no longer works around it.
       expect(createData.items.create).toHaveLength(2);
       expect(result.message).toBe('Purchase order created successfully');
     });
@@ -214,12 +234,19 @@ describe('PurchasingService', () => {
       expect(prismaMock.purchaseOrder.update).toHaveBeenCalledWith(
         expect.objectContaining({ data: { status: 'received' } }),
       );
-      expect(inventoryMock.adjustStock).toHaveBeenCalledWith({
-        sku: 'SKU-001',
-        location: 'WH-A',
-        change: 6,
-        reason: expect.stringContaining('PO-001'),
-      });
+      // Called with the transaction client as its first argument — the proof
+      // that stock now moves inside the receipt's transaction.
+      expect(inventoryMock.applyStockChangeWithin).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          sku: 'SKU-001',
+          location: 'WH-A',
+          change: 6,
+          reason: expect.stringContaining('PO-001'),
+          referenceType: 'purchase_order',
+        }),
+      );
+      expect(inventoryMock.adjustStock).not.toHaveBeenCalled();
       expect(result.message).toBe('Goods received successfully');
     });
 

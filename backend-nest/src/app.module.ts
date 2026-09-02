@@ -16,6 +16,7 @@ import { PayrollModule } from './payroll/payroll.module';
 import { InventoryModule } from './inventory/inventory.module';
 import { PurchasingModule } from './purchasing/purchasing.module';
 import { SalesModule } from './sales/sales.module';
+import { AssistantModule } from './assistant/assistant.module';
 import { AccountingModule } from './accounting/accounting.module';
 import { ImportsModule } from './imports/imports.module';
 import { PrismaModule } from './prisma/prisma.module';
@@ -214,6 +215,7 @@ const queueInfraModules = queuesEnabled
     InventoryModule,
     PurchasingModule,
     SalesModule,
+    AssistantModule,
     AccountingModule,
     ImportsModule,
     SalaryModule,

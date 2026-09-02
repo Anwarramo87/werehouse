@@ -2,6 +2,7 @@ import { Prisma } from '@prisma/client';
 import { currentTenant } from './tenant-context';
 import { isTenantScoped } from './tenant-models';
 import { TENANT_COMPOUND_KEYS } from './tenant-compound-keys';
+import { stampTenantOnData, walkWriteData } from './tenant-nested';
 
 /** Operations whose `where` must be narrowed to the caller's tenant. */
 const FILTERED = new Set([
@@ -24,6 +25,12 @@ const FILTERED = new Set([
 
 /** Operations whose payload must be stamped with the caller's tenant. */
 const STAMPED = new Set(['create', 'createMany', 'upsert']);
+
+/**
+ * Operations that are not themselves creates, but whose `data` can still carry
+ * nested writes -- `update({ where, data: { items: { create: [...] } } })`.
+ */
+const WALKED = new Set(['update', 'updateMany']);
 
 /**
  * Operations Prisma requires to target a *unique* row. Business keys such as
@@ -123,14 +130,23 @@ export function tenantExtension() {
           if (STAMPED.has(operation)) {
             if (operation === 'upsert') {
               // `where` was already narrowed + folded by the FILTERED branch.
-              next.create = { ...((next.create as object) ?? {}), tenantId };
+              next.create = stampTenantOnData(model, (next.create as object) ?? {}, tenantId);
+              next.update = walkWriteData(model, (next.update as object) ?? {}, tenantId);
             } else if (operation === 'createMany') {
+              // createMany takes flat rows only -- no nested writes to walk.
               const data = (next.data as unknown[]) ?? [];
               next.data = Array.isArray(data)
                 ? data.map((row) => ({ ...(row as object), tenantId }))
                 : { ...(data as object), tenantId };
             } else {
-              next.data = { ...((next.data as object) ?? {}), tenantId };
+              next.data = stampTenantOnData(model, (next.data as object) ?? {}, tenantId);
+            }
+          } else if (WALKED.has(operation)) {
+            // update/updateMany are narrowed above but their `data` can still
+            // carry nested writes -- items created, connected or deleted through
+            // the parent. Those get the same treatment as a create's.
+            if (next.data !== undefined) {
+              next.data = walkWriteData(model, next.data as object, tenantId);
             }
           }
 

@@ -23,8 +23,8 @@
     "start:prod": "node dist/main",
     "start:worker:payroll:prod": "node dist/payroll-worker.js",
     "prisma:generate": "prisma generate",
-    "prisma:migrate:deploy": "prisma migrate deploy",
-    "prisma:push:local": "prisma db push --accept-data-loss",
+    "prisma:migrate:deploy": "node scripts/prisma-safe.js remote migrate deploy",
+    "prisma:push:local": "node scripts/prisma-safe.js local db push --accept-data-loss",
     "seed:demo": "node scripts/seed-demo.js",
     "import:legacy-employees": "node scripts/import-legacy-employees.js",
     "seed:employees": "ts-node prisma/seed-employees-payroll.ts",
@@ -40,9 +40,13 @@
     "format:check": "prettier --check \"{src,test}/**/*.ts\"",
     "typecheck": "tsc --noEmit",
     "audit:deps": "npm audit --audit-level=high",
-    "migrate:deploy": "prisma migrate deploy"
+    "migrate:deploy": "node scripts/prisma-safe.js remote migrate deploy",
+    "prisma:migrate:local": "node scripts/prisma-safe.js local migrate deploy",
+    "db:target": "node scripts/db-target-report.js"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.122.0",
+    "@google/genai": "^2.20.0",
     "@neondatabase/serverless": "^1.1.0",
     "@nestjs/bullmq": "^11.0.4",
     "@nestjs/common": "^11.1.27",
