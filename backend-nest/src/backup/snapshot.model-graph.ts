@@ -33,7 +33,7 @@ export const MODEL_DEPENDENCIES: Record<string, readonly string[]> = {
   device: ['tenant'],
   attendanceRecord: ['tenant', 'employee'],
   dailyAttendanceLog: ['tenant', 'employee'],
-  product: ['tenant'],
+  product: ['tenant', 'taxRate'],
   stockLevel: ['tenant', 'product'],
   warehouse: ['tenant'],
   stockMovement: ['tenant'],
@@ -42,7 +42,7 @@ export const MODEL_DEPENDENCIES: Record<string, readonly string[]> = {
   purchaseOrderItem: ['tenant', 'purchaseOrder', 'product'],
   goodsReceipt: ['tenant', 'purchaseOrder'],
   goodsReceiptItem: ['tenant', 'goodsReceipt', 'purchaseOrderItem', 'product'],
-  customer: ['tenant'],
+  customer: ['tenant', 'priceTier'],
   salesOrder: ['tenant', 'customer'],
   salesOrderItem: ['tenant', 'salesOrder', 'product'],
   salesPayment: ['tenant', 'salesOrder'],
@@ -70,6 +70,58 @@ export const MODEL_DEPENDENCIES: Record<string, readonly string[]> = {
   busPassenger: ['tenant', 'bus', 'employee'],
   auditLog: ['tenant'],
   notification: ['tenant'],
+
+  // --- WMS extension ---------------------------------------------------
+  // Reference data first: prices and taxes are pointed at by products,
+  // customers and invoices, so they have to exist before any of them.
+  taxRate: ['tenant'],
+  priceTier: ['tenant'],
+  productPrice: ['tenant', 'priceTier'],
+
+  // Batches. `sku` is a plain column on the sub-ledger, not a foreign key --
+  // only the batch itself is, which is what the edge records.
+  productBatch: ['tenant'],
+  batchStockLevel: ['tenant', 'productBatch'],
+  expiryAlertRule: ['tenant'],
+
+  // Location hierarchy.
+  warehouseZone: ['tenant', 'warehouse'],
+  storageBin: ['tenant', 'warehouseZone'],
+  putawayTask: ['tenant', 'productBatch'],
+
+  // Purchase invoicing and costing.
+  purchaseInvoice: ['tenant', 'supplier', 'purchaseOrder'],
+  purchaseInvoiceItem: ['tenant', 'purchaseInvoice'],
+  landedCost: ['tenant', 'purchaseInvoice'],
+  purchasePayment: ['tenant', 'purchaseInvoice'],
+  costHistory: ['tenant'],
+
+  // Sales invoicing and delivery.
+  salesInvoice: ['tenant', 'customer', 'salesOrder', 'priceTier'],
+  salesInvoiceItem: ['tenant', 'salesInvoice', 'productBatch'],
+  deliveryNote: ['tenant', 'salesInvoice'],
+  deliveryNoteItem: ['tenant', 'deliveryNote'],
+
+  // Counting and quality.
+  cycleCount: ['tenant'],
+  cycleCountItem: ['tenant', 'cycleCount', 'productBatch'],
+  qualityInspection: ['tenant'],
+
+  // Fulfilment.
+  pickList: ['tenant'],
+  pickListItem: ['tenant', 'pickList', 'productBatch'],
+  carrier: ['tenant'],
+  shipment: ['tenant', 'salesInvoice', 'carrier'],
+  package: ['tenant', 'shipment'],
+  packageItem: ['tenant', 'package'],
+
+  // Integrations.
+  integrationConnection: ['tenant'],
+  integrationSyncLog: ['tenant', 'integrationConnection'],
+  webhookEndpoint: ['tenant'],
+
+  // خريطة الحسابات: تُرمَّم بعد شجرة الحسابات نفسها.
+  accountMapping: ['tenant', 'account'],
 };
 
 /**

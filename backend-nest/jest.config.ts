@@ -1,9 +1,17 @@
 import type { Config } from 'jest';
 
+/**
+ * Unit tests.
+ *
+ * They live under test/unit/, mirroring the src/ tree they cover, so every test
+ * in the project is reachable from one directory. rootDir is the package root
+ * rather than src/ because the specs and the code they import now sit in
+ * sibling trees.
+ */
 const config: Config = {
   moduleFileExtensions: ['js', 'json', 'ts'],
-  rootDir: 'src',
-  testRegex: '.*\\.spec\\.ts$',
+  rootDir: '.',
+  testRegex: 'test/unit/.*\\.spec\\.ts$',
   transform: {
     '^.+\\.(t|j)s$': ['ts-jest', {
       tsconfig: {
@@ -18,8 +26,8 @@ const config: Config = {
       },
     }],
   },
-  collectCoverageFrom: ['**/*.(t|j)s'],
-  coverageDirectory: '../coverage',
+  collectCoverageFrom: ['src/**/*.(t|j)s'],
+  coverageDirectory: 'coverage',
   testEnvironment: 'node',
   // Coverage threshold — ratchet this upward over time as test coverage improves.
   // Starting at a realistic baseline that reflects current coverage.

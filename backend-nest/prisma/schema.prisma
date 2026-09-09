@@ -56,6 +56,37 @@ model Tenant {
   busPassengers                   BusPassenger[]
   auditLogs                       AuditLog[]
   notifications                   Notification[]
+  productBatchs                   ProductBatch[]
+  batchStockLevels                BatchStockLevel[]
+  expiryAlertRules                ExpiryAlertRule[]
+  warehouseZones                  WarehouseZone[]
+  storageBins                     StorageBin[]
+  putawayTasks                    PutawayTask[]
+  taxRates                        TaxRate[]
+  priceTiers                      PriceTier[]
+  productPrices                   ProductPrice[]
+  purchaseInvoices                PurchaseInvoice[]
+  purchaseInvoiceItems            PurchaseInvoiceItem[]
+  landedCosts                     LandedCost[]
+  purchasePayments                PurchasePayment[]
+  costHistorys                    CostHistory[]
+  salesInvoices                   SalesInvoice[]
+  salesInvoiceItems               SalesInvoiceItem[]
+  deliveryNotes                   DeliveryNote[]
+  deliveryNoteItems               DeliveryNoteItem[]
+  cycleCounts                     CycleCount[]
+  cycleCountItems                 CycleCountItem[]
+  qualityInspections              QualityInspection[]
+  pickLists                       PickList[]
+  pickListItems                   PickListItem[]
+  carriers                        Carrier[]
+  shipments                       Shipment[]
+  packages                        Package[]
+  packageItems                    PackageItem[]
+  integrationConnections          IntegrationConnection[]
+  integrationSyncLogs             IntegrationSyncLog[]
+  webhookEndpoints                WebhookEndpoint[]
+  accountMappings                 AccountMapping[]
 
   @@index([status])
   @@map("tenants")
@@ -375,6 +406,30 @@ model Product {
   status       String   @default("active")
   unit         String   @default("قطعة")
   photo        String? // صورة المنتج (data URL أو رابط)
+
+  /// باركود المنتج (EAN13 / Code128) — يُمسح بالجهاز المحمول
+  barcode String?
+
+  /// هل يُتتبَّع هذا المنتج بالدفعات وتواريخ الصلاحية؟
+  /// حين يكون true تصبح بيانات الدفعة إلزامية عند كل إدخال، ويُطبَّق FEFO عند الإخراج.
+  batchTracked Boolean @default(false)
+  /// العمر الافتراضي بالأيام — يُشتق منه تاريخ الصلاحية إن لم يُدخَل يدوياً
+  shelfLifeDays Int?
+
+  /// أبعاد ووزن الوحدة — يستخدمها محرّك اقتراح التخزين وحساب أوزان الطرود
+  weightKg Decimal? @db.Decimal(10, 3)
+  volumeM3 Decimal? @db.Decimal(10, 4)
+
+  /// الخانة الافتراضية للتخزين (Fixed slotting)
+  defaultBinCode String?
+  /// تصنيف ABC حسب معدل الدوران — يقود أولوية الجرد الدوري وقرب الخانة من الشحن
+  abcClass String?
+
+  costingMethod CostingMethod @default(WEIGHTED_AVERAGE)
+
+  taxRateId String?  @db.Uuid
+  taxRate   TaxRate? @relation(fields: [taxRateId], references: [id], onDelete: SetNull)
+
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
@@ -387,6 +442,8 @@ model Product {
   @@index([status, createdAt])
   @@index([category, status, createdAt])
   @@unique([tenantId, sku])
+  @@unique([tenantId, barcode])
+  @@index([tenantId, batchTracked])
   @@index([tenantId])
   @@map("products")
 }
@@ -420,6 +477,8 @@ model Warehouse {
   status    String    @default("active") // active | inactive
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
+
+  zones WarehouseZone[]
 
   @@index([status])
   @@unique([tenantId, code])
@@ -472,7 +531,8 @@ model Supplier {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  purchaseOrders PurchaseOrder[]
+  purchaseOrders   PurchaseOrder[]
+  purchaseInvoices PurchaseInvoice[]
 
   // Referenced by tenant-composite foreign keys: Postgres requires the
 
@@ -500,8 +560,9 @@ model PurchaseOrder {
   updatedAt    DateTime            @updatedAt
 
   supplier      Supplier?           @relation(fields: [tenantId, supplierId], references: [tenantId, id], onDelete: Restrict)
-  items         PurchaseOrderItem[]
-  goodsReceipts GoodsReceipt[]
+  items            PurchaseOrderItem[]
+  goodsReceipts    GoodsReceipt[]
+  purchaseInvoices PurchaseInvoice[]
 
   // Referenced by tenant-composite foreign keys: Postgres requires the
 
@@ -526,6 +587,10 @@ model PurchaseOrderItem {
   quantity         Int
   unitCost         Decimal           @db.Decimal(12, 2)
   receivedQuantity Int               @default(0)
+
+  /// خصم وضريبة على مستوى البند — تُرحَّل إلى فاتورة الشراء عند إنشائها من الأمر
+  discountPercent Decimal @default(0) @db.Decimal(6, 3)
+  taxRate         Decimal @default(0) @db.Decimal(6, 3)
   createdAt        DateTime          @default(now())
   updatedAt        DateTime          @updatedAt
 
@@ -581,6 +646,19 @@ model GoodsReceiptItem {
   quantity            Int
   location            String
   unitCost            Decimal           @db.Decimal(12, 2)
+
+  /// بيانات الدفعة الملتقطة عند الاستلام — تُنشئ ProductBatch مباشرة
+  batchId        String?   @db.Uuid
+  batchNumber    String?
+  productionDate DateTime? @db.Date
+  expiryDate     DateTime? @db.Date
+
+  /// فحص الجودة: البضاعة تدخل الحجر حتى تُعتمد حين يكون الفحص مطلوباً
+  qcStatus  QcStatus  @default(PASSED)
+  qcNotes   String?
+  qcBy      String?   @db.Uuid
+  qcAt      DateTime?
+
   createdAt           DateTime          @default(now())
 
   goodsReceipt        GoodsReceipt?     @relation(fields: [tenantId, goodsReceiptId], references: [tenantId, id], onDelete: Cascade)
@@ -604,10 +682,19 @@ model Customer {
   address   String?
   taxNumber String?
   status    String   @default("active") // active | inactive
+
+  /// فئة التسعير المطبَّقة على هذا العميل (جملة / مفرق / خاص)
+  priceTierId String?    @db.Uuid
+  priceTier   PriceTier? @relation(fields: [priceTierId], references: [id], onDelete: SetNull)
+
+  /// سقف الائتمان — يمنع ترحيل فاتورة تتجاوزه
+  creditLimit Decimal @default(0) @db.Decimal(14, 2)
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  salesOrders SalesOrder[]
+  salesOrders   SalesOrder[]
+  salesInvoices SalesInvoice[]
 
   // Referenced by tenant-composite foreign keys: Postgres requires the
 
@@ -638,6 +725,7 @@ model SalesOrder {
   customer    Customer?           @relation(fields: [tenantId, customerId], references: [tenantId, id], onDelete: Restrict)
   items       SalesOrderItem[]
   payments    SalesPayment[]
+  invoices    SalesInvoice[]
 
   // Referenced by tenant-composite foreign keys: Postgres requires the
 
@@ -661,6 +749,17 @@ model SalesOrderItem {
   sku           String
   quantity      Int
   unitPrice     Decimal    @db.Decimal(12, 2)
+
+  /// خصم وضريبة على مستوى البند — يحسبهما محرّك التسعير من فئة العميل
+  discountPercent Decimal @default(0) @db.Decimal(6, 3)
+  discountAmount  Decimal @default(0) @db.Decimal(14, 2)
+  taxRate         Decimal @default(0) @db.Decimal(6, 3)
+  taxAmount       Decimal @default(0) @db.Decimal(14, 2)
+  lineTotal       Decimal @default(0) @db.Decimal(14, 2)
+
+  /// الدفعة المحجوزة لهذا البند — يقترحها FEFO عند تأكيد الطلب
+  batchId String? @db.Uuid
+
   location      String     @default("WH-A")
   createdAt     DateTime   @default(now())
   updatedAt     DateTime   @updatedAt
@@ -708,6 +807,7 @@ model Account {
   parent      Account?        @relation("AccountTree", fields: [tenantId, parentId], references: [tenantId, id], onDelete: Restrict)
   children    Account[]       @relation("AccountTree")
   journalLines JournalEntryLine[]
+  mappings    AccountMapping[]
 
   // Referenced by tenant-composite foreign keys: Postgres requires the
 
@@ -729,6 +829,15 @@ model JournalEntry {
   entryNumber String
   entryDate   DateTime            @db.Date
   description String
+
+  /// من أين جاء القيد: purchase_invoice | sales_invoice | cycle_count | manual
+  sourceType  String?
+  sourceId    String?             @db.Uuid
+  /// مفتاح فريد يمنع ترحيل نفس الحدث مرتين: مثل purchase_invoice:post:<id>
+  sourceRef   String?
+  /// true إن أنشأه النظام تلقائياً لا مستخدم يدوياً
+  isAutomatic Boolean             @default(false)
+
   createdBy   String              @db.Uuid
   createdAt   DateTime            @default(now())
   updatedAt   DateTime            @updatedAt
@@ -743,6 +852,8 @@ model JournalEntry {
 
   @@index([entryDate])
   @@unique([tenantId, entryNumber])
+  @@unique([tenantId, sourceRef])
+  @@index([tenantId, sourceType, sourceId])
   @@index([tenantId])
   @@map("journal_entries")
 }
@@ -1260,6 +1371,21 @@ enum NotificationType {
   RESIGNATION
   LATE
   ABSENT
+  // --- المخزون واللوجستيات ---
+  STOCK_LOW
+  STOCK_OUT
+  EXPIRY_WARNING
+  EXPIRY_CRITICAL
+  EXPIRED
+  BATCH_QUARANTINED
+  QC_FAILED
+  CYCLE_COUNT_VARIANCE
+  PUTAWAY_PENDING
+  PICK_ASSIGNED
+  SHIPMENT_DISPATCHED
+  PO_RECEIVED
+  INVOICE_DUE
+  INTEGRATION_ERROR
 }
 
 enum NotificationSeverity {
@@ -1314,4 +1440,1170 @@ model Notification {
   @@unique([tenantId, dedupeKey])
   @@index([tenantId])
   @@map("notifications")
+}
+
+// ===========================================================================
+// WMS EXTENSION — الدفعات، الصلاحية، الفواتير، التسعير، الجرد، التجهيز، الشحن
+// ---------------------------------------------------------------------------
+// ملاحظة معمارية: الجداول الجديدة تستخدم مفاتيح أجنبية بسيطة على `id` (UUID
+// فريد عالمياً) بدل المفاتيح المركّبة (tenantId, id) المستخدمة في الجداول
+// القديمة. عزل المستأجرين محفوظ عبر tenant-extension الذي يحقن tenantId في
+// كل استعلام، و @@unique([tenantId, ...]) على المفاتيح التجارية.
+// ===========================================================================
+
+enum BatchStatus {
+  AVAILABLE
+  QUARANTINE
+  NEAR_EXPIRY
+  EXPIRED
+  CONSUMED
+  REJECTED
+}
+
+enum QcStatus {
+  PENDING
+  PASSED
+  FAILED
+  PARTIAL
+}
+
+enum DocumentStatus {
+  DRAFT
+  POSTED
+  PARTIALLY_PAID
+  PAID
+  CANCELLED
+}
+
+enum PickStrategy {
+  SINGLE
+  BATCH
+  ZONE
+  WAVE
+}
+
+enum PickStatus {
+  PENDING
+  ASSIGNED
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+}
+
+enum CountStatus {
+  DRAFT
+  IN_PROGRESS
+  REVIEW
+  COMPLETED
+  CANCELLED
+}
+
+enum CountItemStatus {
+  PENDING
+  COUNTED
+  RECOUNT
+  APPROVED
+  REJECTED
+}
+
+enum PutawayStatus {
+  PENDING
+  ASSIGNED
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+}
+
+enum ShipmentStatus {
+  PENDING
+  LABELED
+  DISPATCHED
+  IN_TRANSIT
+  DELIVERED
+  RETURNED
+  CANCELLED
+}
+
+enum CostingMethod {
+  WEIGHTED_AVERAGE
+  LAST_COST
+  STANDARD
+}
+
+enum AllocationMethod {
+  VALUE
+  QUANTITY
+  WEIGHT
+  MANUAL
+}
+
+enum IntegrationProvider {
+  ODOO
+  SAP
+  ORACLE
+  SHOPIFY
+  WOOCOMMERCE
+  CUSTOM
+}
+
+enum SyncDirection {
+  INBOUND
+  OUTBOUND
+}
+
+enum SyncStatus {
+  RUNNING
+  SUCCESS
+  FAILED
+  PARTIAL
+}
+
+enum ZoneType {
+  RECEIVING
+  PICKING
+  BULK
+  QUARANTINE
+  PACKING
+  STAGING
+  SHIPPING
+  RETURNS
+}
+
+// --------------------------------------------------------------- 1. الدفعات
+
+/// دفعة إنتاج (Batch / Lot) لمنتج، مع تاريخي الإنتاج والصلاحية.
+/// هذا هو الكيان الذي يجعل FIFO / FEFO والتنبيهات المبكرة ممكنة.
+model ProductBatch {
+  id       String  @id @default(uuid()) @db.Uuid
+  tenantId String? @db.Uuid
+  tenant   Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  sku         String
+  batchNumber String
+
+  /// تاريخ الإنتاج — إلزامي عند الاستلام للمنتجات المتتبَّعة بالدفعات
+  productionDate DateTime? @db.Date
+  /// تاريخ انتهاء الصلاحية — عليه يقوم كامل منطق FEFO والتنبيهات
+  expiryDate     DateTime? @db.Date
+
+  status BatchStatus @default(AVAILABLE)
+
+  /// الكمية الأصلية عند الإدخال (لا تتغير — مرجع للتقارير)
+  initialQuantity Int @default(0)
+  /// الكمية الحالية على اليد عبر كل المواقع
+  quantity        Int @default(0)
+  reserved        Int @default(0)
+
+  /// تكلفة الوحدة لهذه الدفعة تحديداً (تشمل حصتها من المصاريف الملحقة)
+  unitCost Decimal @default(0) @db.Decimal(12, 4)
+
+  /// باركود الدفعة — يُطبع على الملصق ويُمسح بالجهاز المحمول
+  barcode String?
+
+  supplierId         String? @db.Uuid
+  purchaseInvoiceId  String? @db.Uuid
+  goodsReceiptItemId String? @db.Uuid
+
+  quarantineReason String?
+  notes            String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  stockLevels       BatchStockLevel[]
+  salesInvoiceItems SalesInvoiceItem[]
+  pickListItems     PickListItem[]
+  cycleCountItems   CycleCountItem[]
+  putawayTasks      PutawayTask[]
+
+  @@unique([tenantId, sku, batchNumber])
+  @@unique([tenantId, barcode])
+  @@index([tenantId, sku, expiryDate])
+  @@index([tenantId, status, expiryDate])
+  @@index([tenantId, expiryDate])
+  @@index([tenantId])
+  @@map("product_batches")
+}
+
+/// رصيد دفعة معينة في موقع معيّن — دفتر فرعي تحت stock_levels.
+/// كل حركة هنا تُطبَّق أيضاً على الرصيد الإجمالي في نفس المعاملة.
+model BatchStockLevel {
+  id       String  @id @default(uuid()) @db.Uuid
+  tenantId String? @db.Uuid
+  tenant   Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  batchId String       @db.Uuid
+  batch   ProductBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+
+  sku       String
+  location  String
+  quantity  Int @default(0)
+  reserved  Int @default(0)
+  available Int @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([tenantId, batchId, location])
+  @@index([tenantId, sku, location])
+  @@index([tenantId])
+  @@map("batch_stock_levels")
+}
+
+/// قاعدة تنبيه صلاحية قابلة للضبط لكل فئة/منتج.
+/// مثال: طبي → تحذير 90 يوم، حرج 30 يوم، حجر تلقائي 7 أيام.
+model ExpiryAlertRule {
+  id       String  @id @default(uuid()) @db.Uuid
+  tenantId String? @db.Uuid
+  tenant   Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  name String
+
+  /// نطاق التطبيق — الأخص يفوز: sku ثم category ثم القاعدة العامة
+  category String?
+  sku      String?
+
+  /// عدد الأيام قبل الانتهاء لإطلاق تحذير (أصفر)
+  warnDays     Int @default(60)
+  /// عدد الأيام قبل الانتهاء لإطلاق إنذار حرج (أحمر)
+  criticalDays Int @default(30)
+  /// عدد الأيام قبل الانتهاء للحجر التلقائي ومنع البيع — 0 = معطّل
+  blockDays    Int @default(0)
+
+  /// بريد إضافي يُخطَر عند إطلاق التنبيه
+  notifyEmails String[] @default([])
+  /// إخطار فريق المبيعات لتصريف البضاعة بعروض
+  notifySales  Boolean  @default(true)
+
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([tenantId, isActive])
+  @@index([tenantId])
+  @@map("expiry_alert_rules")
+}
+
+// ------------------------------------------------- 2. هيكلة المواقع (Slotting)
+
+/// منطقة داخل المخزن (استلام، التقاط، تخزين كثيف، حجر صحي، تغليف، شحن).
+model WarehouseZone {
+  id       String  @id @default(uuid()) @db.Uuid
+  tenantId String? @db.Uuid
+  tenant   Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  warehouseId String    @db.Uuid
+  warehouse   Warehouse @relation(fields: [warehouseId], references: [id], onDelete: Cascade)
+
+  code String
+  name String
+  type ZoneType @default(PICKING)
+
+  /// أولوية الالتقاط — الأقل رقماً يُزار أولاً في مسار الجولة
+  pickSequence Int     @default(100)
+  isActive     Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  bins StorageBin[]
+
+  @@unique([tenantId, code])
+  @@index([tenantId, warehouseId])
+  @@index([tenantId])
+  @@map("warehouse_zones")
+}
+
+/// موقع تخزين ذرّي (ممر/رف/طابق/خانة). قيمة code هي نفسها المستخدمة
+/// في stock_levels.location — بهذا تندمج الهيكلة مع البيانات القائمة.
+model StorageBin {
+  id       String  @id @default(uuid()) @db.Uuid
+  tenantId String? @db.Uuid
+  tenant   Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  zoneId String        @db.Uuid
+  zone   WarehouseZone @relation(fields: [zoneId], references: [id], onDelete: Cascade)
+
+  code String
+  name String?
+
+  aisle    String?
+  rack     String?
+  level    String?
+  position String?
+
+  /// حدود السعة — يستخدمها محرّك اقتراح التخزين (Putaway)
+  maxWeightKg   Decimal? @db.Decimal(10, 3)
+  maxVolumeM3   Decimal? @db.Decimal(10, 4)
+  capacityUnits Int?
+  currentUnits  Int      @default(0)
+
+  /// ترتيب المرور داخل المنطقة — يبني مسار الالتقاط الأقصر
+  pickPriority Int     @default(100)
+  /// تخصيص الخانة لمنتج واحد (Fixed slotting)
+  dedicatedSku String?
+  isActive     Boolean @default(true)
+  status       String  @default("free")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([tenantId, code])
+  @@index([tenantId, zoneId, pickPriority])
+  @@index([tenantId])
+  @@map("storage_bins")
+}
+
+/// مهمة تخزين: أين تُنقل البضاعة بعد الاستلام، مع الخانة المقترحة آلياً.
+model PutawayTask {
+  id       String  @id @default(uuid()) @db.Uuid
+  tenantId String? @db.Uuid
+  tenant   Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  taskNumber String
+
+  goodsReceiptItemId String?       @db.Uuid
+  sku                String
+  batchId            String?       @db.Uuid
+  batch              ProductBatch? @relation(fields: [batchId], references: [id], onDelete: SetNull)
+
+  quantity     Int
+  fromLocation String
+
+  /// الخانة التي اقترحها المحرك + سبب الاقتراح (للشفافية والتدقيق)
+  suggestedBin    String?
+  suggestionScore Decimal? @db.Decimal(6, 2)
+  suggestionRule  String?
+  /// الخانة التي استخدمها الموظف فعلاً
+  actualBin       String?
+
+  status     PutawayStatus @default(PENDING)
+  assignedTo String?       @db.Uuid
+
+  completedAt DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@unique([tenantId, taskNumber])
+  @@index([tenantId, status])
+  @@index([tenantId])
+  @@map("putaway_tasks")
+}
+
+// ------------------------------------------------------- 3. الضرائب والتسعير
+
+model TaxRate {
+  id       String  @id @default(uuid()) @db.Uuid
+  tenantId String? @db.Uuid
+  tenant   Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  code String
+  name String
+  /// النسبة المئوية — 15.00 تعني 15%
+  rate Decimal @db.Decimal(6, 3)
+
+  isDefault Boolean @default(false)
+  isActive  Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  products Product[]
+
+  @@unique([tenantId, code])
+  @@index([tenantId])
+  @@map("tax_rates")
+}
+
+/// فئة تسعير (جملة / مفرق / عميل مميز) — تُربط بالعميل وتُطبَّق تلقائياً.
+model PriceTier {
+  id       String  @id @default(uuid()) @db.Uuid
+  tenantId String? @db.Uuid
+  tenant   Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  code String
+  name String
+
+  /// خصم افتراضي على سعر القائمة حين لا يوجد سعر صريح للمنتج في هذه الفئة
+  discountPercent Decimal @default(0) @db.Decimal(6, 3)
+
+  isDefault Boolean @default(false)
+  isActive  Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  prices        ProductPrice[]
+  customers     Customer[]
+  salesInvoices SalesInvoice[]
+
+  @@unique([tenantId, code])
+  @@index([tenantId])
+  @@map("price_tiers")
+}
+
+/// سعر منتج ضمن فئة تسعير، مع دعم سعر الكمية والصلاحية الزمنية.
+model ProductPrice {
+  id       String  @id @default(uuid()) @db.Uuid
+  tenantId String? @db.Uuid
+  tenant   Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  sku         String
+  priceTierId String    @db.Uuid
+  priceTier   PriceTier @relation(fields: [priceTierId], references: [id], onDelete: Cascade)
+
+  price       Decimal @db.Decimal(12, 2)
+  minQuantity Int     @default(1)
+
+  validFrom DateTime? @db.Date
+  validTo   DateTime? @db.Date
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([tenantId, sku, priceTierId, minQuantity])
+  @@index([tenantId, sku])
+  @@index([tenantId])
+  @@map("product_prices")
+}
+
+// ------------------------------------------------- 4. فواتير الشراء والتكلفة
+
+model PurchaseInvoice {
+  id       String  @id @default(uuid()) @db.Uuid
+  tenantId String? @db.Uuid
+  tenant   Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  /// الرقم الداخلي في النظام
+  invoiceNumber         String
+  /// رقم الفاتورة الأصلية عند المورد
+  supplierInvoiceNumber String?
+
+  supplierId String   @db.Uuid
+  supplier   Supplier @relation(fields: [supplierId], references: [id], onDelete: Restrict)
+
+  purchaseOrderId String?        @db.Uuid
+  purchaseOrder   PurchaseOrder? @relation(fields: [purchaseOrderId], references: [id], onDelete: SetNull)
+  goodsReceiptId  String?        @db.Uuid
+
+  invoiceDate DateTime  @db.Date
+  dueDate     DateTime? @db.Date
+
+  status DocumentStatus @default(DRAFT)
+
+  subtotal        Decimal @default(0) @db.Decimal(14, 2)
+  discountAmount  Decimal @default(0) @db.Decimal(14, 2)
+  taxAmount       Decimal @default(0) @db.Decimal(14, 2)
+  landedCostTotal Decimal @default(0) @db.Decimal(14, 2)
+  totalAmount     Decimal @default(0) @db.Decimal(14, 2)
+  paidAmount      Decimal @default(0) @db.Decimal(14, 2)
+
+  currency String  @default("SYP")
+  notes    String?
+
+  createdBy String    @db.Uuid
+  postedAt  DateTime?
+  postedBy  String?   @db.Uuid
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  items       PurchaseInvoiceItem[]
+  landedCosts LandedCost[]
+  payments    PurchasePayment[]
+
+  @@unique([tenantId, invoiceNumber])
+  @@index([tenantId, supplierId])
+  @@index([tenantId, status])
+  @@index([tenantId, invoiceDate])
+  @@index([tenantId])
+  @@map("purchase_invoices")
+}
+
+model PurchaseInvoiceItem {
+  id       String  @id @default(uuid()) @db.Uuid
+  tenantId String? @db.Uuid
+  tenant   Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  invoiceId String          @db.Uuid
+  invoice   PurchaseInvoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  purchaseOrderItemId String? @db.Uuid
+  sku                 String
+
+  /// بيانات الدفعة تُلتقط هنا وتُنشئ ProductBatch عند الترحيل
+  batchNumber    String?
+  productionDate DateTime? @db.Date
+  expiryDate     DateTime? @db.Date
+
+  quantity Int
+  unitCost Decimal @db.Decimal(12, 4)
+
+  discountPercent Decimal @default(0) @db.Decimal(6, 3)
+  discountAmount  Decimal @default(0) @db.Decimal(14, 2)
+  taxRate         Decimal @default(0) @db.Decimal(6, 3)
+  taxAmount       Decimal @default(0) @db.Decimal(14, 2)
+  lineTotal       Decimal @default(0) @db.Decimal(14, 2)
+
+  /// حصة هذا البند من المصاريف الملحقة بعد التوزيع
+  allocatedLandedCost Decimal @default(0) @db.Decimal(14, 4)
+  /// التكلفة النهائية للوحدة = unitCost + حصة المصاريف
+  finalUnitCost       Decimal @default(0) @db.Decimal(12, 4)
+
+  location String @default("WH-A")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([tenantId, invoiceId])
+  @@index([tenantId, sku])
+  @@index([tenantId])
+  @@map("purchase_invoice_items")
+}
+
+/// مصروف لوجستي ملحق (شحن، جمارك، تأمين، مناولة) يُوزَّع على بنود الفاتورة.
+model LandedCost {
+  id       String  @id @default(uuid()) @db.Uuid
+  tenantId String? @db.Uuid
+  tenant   Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  purchaseInvoiceId String          @db.Uuid
+  purchaseInvoice   PurchaseInvoice @relation(fields: [purchaseInvoiceId], references: [id], onDelete: Cascade)
+
+  type        String
+  description String?
+  amount      Decimal @db.Decimal(14, 2)
+
+  allocationMethod AllocationMethod @default(VALUE)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([tenantId, purchaseInvoiceId])
+  @@index([tenantId])
+  @@map("landed_costs")
+}
+
+model PurchasePayment {
+  id       String  @id @default(uuid()) @db.Uuid
+  tenantId String? @db.Uuid
+  tenant   Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  purchaseInvoiceId String          @db.Uuid
+  purchaseInvoice   PurchaseInvoice @relation(fields: [purchaseInvoiceId], references: [id], onDelete: Cascade)
+
+  amount Decimal @db.Decimal(14, 2)
+  method String  @default("cash")
+  paidBy String  @db.Uuid
+  notes  String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([tenantId, purchaseInvoiceId])
+  @@index([tenantId])
+  @@map("purchase_payments")
+}
+
+/// سجل تغيّر تكلفة المنتج — كل إعادة حساب لمتوسط التكلفة تُترك أثراً هنا.
+model CostHistory {
+  id       String  @id @default(uuid()) @db.Uuid
+  tenantId String? @db.Uuid
+  tenant   Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  sku    String
+  method CostingMethod @default(WEIGHTED_AVERAGE)
+
+  oldCost      Decimal @db.Decimal(12, 4)
+  newCost      Decimal @db.Decimal(12, 4)
+  oldQuantity  Int     @default(0)
+  quantityIn   Int     @default(0)
+  incomingCost Decimal @default(0) @db.Decimal(12, 4)
+
+  referenceType String?
+  referenceId   String?
+  createdById   String? @db.Uuid
+
+  createdAt DateTime @default(now())
+
+  @@index([tenantId, sku, createdAt])
+  @@index([tenantId])
+  @@map("cost_history")
+}
+
+// -------------------------------------------------------- 5. فواتير البيع
+
+model SalesInvoice {
+  id       String  @id @default(uuid()) @db.Uuid
+  tenantId String? @db.Uuid
+  tenant   Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  invoiceNumber String
+
+  customerId String   @db.Uuid
+  customer   Customer @relation(fields: [customerId], references: [id], onDelete: Restrict)
+
+  salesOrderId String?     @db.Uuid
+  salesOrder   SalesOrder? @relation(fields: [salesOrderId], references: [id], onDelete: SetNull)
+
+  priceTierId String?    @db.Uuid
+  priceTier   PriceTier? @relation(fields: [priceTierId], references: [id], onDelete: SetNull)
+
+  invoiceDate DateTime  @db.Date
+  dueDate     DateTime? @db.Date
+
+  status DocumentStatus @default(DRAFT)
+
+  subtotal       Decimal @default(0) @db.Decimal(14, 2)
+  discountAmount Decimal @default(0) @db.Decimal(14, 2)
+  taxAmount      Decimal @default(0) @db.Decimal(14, 2)
+  totalAmount    Decimal @default(0) @db.Decimal(14, 2)
+  paidAmount     Decimal @default(0) @db.Decimal(14, 2)
+  /// تكلفة البضاعة المباعة — لقطة وقت الترحيل لحساب هامش الربح
+  cogsAmount     Decimal @default(0) @db.Decimal(14, 2)
+
+  currency String  @default("SYP")
+  notes    String?
+
+  createdBy String    @db.Uuid
+  postedAt  DateTime?
+  postedBy  String?   @db.Uuid
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  items         SalesInvoiceItem[]
+  deliveryNotes DeliveryNote[]
+  shipments     Shipment[]
+
+  @@unique([tenantId, invoiceNumber])
+  @@index([tenantId, customerId])
+  @@index([tenantId, status])
+  @@index([tenantId, invoiceDate])
+  @@index([tenantId])
+  @@map("sales_invoices")
+}
+
+model SalesInvoiceItem {
+  id       String  @id @default(uuid()) @db.Uuid
+  tenantId String? @db.Uuid
+  tenant   Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  invoiceId String       @db.Uuid
+  invoice   SalesInvoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  salesOrderItemId String? @db.Uuid
+  sku              String
+
+  /// الدفعة المسحوب منها — يقترحها النظام تلقائياً وفق FEFO
+  batchId     String?       @db.Uuid
+  batch       ProductBatch? @relation(fields: [batchId], references: [id], onDelete: SetNull)
+  batchNumber String?
+  expiryDate  DateTime?     @db.Date
+
+  quantity  Int
+  unitPrice Decimal @db.Decimal(12, 2)
+
+  discountPercent Decimal @default(0) @db.Decimal(6, 3)
+  discountAmount  Decimal @default(0) @db.Decimal(14, 2)
+  taxRate         Decimal @default(0) @db.Decimal(6, 3)
+  taxAmount       Decimal @default(0) @db.Decimal(14, 2)
+  lineTotal       Decimal @default(0) @db.Decimal(14, 2)
+
+  /// تكلفة الوحدة وقت البيع — لا تتأثر بتغيّر التكلفة لاحقاً
+  unitCost Decimal @default(0) @db.Decimal(12, 4)
+
+  location String @default("WH-A")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([tenantId, invoiceId])
+  @@index([tenantId, sku])
+  @@index([tenantId])
+  @@map("sales_invoice_items")
+}
+
+/// إذن خروج / سند تسليم — الوثيقة التي تنقل البضاعة فعلياً خارج المخزن.
+model DeliveryNote {
+  id       String  @id @default(uuid()) @db.Uuid
+  tenantId String? @db.Uuid
+  tenant   Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  noteNumber String
+
+  salesInvoiceId String?       @db.Uuid
+  salesInvoice   SalesInvoice? @relation(fields: [salesInvoiceId], references: [id], onDelete: SetNull)
+  salesOrderId   String?       @db.Uuid
+  customerId     String        @db.Uuid
+
+  status String @default("draft")
+
+  issuedAt    DateTime?
+  deliveredAt DateTime?
+  receivedBy  String?
+  notes       String?
+
+  createdBy String   @db.Uuid
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  items DeliveryNoteItem[]
+
+  @@unique([tenantId, noteNumber])
+  @@index([tenantId, customerId])
+  @@index([tenantId])
+  @@map("delivery_notes")
+}
+
+model DeliveryNoteItem {
+  id       String  @id @default(uuid()) @db.Uuid
+  tenantId String? @db.Uuid
+  tenant   Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  deliveryNoteId String       @db.Uuid
+  deliveryNote   DeliveryNote @relation(fields: [deliveryNoteId], references: [id], onDelete: Cascade)
+
+  sku         String
+  batchId     String? @db.Uuid
+  batchNumber String?
+  quantity    Int
+  location    String
+
+  createdAt DateTime @default(now())
+
+  @@index([tenantId, deliveryNoteId])
+  @@index([tenantId])
+  @@map("delivery_note_items")
+}
+
+// ---------------------------------------------------- 6. الجرد الدوري والتدقيق
+
+model CycleCount {
+  id       String  @id @default(uuid()) @db.Uuid
+  tenantId String? @db.Uuid
+  tenant   Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  countNumber String
+  type        String @default("cycle")
+
+  /// نطاق الجرد: zone | bin | category | sku | abc | all
+  scope      String  @default("all")
+  scopeValue String?
+
+  status CountStatus @default(DRAFT)
+
+  scheduledDate DateTime? @db.Date
+  startedAt     DateTime?
+  completedAt   DateTime?
+
+  countedBy  String? @db.Uuid
+  approvedBy String? @db.Uuid
+
+  /// لقطة إجمالية للفروقات — تُحسب عند الإقفال
+  totalLines    Int     @default(0)
+  countedLines  Int     @default(0)
+  varianceLines Int     @default(0)
+  varianceValue Decimal @default(0) @db.Decimal(14, 2)
+  /// هل طُبِّقت التسويات على المخزون فعلاً
+  adjustmentsPosted Boolean @default(false)
+
+  notes String?
+
+  createdBy String   @db.Uuid
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  items CycleCountItem[]
+
+  @@unique([tenantId, countNumber])
+  @@index([tenantId, status])
+  @@index([tenantId])
+  @@map("cycle_counts")
+}
+
+model CycleCountItem {
+  id       String  @id @default(uuid()) @db.Uuid
+  tenantId String? @db.Uuid
+  tenant   Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  cycleCountId String     @db.Uuid
+  cycleCount   CycleCount @relation(fields: [cycleCountId], references: [id], onDelete: Cascade)
+
+  sku      String
+  batchId  String?       @db.Uuid
+  batch    ProductBatch? @relation(fields: [batchId], references: [id], onDelete: SetNull)
+  location String
+
+  /// الرصيد الدفتري لحظة تجميد القائمة — المقارنة تتم ضده لا ضد الرصيد الحالي
+  systemQuantity  Int
+  countedQuantity Int?
+  variance        Int     @default(0)
+  varianceValue   Decimal @default(0) @db.Decimal(14, 2)
+
+  status          CountItemStatus @default(PENDING)
+  recountRequired Boolean         @default(false)
+
+  countedBy String?   @db.Uuid
+  countedAt DateTime?
+  notes     String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([tenantId, cycleCountId])
+  @@index([tenantId, sku])
+  @@index([tenantId])
+  @@map("cycle_count_items")
+}
+
+// ------------------------------------------------ 7. فحص الجودة عند الاستلام
+
+model QualityInspection {
+  id       String  @id @default(uuid()) @db.Uuid
+  tenantId String? @db.Uuid
+  tenant   Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  inspectionNumber String
+
+  goodsReceiptId     String? @db.Uuid
+  goodsReceiptItemId String? @db.Uuid
+  sku                String
+  batchId            String? @db.Uuid
+
+  quantityInspected Int
+  quantityPassed    Int @default(0)
+  quantityFailed    Int @default(0)
+
+  status QcStatus @default(PENDING)
+
+  /// معايير الفحص ونتائجها: [{criterion, expected, actual, passed}]
+  checklist Json?
+
+  failureReason String?
+  notes         String?
+
+  inspectedBy String?   @db.Uuid
+  inspectedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([tenantId, inspectionNumber])
+  @@index([tenantId, status])
+  @@index([tenantId])
+  @@map("quality_inspections")
+}
+
+// ------------------------------------------- 8. التجهيز والتغليف والشحن
+
+model PickList {
+  id       String  @id @default(uuid()) @db.Uuid
+  tenantId String? @db.Uuid
+  tenant   Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  pickNumber String
+  strategy   PickStrategy @default(SINGLE)
+  status     PickStatus   @default(PENDING)
+
+  /// طلبات البيع المشمولة — أكثر من واحد في Batch Picking
+  salesOrderIds String[] @default([])
+  zoneCode      String?
+
+  assignedTo String? @db.Uuid
+
+  totalLines     Int @default(0)
+  completedLines Int @default(0)
+  /// مسافة المسار المقدّرة بالأمتار — مخرج خوارزمية ترتيب المسار
+  estimatedDistanceM Int @default(0)
+
+  startedAt   DateTime?
+  completedAt DateTime?
+  notes       String?
+
+  createdBy String   @db.Uuid
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  items PickListItem[]
+
+  @@unique([tenantId, pickNumber])
+  @@index([tenantId, status])
+  @@index([tenantId, assignedTo])
+  @@index([tenantId])
+  @@map("pick_lists")
+}
+
+model PickListItem {
+  id       String  @id @default(uuid()) @db.Uuid
+  tenantId String? @db.Uuid
+  tenant   Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  pickListId String   @db.Uuid
+  pickList   PickList @relation(fields: [pickListId], references: [id], onDelete: Cascade)
+
+  salesOrderId String? @db.Uuid
+  sku          String
+
+  batchId String?       @db.Uuid
+  batch   ProductBatch? @relation(fields: [batchId], references: [id], onDelete: SetNull)
+
+  location String
+
+  quantityRequested Int
+  quantityPicked    Int @default(0)
+
+  /// ترتيب الزيارة داخل الجولة — يبنيه محرّك المسار من pickPriority للخانات
+  sequence Int @default(0)
+
+  status PickStatus @default(PENDING)
+
+  pickedBy String?   @db.Uuid
+  pickedAt DateTime?
+  notes    String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([tenantId, pickListId, sequence])
+  @@index([tenantId])
+  @@map("pick_list_items")
+}
+
+model Carrier {
+  id       String  @id @default(uuid()) @db.Uuid
+  tenantId String? @db.Uuid
+  tenant   Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  code String
+  name String
+
+  contactPhone String?
+  /// قالب رابط التتبع، مثال: https://carrier.com/track/{tracking}
+  trackingUrlTemplate String?
+
+  isActive Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  shipments Shipment[]
+
+  @@unique([tenantId, code])
+  @@index([tenantId])
+  @@map("carriers")
+}
+
+model Shipment {
+  id       String  @id @default(uuid()) @db.Uuid
+  tenantId String? @db.Uuid
+  tenant   Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  shipmentNumber String
+
+  salesOrderId   String?       @db.Uuid
+  salesInvoiceId String?       @db.Uuid
+  salesInvoice   SalesInvoice? @relation(fields: [salesInvoiceId], references: [id], onDelete: SetNull)
+
+  carrierId String?  @db.Uuid
+  carrier   Carrier? @relation(fields: [carrierId], references: [id], onDelete: SetNull)
+
+  trackingNumber String?
+  status         ShipmentStatus @default(PENDING)
+
+  totalWeightKg Decimal @default(0) @db.Decimal(10, 3)
+  packageCount  Int     @default(0)
+  shippingCost  Decimal @default(0) @db.Decimal(12, 2)
+
+  /// حمولة ملصق الشحن (نص الباركود/QR) — تُولَّد عند الطباعة
+  labelPayload String?
+  labelFormat  String?
+
+  recipientName  String?
+  recipientPhone String?
+  address        String?
+
+  shippedAt   DateTime?
+  deliveredAt DateTime?
+  notes       String?
+
+  createdBy String   @db.Uuid
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  packages Package[]
+
+  @@unique([tenantId, shipmentNumber])
+  @@index([tenantId, status])
+  @@index([tenantId])
+  @@map("shipments")
+}
+
+model Package {
+  id       String  @id @default(uuid()) @db.Uuid
+  tenantId String? @db.Uuid
+  tenant   Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  packageNumber String
+
+  shipmentId   String?   @db.Uuid
+  shipment     Shipment? @relation(fields: [shipmentId], references: [id], onDelete: SetNull)
+  salesOrderId String?   @db.Uuid
+
+  weightKg Decimal @default(0) @db.Decimal(10, 3)
+  lengthCm Decimal @default(0) @db.Decimal(8, 2)
+  widthCm  Decimal @default(0) @db.Decimal(8, 2)
+  heightCm Decimal @default(0) @db.Decimal(8, 2)
+
+  packagingType String?
+  barcode       String?
+
+  packedBy String?   @db.Uuid
+  packedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  items PackageItem[]
+
+  @@unique([tenantId, packageNumber])
+  @@index([tenantId, shipmentId])
+  @@index([tenantId])
+  @@map("packages")
+}
+
+model PackageItem {
+  id       String  @id @default(uuid()) @db.Uuid
+  tenantId String? @db.Uuid
+  tenant   Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  packageId String  @db.Uuid
+  package   Package @relation(fields: [packageId], references: [id], onDelete: Cascade)
+
+  sku         String
+  batchId     String? @db.Uuid
+  batchNumber String?
+  quantity    Int
+
+  createdAt DateTime @default(now())
+
+  @@index([tenantId, packageId])
+  @@index([tenantId])
+  @@map("package_items")
+}
+
+// -------------------------------------------------------- 9. الربط والتكامل
+
+model IntegrationConnection {
+  id       String  @id @default(uuid()) @db.Uuid
+  tenantId String? @db.Uuid
+  tenant   Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  provider IntegrationProvider
+  name     String
+
+  baseUrl String?
+  /// مفاتيح الوصول — مخزَّنة مشفّرة، ولا تُعاد أبداً في أي رد
+  apiKeyEncrypted    String?
+  apiSecretEncrypted String?
+
+  /// إعدادات خاصة بالمزوّد (اسم المتجر، معرّف الشركة، خرائط الحقول...)
+  config Json?
+
+  /// ما الكيانات التي تُزامَن: products, stock, orders, customers
+  syncEntities String[] @default([])
+  syncInterval Int      @default(15)
+
+  status     String    @default("disconnected")
+  lastSyncAt DateTime?
+  lastError  String?
+
+  isActive Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  syncLogs IntegrationSyncLog[]
+
+  @@unique([tenantId, provider, name])
+  @@index([tenantId])
+  @@map("integration_connections")
+}
+
+model IntegrationSyncLog {
+  id       String  @id @default(uuid()) @db.Uuid
+  tenantId String? @db.Uuid
+  tenant   Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  connectionId String                @db.Uuid
+  connection   IntegrationConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+
+  direction SyncDirection
+  entity    String
+  status    SyncStatus    @default(RUNNING)
+
+  recordsProcessed Int @default(0)
+  recordsFailed    Int @default(0)
+
+  error   String?
+  payload Json?
+
+  startedAt  DateTime  @default(now())
+  finishedAt DateTime?
+
+  @@index([tenantId, connectionId, startedAt])
+  @@index([tenantId])
+  @@map("integration_sync_logs")
+}
+
+/// نقطة webhook صادرة — يُخطَر بها المتجر الإلكتروني عند تغيّر المخزون.
+model WebhookEndpoint {
+  id       String  @id @default(uuid()) @db.Uuid
+  tenantId String? @db.Uuid
+  tenant   Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  name   String
+  url    String
+  events String[] @default([])
+  secret String?
+
+  isActive     Boolean   @default(true)
+  lastFiredAt  DateTime?
+  failureCount Int       @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([tenantId, isActive])
+  @@index([tenantId])
+  @@map("webhook_endpoints")
+}
+
+// ===========================================================================
+// ربط المحاسبة بحركة المخزن — القيود الآلية
+// ===========================================================================
+
+/// أي حساب يقابل أي دور محاسبي في هذه المنشأة.
+///
+/// شجرة الحسابات تختلف من منشأة لأخرى، فلا يمكن تثبيت أكواد في الكود. هذا
+/// الجدول هو الترجمة: الدور (`inventory`) ← الحساب الفعلي عند العميل.
+model AccountMapping {
+  id       String  @id @default(uuid()) @db.Uuid
+  tenantId String? @db.Uuid
+  tenant   Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  /// الدور المحاسبي — إحدى قيم LEDGER_ROLES في الكود
+  role String
+
+  accountId String  @db.Uuid
+  account   Account @relation(fields: [accountId], references: [id], onDelete: Restrict)
+
+  description String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([tenantId, role])
+  @@index([tenantId])
+  @@map("account_mappings")
 }

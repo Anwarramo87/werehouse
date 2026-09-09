@@ -278,6 +278,8 @@ export class DashboardService {
       { name: string; department: string | null; checkIn: string; checkOut: string | null }
     >();
     for (const rec of todayAttendanceRecords) {
+      // سجل بـ tenantId = NULL لا يمكنه مطابقة موظف (العلاقة مركّبة) — تجاهله بدل الانهيار
+      if (!rec.employee) continue;
       if (rec.type === 'IN' && !presentMap.has(rec.employeeId)) {
         presentMap.set(rec.employeeId, {
           name: rec.employee!.name,
@@ -315,6 +317,8 @@ export class DashboardService {
     >();
 
     for (const rec of todayAttendanceRecords) {
+      // سجل بـ tenantId = NULL لا يمكنه مطابقة موظف (العلاقة مركّبة) — تجاهله بدل الانهيار
+      if (!rec.employee) continue;
       if (rec.type !== 'IN') continue;
       if (firstInMap.has(rec.employeeId)) continue;
       const sp = rec.shiftPair as Record<string, unknown> | null;
@@ -365,12 +369,14 @@ export class DashboardService {
     const lastOutMap = new Map<string, (typeof todayAttendanceRecords)[number]>();
     for (const rec of todayAttendanceRecords) {
       if (rec.type !== 'OUT') continue;
+      if (!rec.employee) continue;
       lastOutMap.set(rec.employeeId, rec);
     }
 
     const overtimeEmployeeIds = new Set<string>();
 
     for (const log of todayOvertimeLogs) {
+      if (!log.employee) continue;
       const overtimeMinutes = Math.round(toNum(log.value));
       if (overtimeMinutes <= 0) continue;
 

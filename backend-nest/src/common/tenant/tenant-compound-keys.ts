@@ -50,9 +50,6 @@ export const TENANT_COMPOUND_KEYS: Record<string, CompoundKey[]> = {
   account: [
     { key: 'tenantId_code', fields: ['code'] },
   ],
-  journalEntry: [
-    { key: 'tenantId_entryNumber', fields: ['entryNumber'] },
-  ],
   importJob: [
     { key: 'tenantId_jobId', fields: ['jobId'] },
   ],
@@ -83,5 +80,64 @@ export const TENANT_COMPOUND_KEYS: Record<string, CompoundKey[]> = {
   ],
   notification: [
     { key: 'tenantId_dedupeKey', fields: ['dedupeKey'] },
+  ],
+  productBatch: [
+    { key: 'tenantId_sku_batchNumber', fields: ['sku', 'batchNumber'] },
+    { key: 'tenantId_barcode', fields: ['barcode'] },
+  ],
+  batchStockLevel: [
+    { key: 'tenantId_batchId_location', fields: ['batchId', 'location'] },
+  ],
+  warehouseZone: [
+    { key: 'tenantId_code', fields: ['code'] },
+  ],
+  storageBin: [
+    { key: 'tenantId_code', fields: ['code'] },
+  ],
+  putawayTask: [
+    { key: 'tenantId_taskNumber', fields: ['taskNumber'] },
+  ],
+  taxRate: [
+    { key: 'tenantId_code', fields: ['code'] },
+  ],
+  priceTier: [
+    { key: 'tenantId_code', fields: ['code'] },
+  ],
+  productPrice: [
+    { key: 'tenantId_sku_priceTierId_minQuantity', fields: ['sku', 'priceTierId', 'minQuantity'] },
+  ],
+  purchaseInvoice: [
+    { key: 'tenantId_invoiceNumber', fields: ['invoiceNumber'] },
+  ],
+  salesInvoice: [
+    { key: 'tenantId_invoiceNumber', fields: ['invoiceNumber'] },
+  ],
+  deliveryNote: [
+    { key: 'tenantId_noteNumber', fields: ['noteNumber'] },
+  ],
+  cycleCount: [
+    { key: 'tenantId_countNumber', fields: ['countNumber'] },
+  ],
+  qualityInspection: [
+    { key: 'tenantId_inspectionNumber', fields: ['inspectionNumber'] },
+  ],
+  pickList: [
+    { key: 'tenantId_pickNumber', fields: ['pickNumber'] },
+  ],
+  carrier: [
+    { key: 'tenantId_code', fields: ['code'] },
+  ],
+  shipment: [
+    { key: 'tenantId_shipmentNumber', fields: ['shipmentNumber'] },
+  ],
+  package: [
+    { key: 'tenantId_packageNumber', fields: ['packageNumber'] },
+  ],
+  accountMapping: [
+    { key: 'tenantId_role', fields: ['role'] },
+  ],
+  journalEntry: [
+    { key: 'tenantId_entryNumber', fields: ['entryNumber'] },
+    { key: 'tenantId_sourceRef', fields: ['sourceRef'] },
   ],
 };

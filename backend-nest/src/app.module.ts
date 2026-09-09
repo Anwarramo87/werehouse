@@ -42,6 +42,19 @@ import { BiometricModule } from './biometric/biometric.module';
 import { TrashModule } from './trash/trash.module';
 import { BackupModule } from './backup/backup.module';
 import { MetricsModule } from './common/metrics/metrics.module';
+import { AuditLogModule } from './audit/audit-log.module';
+// --- WMS extension ---
+import { WmsCommonModule } from './common/wms/wms-common.module';
+import { BatchesModule } from './batches/batches.module';
+import { PricingModule } from './pricing/pricing.module';
+import { PurchaseInvoicesModule } from './purchase-invoices/purchase-invoices.module';
+import { SalesInvoicesModule } from './sales-invoices/sales-invoices.module';
+import { LocationsModule } from './locations/locations.module';
+import { QualityModule } from './quality/quality.module';
+import { CycleCountsModule } from './cycle-counts/cycle-counts.module';
+import { FulfillmentModule } from './fulfillment/fulfillment.module';
+import { WmsAnalyticsModule } from './wms-analytics/wms-analytics.module';
+import { IntegrationsModule } from './integrations/integrations.module';
 
 function parseBooleanEnv(value: string | undefined): boolean | undefined {
   if (value === undefined) {
@@ -215,6 +228,18 @@ const queueInfraModules = queuesEnabled
     InventoryModule,
     PurchasingModule,
     SalesModule,
+    // --- WMS extension: batches, invoicing, slotting, QC, counting, fulfilment ---
+    WmsCommonModule,
+    BatchesModule,
+    PricingModule,
+    PurchaseInvoicesModule,
+    SalesInvoicesModule,
+    LocationsModule,
+    QualityModule,
+    CycleCountsModule,
+    FulfillmentModule,
+    WmsAnalyticsModule,
+    IntegrationsModule,
     AssistantModule,
     AccountingModule,
     ImportsModule,
@@ -233,6 +258,7 @@ const queueInfraModules = queuesEnabled
     TrashModule,
     BackupModule,
     NotificationsModule,
+    AuditLogModule,
   ],
   providers: [
     {

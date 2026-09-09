@@ -9,6 +9,7 @@ import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../prisma/prisma.service';
 import { WsJwtGuard } from './ws-jwt.guard';
+import { currentTenant } from '../common/tenant/tenant-context';
 
 export type AttendanceUpdateEventPayload = {
   employeeId: string;
@@ -23,7 +24,7 @@ export type AttendanceUpdateEventPayload = {
   message: string;
 };
 
-type SocketUser = { userId: string; role?: string; roles?: string[] };
+type SocketUser = { userId: string; role?: string; roles?: string[]; tenantId: string | null };
 
 const normalizeOrigin = (value: string) => {
   const trimmed = value.trim();
@@ -50,6 +51,9 @@ const resolveSocketCorsOrigin = () => {
 
   return process.env.NODE_ENV === 'production' ? false : true;
 };
+
+/** Room name carrying one factory's realtime traffic. */
+const tenantRoom = (tenantId: string) => `tenant:${tenantId}`;
 
 @UseGuards(WsJwtGuard)
 @WebSocketGateway({
@@ -119,31 +123,64 @@ export class RealtimeGateway implements OnGatewayConnection, OnModuleInit {
       }
 
       const roleName = dbUser.role?.name || 'staff';
-      const user: SocketUser = { userId: dbUser.id, role: roleName, roles: [roleName] };
+      const user: SocketUser = {
+        userId: dbUser.id,
+        role: roleName,
+        roles: [roleName],
+        tenantId: dbUser.tenantId ?? null,
+      };
       client.data.user = user;
-      this.logger.log(`WS client connected: socket=${client.id} userId=${user.userId} role=${user.role}`);
+
+      // Every socket joins its own factory's room. Without this the gateway
+      // broadcast each notification and attendance punch to every connected
+      // client on the server, so one factory saw another factory's staff names
+      // and absences in its notification bell.
+      if (user.tenantId) {
+        await client.join(tenantRoom(user.tenantId));
+      }
+
+      this.logger.log(
+        `WS client connected: socket=${client.id} userId=${user.userId} ` +
+          `role=${user.role} tenant=${user.tenantId ?? 'none'}`,
+      );
     } catch {
       this.logger.warn(`WS connection rejected — invalid token (socket ${client.id})`);
       client.disconnect(true);
     }
   }
 
+  /** The socket.io room carrying one factory's realtime traffic. */
+  private target(): { emit: (event: string, payload: unknown) => void } | null {
+    if (!this.server) return null;
+
+    // The emitting call always runs inside a tenant scope: request handlers get
+    // one from TenantMiddleware, the absence cron from runWithTenant. A missing
+    // tenant means unscoped background work, and broadcasting that to everyone
+    // is exactly the leak the rooms exist to prevent -- so drop it instead.
+    const tenantId = currentTenant()?.tenantId;
+    if (!tenantId) return null;
+
+    return this.server.to(tenantRoom(tenantId));
+  }
+
   emitAttendanceUpdate(payload: AttendanceUpdateEventPayload) {
-    if (!this.server) {
-      this.logger.warn('Realtime server is not initialized yet; attendance event skipped');
+    const target = this.target();
+    if (!target) {
+      this.logger.warn('No tenant-scoped realtime target; attendance event skipped');
       return;
     }
 
-    this.server.emit('attendanceUpdate', payload);
+    target.emit('attendanceUpdate', payload);
   }
 
   emitNotification(payload: NotificationRealtimePayload) {
-    if (!this.server) {
-      this.logger.warn('Realtime server is not initialized yet; notification event skipped');
+    const target = this.target();
+    if (!target) {
+      this.logger.warn('No tenant-scoped realtime target; notification event skipped');
       return;
     }
 
-    this.server.emit('notification', payload);
+    target.emit('notification', payload);
   }
 }
 

@@ -10,6 +10,8 @@ import { paginatedResponse, resolvePagination } from '../common/utils/pagination
 import { CreateAccountDto } from './dto/create-account.dto';
 import { UpdateAccountDto } from './dto/update-account.dto';
 import { CreateJournalEntryDto } from './dto/create-journal-entry.dto';
+import { SetAccountMappingDto } from './dto/set-account-mapping.dto';
+import { LEDGER_ROLES, LedgerRole } from '../common/wms/ledger-posting.service';
 import { JournalEntryQueryDto } from './dto/journal-entry-query.dto';
 
 const ACCOUNT_TYPES = ['asset', 'liability', 'equity', 'revenue', 'expense'];
@@ -17,6 +19,123 @@ const ACCOUNT_TYPES = ['asset', 'liability', 'equity', 'revenue', 'expense'];
 @Injectable()
 export class AccountingService {
   constructor(private readonly prisma: PrismaService) {}
+
+  // ------------------------------------------------------------ ledger mapping
+
+  /**
+   * Which account plays which role, plus the roles still unmapped.
+   *
+   * Reporting the gaps is the point: an unmapped role means warehouse
+   * documents post stock but skip the journal, silently. The UI needs to be
+   * able to say which ones.
+   */
+  async listMappings() {
+    const mappings = await this.prisma.accountMapping.findMany({
+      include: { account: { select: { id: true, code: true, name: true, type: true } } },
+    });
+    const byRole = new Map(mappings.map((m) => [m.role, m]));
+
+    const roles = (Object.keys(LEDGER_ROLES) as LedgerRole[]).map((role) => ({
+      role,
+      label: LEDGER_ROLES[role],
+      account: byRole.get(role)?.account ?? null,
+      mappingId: byRole.get(role)?.id ?? null,
+    }));
+
+    return {
+      roles,
+      mapped: roles.filter((r) => r.account !== null).length,
+      total: roles.length,
+      /** Automatic posting stays partial until every role resolves. */
+      isComplete: roles.every((r) => r.account !== null),
+    };
+  }
+
+  async setMapping(dto: SetAccountMappingDto) {
+    const account = await this.prisma.account.findFirst({ where: { id: dto.accountId } });
+    if (!account) throw new NotFoundException('Account not found');
+    if (!account.isActive) {
+      throw new BadRequestException('Cannot map a role to an inactive account');
+    }
+
+    const existing = await this.prisma.accountMapping.findFirst({ where: { role: dto.role } });
+
+    return existing
+      ? this.prisma.accountMapping.update({
+          where: { id: existing.id },
+          data: { accountId: dto.accountId, description: dto.description ?? null },
+          include: { account: { select: { code: true, name: true } } },
+        })
+      : this.prisma.accountMapping.create({
+          data: { role: dto.role, accountId: dto.accountId, description: dto.description ?? null },
+          include: { account: { select: { code: true, name: true } } },
+        });
+  }
+
+  async removeMapping(role: string) {
+    const existing = await this.prisma.accountMapping.findFirst({ where: { role } });
+    if (!existing) throw new NotFoundException('Mapping not found');
+    await this.prisma.accountMapping.delete({ where: { id: existing.id } });
+    return { message: 'Mapping removed - documents for this role stop posting to the ledger' };
+  }
+
+  /**
+   * Creates a minimal chart of accounts and wires every ledger role to it.
+   *
+   * Codes follow the common 1/2/4/5 convention (asset / liability / revenue /
+   * expense). A factory with its own chart maps the roles by hand instead.
+   */
+  async seedLedgerDefaults() {
+    const plan: Array<{ code: string; name: string; type: string; role: LedgerRole }> = [
+      { code: '1300', name: 'المخزون', type: 'asset', role: 'inventory' },
+      { code: '1200', name: 'ذمم مدينة - عملاء', type: 'asset', role: 'accountsReceivable' },
+      { code: '1450', name: 'ضريبة مشتريات مستردة', type: 'asset', role: 'taxInput' },
+      { code: '2100', name: 'ذمم دائنة - موردون', type: 'liability', role: 'accountsPayable' },
+      { code: '2450', name: 'ضريبة مبيعات مستحقة', type: 'liability', role: 'taxOutput' },
+      { code: '4100', name: 'إيراد المبيعات', type: 'revenue', role: 'salesRevenue' },
+      { code: '4150', name: 'خصم مبيعات', type: 'expense', role: 'salesDiscount' },
+      { code: '5100', name: 'تكلفة البضاعة المباعة', type: 'expense', role: 'cogs' },
+      { code: '5150', name: 'فروقات جرد المخزون', type: 'expense', role: 'inventoryAdjustment' },
+    ];
+
+    const created: string[] = [];
+    const mapped: string[] = [];
+
+    for (const item of plan) {
+      let account = await this.prisma.account.findFirst({ where: { code: item.code } });
+      if (!account) {
+        account = await this.prisma.account.create({
+          data: { code: item.code, name: item.name, type: item.type },
+        });
+        created.push(item.code + ' ' + item.name);
+      }
+
+      const existing = await this.prisma.accountMapping.findFirst({ where: { role: item.role } });
+      if (!existing) {
+        await this.prisma.accountMapping.create({
+          data: { role: item.role, accountId: account.id },
+        });
+        mapped.push(item.role);
+      }
+    }
+
+    return {
+      message: `Chart ready: ${created.length} account(s) created, ${mapped.length} role(s) mapped`,
+      created,
+      mapped,
+    };
+  }
+
+  /** The journal entries the system posted for one warehouse document. */
+  async entriesForSource(sourceType: string, sourceId: string) {
+    return this.prisma.journalEntry.findMany({
+      where: { sourceType, sourceId },
+      orderBy: { createdAt: 'asc' },
+      include: {
+        lines: { include: { account: { select: { code: true, name: true, type: true } } } },
+      },
+    });
+  }
 
   // ------------------------------------------------------------------- accounts
 

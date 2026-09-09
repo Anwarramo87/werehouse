@@ -9,6 +9,7 @@ import { AuthenticatedUser } from '../common/types/authenticated-user.types';
 import { CreateAccountDto } from './dto/create-account.dto';
 import { UpdateAccountDto } from './dto/update-account.dto';
 import { CreateJournalEntryDto } from './dto/create-journal-entry.dto';
+import { SetAccountMappingDto } from './dto/set-account-mapping.dto';
 import { JournalEntryQueryDto } from './dto/journal-entry-query.dto';
 
 @ApiTags('accounting')
@@ -19,6 +20,43 @@ export class AccountingController {
   constructor(private readonly accountingService: AccountingService) {}
 
   // accounts
+  // ------------------------------------------------------------ ledger mapping
+
+  @Get('ledger-mapping')
+  @Permissions('view_accounting')
+  listMappings() {
+    return this.accountingService.listMappings();
+  }
+
+  @Post('ledger-mapping')
+  @Permissions('edit_accounting')
+  setMapping(@Body() dto: SetAccountMappingDto) {
+    return this.accountingService.setMapping(dto);
+  }
+
+  @Delete('ledger-mapping/:role')
+  @Permissions('edit_accounting')
+  removeMapping(@Param('role') role: string) {
+    return this.accountingService.removeMapping(role);
+  }
+
+  /** Creates a starter chart and maps every role to it in one call. */
+  @Post('ledger-mapping/seed-defaults')
+  @Permissions('edit_accounting')
+  seedLedgerDefaults() {
+    return this.accountingService.seedLedgerDefaults();
+  }
+
+  /** The automatic entries a given invoice or count produced. */
+  @Get('entries-for/:sourceType/:sourceId')
+  @Permissions('view_accounting')
+  entriesForSource(
+    @Param('sourceType') sourceType: string,
+    @Param('sourceId') sourceId: string,
+  ) {
+    return this.accountingService.entriesForSource(sourceType, sourceId);
+  }
+
   @Get('accounts')
   @Permissions('view_accounting')
   listAccounts(@Query() query: { search?: string; type?: string; isActive?: string }) {

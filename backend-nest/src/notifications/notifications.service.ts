@@ -3,7 +3,13 @@ import { Cron, CronExpression } from '@nestjs/schedule';
 import { Prisma, NotificationType, NotificationSeverity } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeGateway, NotificationRealtimePayload } from '../realtime/realtime.gateway';
-import { toFactoryDateKey, factoryDateKeyDayOfWeek } from '../common/utils/timezone.util';
+import {
+  toFactoryDateKey,
+  factoryDateKeyDayOfWeek,
+  getFactoryLocalDate,
+  parseDateKeyToUtcMidnight,
+} from '../common/utils/timezone.util';
+import { runUnscoped, runWithTenant } from '../common/tenant/tenant-context';
 import { tenantKey } from '../common/tenant/tenant-key';
 
 type CreateNotificationInput = {
@@ -20,13 +26,49 @@ type CreateNotificationInput = {
   dedupeKey?: string | null;
 };
 
+/** Friday is the factory's weekly rest day (0=Sunday). */
+const WEEKEND_DAY_OF_WEEK = 5;
+
+/** "HH:mm" to minutes since local midnight, or null when unparseable. */
+function parseHhMm(value: string | null | undefined): number | null {
+  if (!value) return null;
+  const match = /^(\d{1,2}):(\d{2})/.exec(value.trim());
+  if (!match) return null;
+  const hours = Number(match[1]);
+  const minutes = Number(match[2]);
+  if (!Number.isFinite(hours) || !Number.isFinite(minutes)) return null;
+  if (hours < 0 || hours > 23 || minutes < 0 || minutes > 59) return null;
+  return hours * 60 + minutes;
+}
+
+/** What one factory's absence sweep did — returned so tests need no log parsing. */
+export type AbsenceScanResult = {
+  scanned: number;
+  flagged: number;
+  onLeave: number;
+  present: number;
+  /** Why the sweep did nothing, or null when it ran. */
+  skipped: string | null;
+};
+
 @Injectable()
 export class NotificationsService implements OnModuleInit {
   private readonly logger = new Logger(NotificationsService.name);
 
-  /** وقت بداية الدوام الرسمي (بالتوقيت المحلي للخادم) — قابل للضبط عبر المتغير. */
+  /** وقت بداية الدوام الرسمي بتوقيت المصنع — قابل للضبط عبر المتغير. */
   private readonly workStartHour = Number(process.env.WORK_START_HOUR ?? 8);
   private readonly workStartMinute = Number(process.env.WORK_START_MINUTE ?? 0);
+
+  /**
+   * The factory-local window the sweep is allowed to run in, and how late
+   * someone must be before it counts.
+   *
+   * The window is separate from WORK_START_HOUR so a factory with an early
+   * shift can be scanned from 06:00 without moving everyone's official start.
+   */
+  private readonly scanStartHour = Number(process.env.ABSENCE_SCAN_START_HOUR ?? 6);
+  private readonly scanEndHour = Number(process.env.ABSENCE_SCAN_END_HOUR ?? 17);
+  private readonly graceMinutes = Number(process.env.ABSENCE_GRACE_MINUTES ?? 30);
 
   constructor(
     private readonly prisma: PrismaService,
@@ -154,104 +196,183 @@ export class NotificationsService implements OnModuleInit {
   }
 
   /**
-   * المؤقّت كل ساعة:
-   * يفحص الموظفين النشطين الذين لم يسجّلوا دخولاً بعد وقت الدوام الرسمي،
-   * وينشئ/يحدّث إشعاراً لكل واحد منهم. الإشعار يبقى يتكرر كل ساعة حتى
-   * يسجّل الموظف دخوله أو يضغط الأدمن "تجاهل" (isDismissed).
+   * Hourly sweep for staff who have not clocked in, run once per factory.
+   *
+   * Every Prisma model this touches is tenant-scoped, so the scan must
+   * establish a tenant itself: a `@Cron` runs outside any request and
+   * `requireScope()` fails closed without one. It previously did not, so every
+   * run threw, the catch swallowed it, and no absence notification was ever
+   * created. Same shape as ExpiryService.scanAllTenants for that reason.
    */
   @Cron(CronExpression.EVERY_HOUR)
   async scanAbsentEmployees(): Promise<void> {
+    let tenants: Array<{ id: string; name: string }>;
     try {
-      const now = new Date();
-      const currentHour = now.getHours();
+      tenants = await runUnscoped('absence-scan-tenants', () =>
+        this.prisma.tenant.findMany({
+          where: { status: 'active' },
+          select: { id: true, name: true },
+        }),
+      );
+    } catch (error) {
+      this.logger.error('Absent-employee scan could not list tenants', error as Error);
+      return;
+    }
 
-      // لا نُنبّه بعد انتهاء الدوام (بعد 17:00) لتجنّب الإزعاج ليلاً
-      if (currentHour < this.workStartHour || currentHour >= 17) return;
+    for (const tenant of tenants) {
+      try {
+        await runWithTenant(
+          { tenantId: tenant.id, bypass: false, actor: 'system:absence-scan' },
+          () => this.scanTenantAbsences(),
+        );
+      } catch (error) {
+        this.logger.error(
+          `Absent-employee scan failed for tenant ${tenant.name}`,
+          error as Error,
+        );
+      }
+    }
+  }
 
-       const todayKey = toFactoryDateKey(now);
-       if (factoryDateKeyDayOfWeek(todayKey) === 5) return;
+  /**
+   * One factory's sweep. Safe to call by hand.
+   *
+   * Returns what it did so the behaviour is testable without reading the log.
+   */
+  async scanTenantAbsences(now = new Date()): Promise<AbsenceScanResult> {
+    const skipped = (reason: string): AbsenceScanResult => ({
+      scanned: 0,
+      flagged: 0,
+      onLeave: 0,
+      present: 0,
+      skipped: reason,
+    });
 
-      // وقت بداية الدوام اليوم بصيغة Date
-      const workStart = new Date(now);
-      workStart.setHours(this.workStartHour, this.workStartMinute, 0, 0);
+    // Clock arithmetic is done entirely in factory-local minutes. The old code
+    // mixed `now.getHours()` (whatever timezone the server happens to run in)
+    // with `toFactoryDateKey()` (UTC+3), so on a UTC host the whole working
+    // window was three hours out and lateness was computed against the wrong
+    // midnight.
+    const todayKey = toFactoryDateKey(now);
+    const localNow = getFactoryLocalDate(now);
+    const nowMinutes = localNow.getUTCHours() * 60 + localNow.getUTCMinutes();
 
-      const activeEmployees = await this.prisma.employee.findMany({
-        where: { status: 'active' },
-        select: {
-          employeeId: true,
-          name: true,
-          scheduledStart: true,
+    if (factoryDateKeyDayOfWeek(todayKey) === WEEKEND_DAY_OF_WEEK) {
+      return skipped('weekend');
+    }
+    if (nowMinutes < this.scanStartHour * 60 || nowMinutes >= this.scanEndHour * 60) {
+      return skipped('outside scan window');
+    }
+
+    const defaultStartMinutes = this.workStartHour * 60 + this.workStartMinute;
+    const todayStart = parseDateKeyToUtcMidnight(todayKey);
+    const todayEnd = new Date(todayStart.getTime() + 24 * 60 * 60 * 1000 - 1);
+
+    const employees = await this.prisma.employee.findMany({
+      where: {
+        status: 'active',
+        OR: [{ employmentStartDate: null }, { employmentStartDate: { lte: todayEnd } }],
+      },
+      select: { employeeId: true, name: true, scheduledStart: true },
+    });
+
+    if (employees.length === 0) return skipped('no active employees');
+
+    const employeeIds = employees.map((e) => e.employeeId);
+
+    // Both lookups are one query for the whole factory rather than one per
+    // employee: the old loop issued an attendance query per person per hour.
+    const [checkIns, approvedLeaves] = await Promise.all([
+      this.prisma.attendanceRecord.findMany({
+        where: { employeeId: { in: employeeIds }, date: todayKey, type: 'IN' },
+        select: { employeeId: true },
+      }),
+      this.prisma.leaveRequest.findMany({
+        where: {
+          employeeId: { in: employeeIds },
+          status: 'APPROVED',
+          startDate: { lte: todayEnd },
+          endDate: { gte: todayStart },
+        },
+        select: { employeeId: true },
+      }),
+    ]);
+
+    const presentIds = new Set(checkIns.map((r) => r.employeeId));
+    const onLeaveIds = new Set(approvedLeaves.map((l) => l.employeeId));
+
+    let flagged = 0;
+
+    for (const employee of employees) {
+      // Someone who punched in is here. Someone on an approved leave is
+      // accounted for. Neither is an absence, and telling the office otherwise
+      // is exactly the false alarm this scan is meant to avoid.
+      if (presentIds.has(employee.employeeId)) continue;
+      if (onLeaveIds.has(employee.employeeId)) continue;
+
+      const startMinutes = parseHhMm(employee.scheduledStart) ?? defaultStartMinutes;
+      const lateMinutes = nowMinutes - startMinutes;
+
+      // Grace period: a shift that started twenty minutes ago is not yet an
+      // absence, and flagging it trains people to ignore the bell.
+      if (lateMinutes < this.graceMinutes) continue;
+
+      const dedupeKey = `ABSENT:${employee.employeeId}:${todayKey}`;
+
+      // A dismissed alert stays dismissed. Upserting unconditionally would
+      // rewrite the row every hour and push it back at whoever cleared it.
+      const existing = await this.prisma.notification.findFirst({
+        where: { dedupeKey },
+        select: { id: true, isDismissed: true },
+      });
+      if (existing?.isDismissed) continue;
+
+      const message =
+        `السيد/ة ${employee.name} لم يسجّل الدخول حتى الآن ` +
+        `(متأخر ${lateMinutes} دقيقة عن موعد الدوام).`;
+
+      const notification = await this.prisma.notification.upsert({
+        where: tenantKey<Prisma.NotificationWhereUniqueInput>({ dedupeKey }),
+        create: {
+          type: NotificationType.ABSENT,
+          severity: NotificationSeverity.WARNING,
+          title: 'موظف لم يسجّل دخوله بعد',
+          message,
+          employeeId: employee.employeeId,
+          employeeName: employee.name,
+          entityType: 'attendance',
+          dedupeKey,
+          metadata: { lateMinutes, date: todayKey },
+        },
+        update: {
+          message,
+          severity: NotificationSeverity.WARNING,
+          metadata: { lateMinutes, date: todayKey },
         },
       });
 
-      for (const employee of activeEmployees) {
-        const employeeWorkStart = new Date(workStart);
-        if (employee.scheduledStart) {
-          const [h, m] = employee.scheduledStart.split(':').map(Number);
-          if (!Number.isNaN(h)) employeeWorkStart.setHours(h, m ?? 0, 0, 0);
-        }
+      flagged += 1;
 
-        // إن كان الموظف لا يزال ضمن فترة السماح قبل الدوام لا نُنبّه
-        if (now < employeeWorkStart) continue;
-
-        // هل سجّل دخولاً اليوم؟
-        const checkIn = await this.prisma.attendanceRecord.findFirst({
-          where: {
-            employeeId: employee.employeeId,
-            date: todayKey,
-            type: 'IN',
-          },
-          select: { id: true },
-        });
-
-        if (checkIn) continue;
-
-        const dedupeKey = `ABSENT:${employee.employeeId}:${todayKey}`;
-
-        // هل هناك إشعار سابق لم يُتجاهل؟ نحدّث وقت التكرار فقط عبر upsert.
-        const lateMinutes = Math.floor((now.getTime() - employeeWorkStart.getTime()) / 60000);
-
-        await this.prisma.notification.upsert({
-          where: tenantKey<Prisma.NotificationWhereUniqueInput>({ dedupeKey }),
-          create: {
-            type: NotificationType.ABSENT,
-            severity: NotificationSeverity.WARNING,
-            title: 'موظف لم يسجّل دخوله بعد',
-            message: `السيد/ة ${employee.name} لم يسجّل الدخول حتى الآن (متأخر ${lateMinutes} دقيقة عن موعد الدوام).`,
-            employeeId: employee.employeeId,
-            employeeName: employee.name,
-            entityType: 'attendance',
-            dedupeKey,
-            metadata: { lateMinutes },
-          },
-          update: {
-            message: `السيد/ة ${employee.name} لم يسجّل الدخول حتى الآن (متأخر ${lateMinutes} دقيقة عن موعد الدوام).`,
-            severity: NotificationSeverity.WARNING,
-            metadata: { lateMinutes },
-          },
-        });
-
-        // البثّ اللحظي حتى لو كان موجوداً مسبقاً (للتنبيه المتكرر)
-        const existing = await this.prisma.notification.findFirst({
-          where: { dedupeKey },
-        });
-        if (existing && !existing.isDismissed) {
-          this.realtimeGateway.emitNotification({
-            id: existing.id,
-            type: existing.type,
-            severity: existing.severity,
-            title: existing.title,
-            message: existing.message,
-            employeeId: existing.employeeId,
-            employeeName: existing.employeeName,
-            entityType: existing.entityType,
-            entityId: existing.entityId,
-            createdAt: existing.updatedAt.toISOString(),
-          });
-        }
-      }
-    } catch (error) {
-      this.logger.error('Absent-employee scan failed', error as Error);
+      this.realtimeGateway.emitNotification({
+        id: notification.id,
+        type: notification.type,
+        severity: notification.severity,
+        title: notification.title,
+        message: notification.message,
+        employeeId: notification.employeeId,
+        employeeName: notification.employeeName,
+        entityType: notification.entityType,
+        entityId: notification.entityId,
+        createdAt: notification.updatedAt.toISOString(),
+      });
     }
+
+    return {
+      scanned: employees.length,
+      flagged,
+      onLeave: onLeaveIds.size,
+      present: presentIds.size,
+      skipped: null,
+    };
   }
 }

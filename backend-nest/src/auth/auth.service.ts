@@ -76,6 +76,15 @@ export class AuthService {
     'view_accounting',
     'edit_accounting',
     'notifications.view',
+    // --- WMS extension ---
+    // Batches, expiry rules, locations, QC and counting gate on the existing
+    // inventory pair, and invoicing on the purchasing/sales pairs; these two
+    // extra pairs exist for the roles a warehouse actually separates -- a
+    // picker who may work a pick list but must not edit product costs.
+    'view_batches',
+    'edit_batches',
+    'view_fulfillment',
+    'edit_fulfillment',
   ];
 
   constructor(

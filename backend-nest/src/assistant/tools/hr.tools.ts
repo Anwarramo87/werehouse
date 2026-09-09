@@ -7,6 +7,12 @@ import {
   DEFAULT_ROW_LIMIT,
   MAX_ROW_LIMIT,
 } from '../assistant.types';
+import {
+  toFactoryDateKey,
+  parseDateKeyToUtcMidnight,
+  utcTimestampToLocalMinutes,
+  formatFactoryLocalTime,
+} from '../../common/utils/timezone.util';
 
 /**
  * The record types DailyAttendanceLog uses for time away from work.
@@ -22,6 +28,17 @@ const LEAVE_TYPES = [
   'ADMIN_LEAVE',
   'DEATH_LEAVE',
 ] as const;
+
+/** "HH:mm" to minutes since factory-local midnight, or null when unparseable. */
+function parseScheduledMinutes(value: string | null | undefined): number | null {
+  if (!value) return null;
+  const match = /^(\d{1,2}):(\d{2})/.exec(value.trim());
+  if (!match) return null;
+  const hours = Number(match[1]);
+  const minutes = Number(match[2]);
+  if (hours < 0 || hours > 23 || minutes < 0 || minutes > 59) return null;
+  return hours * 60 + minutes;
+}
 
 const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Use YYYY-MM-DD.');
 
@@ -90,6 +107,7 @@ export class HrTools {
     return [
       this.searchEmployees(),
       this.getEmployeeProfile(),
+      this.getDailyAttendanceStatus(),
       this.getAttendanceSummary(),
       this.listLeaveRequests(),
     ];
@@ -100,7 +118,8 @@ export class HrTools {
       name: 'search_employees',
       description: [
         'Find employees by profile, salary, absence or leave filters, combined freely.',
-        'Absence and leave days come from the daily attendance log, the source payroll uses.',
+        'Absence and leave days are PERIOD TOTALS from the payroll ledger, not a statement about today:',
+        'use get_daily_attendance_status for who is in or out on a given day.',
         'leaveDays covers paid, unpaid, sick, admin and bereavement leave together.',
         'Period defaults to the last 30 days; say which period you used.',
         'Answer "how many" from totalMatching, never by counting rows.',
@@ -364,6 +383,186 @@ export class HrTools {
     };
   }
 
+  /**
+   * Who actually turned up on one particular day.
+   *
+   * This is deliberately a separate tool from getAttendanceSummary. That one
+   * reads DailyAttendanceLog, which is the payroll ledger: its ABSENCE rows are
+   * entered by hand or posted by an aggregation run, so for "today" it is
+   * usually empty and always lags. Asked "who is absent today" with only that
+   * tool, the model had nothing that described today and filled the gap itself
+   * -- which is how present staff came to be reported as absent.
+   *
+   * Presence here is decided the same way the dashboard decides it: an IN punch
+   * in AttendanceRecord means present, an approved LeaveRequest covering the day
+   * means on leave, and only what is left over is absent.
+   */
+  private getDailyAttendanceStatus(): AssistantTool {
+    const input = z.object({
+      date: isoDate
+        .optional()
+        .describe('The day to report on. Default: today in factory time.'),
+      department: z.string().min(1).max(120).optional(),
+      status: z
+        .enum(['present', 'absent', 'on_leave', 'late'])
+        .optional()
+        .describe('Return only employees in this state. Omit for all of them.'),
+      limit: z.number().int().min(1).max(MAX_ROW_LIMIT).optional(),
+    });
+
+    return {
+      name: 'get_daily_attendance_status',
+      description: [
+        'Who was present, absent, on leave or late on ONE day, from the clock-in records.',
+        'Use this for "who is absent today", "who is here now", "who came in late", and any question about a single day.',
+        'Do NOT use get_attendance_summary for those -- it reports the payroll ledger over a period and does not describe today.',
+        'Presence means an actual IN punch; approved leave is reported as on_leave and is never counted as absence.',
+        'Answer "how many" from the counts object, not by counting rows.',
+      ].join(' '),
+      input,
+      permissions: ['view_attendance'],
+      run: async (raw) => {
+        const args = raw as z.infer<typeof input>;
+        const dateKey = args.date ?? toFactoryDateKey();
+        const dayStart = parseDateKeyToUtcMidnight(dateKey);
+        const dayEnd = new Date(dayStart.getTime() + 24 * 60 * 60 * 1000 - 1);
+        const limit = args.limit ?? DEFAULT_ROW_LIMIT;
+
+        const employeeWhere: Prisma.EmployeeWhereInput = { status: 'active' };
+        if (args.department) {
+          employeeWhere.department = {
+            contains: args.department,
+            mode: 'insensitive',
+          };
+        }
+
+        const employees = await this.prisma.employee.findMany({
+          where: employeeWhere,
+          select: {
+            employeeId: true,
+            name: true,
+            department: true,
+            scheduledStart: true,
+          },
+          orderBy: { name: 'asc' },
+        });
+
+        if (employees.length === 0) {
+          return {
+            date: dateKey,
+            scope: args.department ?? 'all employees',
+            counts: { total: 0, present: 0, absent: 0, onLeave: 0, late: 0 },
+            rowCount: 0,
+            rows: [],
+          };
+        }
+
+        const employeeIds = employees.map((e) => e.employeeId);
+
+        const [punches, leaves] = await Promise.all([
+          this.prisma.attendanceRecord.findMany({
+            where: { employeeId: { in: employeeIds }, date: dateKey },
+            select: { employeeId: true, type: true, timestamp: true },
+            orderBy: { timestamp: 'asc' },
+          }),
+          this.prisma.leaveRequest.findMany({
+            where: {
+              employeeId: { in: employeeIds },
+              status: 'APPROVED',
+              startDate: { lte: dayEnd },
+              endDate: { gte: dayStart },
+            },
+            select: { employeeId: true, leaveType: true },
+          }),
+        ]);
+
+        // First IN and last OUT per employee: a day with several punch pairs
+        // still has one arrival and one departure as far as this report goes.
+        const firstIn = new Map<string, Date>();
+        const lastOut = new Map<string, Date>();
+        for (const punch of punches) {
+          if (punch.type === 'IN') {
+            if (!firstIn.has(punch.employeeId)) {
+              firstIn.set(punch.employeeId, punch.timestamp);
+            }
+          } else if (punch.type === 'OUT') {
+            lastOut.set(punch.employeeId, punch.timestamp);
+          }
+        }
+
+        const leaveByEmployee = new Map(
+          leaves.map((l) => [l.employeeId, l.leaveType as string]),
+        );
+
+        const counts = {
+          total: employees.length,
+          present: 0,
+          absent: 0,
+          onLeave: 0,
+          late: 0,
+        };
+
+        const rows = employees.map((employee) => {
+          const arrival = firstIn.get(employee.employeeId);
+          const leaveType = leaveByEmployee.get(employee.employeeId);
+
+          // An approved leave outranks a missing punch: the person is accounted
+          // for, and calling that an absence is the false alarm being fixed.
+          const state: 'present' | 'absent' | 'on_leave' = arrival
+            ? 'present'
+            : leaveType
+              ? 'on_leave'
+              : 'absent';
+
+          let minutesLate: number | null = null;
+          if (arrival && employee.scheduledStart) {
+            const scheduled = parseScheduledMinutes(employee.scheduledStart);
+            if (scheduled !== null) {
+              const actual = utcTimestampToLocalMinutes(arrival);
+              minutesLate = Math.max(0, actual - scheduled);
+            }
+          }
+
+          if (state === 'present') counts.present += 1;
+          else if (state === 'on_leave') counts.onLeave += 1;
+          else counts.absent += 1;
+          if (minutesLate !== null && minutesLate > 0) counts.late += 1;
+
+          return {
+            employeeId: employee.employeeId,
+            name: employee.name,
+            department: employee.department,
+            status: state,
+            checkIn: arrival ? formatFactoryLocalTime(arrival) : null,
+            checkOut: lastOut.has(employee.employeeId)
+              ? formatFactoryLocalTime(lastOut.get(employee.employeeId)!)
+              : null,
+            minutesLate,
+            leaveType: leaveType ?? null,
+          };
+        });
+
+        const filtered =
+          args.status === 'late'
+            ? rows.filter((r) => (r.minutesLate ?? 0) > 0)
+            : args.status
+              ? rows.filter((r) => r.status === args.status)
+              : rows;
+
+        return {
+          date: dateKey,
+          scope: args.department ?? 'all employees',
+          /** Counts cover everyone, even when the rows below were shortened. */
+          counts,
+          totalMatching: filtered.length,
+          rowCount: Math.min(filtered.length, limit),
+          truncated: filtered.length > limit,
+          rows: filtered.slice(0, limit),
+        };
+      },
+    };
+  }
+
   private getAttendanceSummary(): AssistantTool {
     const input = z.object({
       employeeId: z
@@ -379,8 +578,14 @@ export class HrTools {
 
     return {
       name: 'get_attendance_summary',
-      description:
-        'Totals per record type (absence, delay minutes, overtime minutes, and each kind of leave) over a period, for one employee, one department, or the whole factory. Use this for "how many days was X absent" rather than counting rows yourself.',
+      description: [
+        'Totals per record type (absence, delay minutes, overtime minutes, and each kind of leave) over a PERIOD,',
+        'for one employee, one department, or the whole factory.',
+        'This reads the payroll ledger, which is written by hand or by an aggregation run, so it lags and is usually empty for the current day.',
+        'Use it for "how many days was X absent last month".',
+        'Do NOT use it to work out who is absent, present or late on a single day -- get_daily_attendance_status answers that from the clock-in records.',
+        'A zero here means nothing has been posted to the ledger, which is not the same as nobody being absent: say so rather than guessing.',
+      ].join(' '),
       input,
       permissions: ['view_attendance'],
       run: async (raw) => {

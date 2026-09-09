@@ -28,9 +28,9 @@
     "seed:demo": "node scripts/seed-demo.js",
     "import:legacy-employees": "node scripts/import-legacy-employees.js",
     "seed:employees": "ts-node prisma/seed-employees-payroll.ts",
-    "test:unit": "jest --testEnvironment=node --testPathPatterns=src/.*\\.spec\\.ts$",
+    "test:unit": "jest --testEnvironment=node",
     "test:e2e": "jest --config ./test/jest-e2e.json",
-    "test:salary": "npx jest ./test/salary.calculate-allowances.e2e-spec.ts --config ./test/jest-e2e.json -i --runInBand",
+    "test:salary": "npx jest ./test/e2e/salary.calculate-allowances.e2e-spec.ts --config ./test/jest-e2e.json -i --runInBand",
     "test:security": "npm run test:e2e -- security.e2e-spec.ts",
     "test:imports": "npm run test:e2e -- imports.e2e-spec.ts",
     "test:files": "npm run test:e2e -- files.e2e-spec.ts",
@@ -42,7 +42,9 @@
     "audit:deps": "npm audit --audit-level=high",
     "migrate:deploy": "node scripts/prisma-safe.js remote migrate deploy",
     "prisma:migrate:local": "node scripts/prisma-safe.js local migrate deploy",
-    "db:target": "node scripts/db-target-report.js"
+    "db:target": "node scripts/db-target-report.js",
+    "test": "npm run test:unit",
+    "test:cov": "jest --coverage --testEnvironment=node"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.122.0",
