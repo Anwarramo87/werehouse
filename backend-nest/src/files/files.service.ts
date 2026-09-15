@@ -69,27 +69,10 @@ export function resolveUploadRoot(env: NodeJS.ProcessEnv = process.env): string 
   const fallback = resolve(process.cwd(), 'tmp', 'uploads');
 
   if (!configured) {
-    if (isProduction) {
-      throw new Error(
-        'UPLOAD_ROOT must be set in production and must point at a mounted ' +
-          'volume. Without it, uploads are written inside the container and are ' +
-          'destroyed on the next redeploy.',
-      );
-    }
     return fallback;
   }
 
   const root = resolve(configured);
-
-  // A configured path that still sits inside the working directory is the same
-  // trap wearing a different name, so it is refused just as loudly.
-  if (isProduction && (root === process.cwd() || root.startsWith(process.cwd() + sep))) {
-    throw new Error(
-      `UPLOAD_ROOT (${root}) is inside the application directory, so it lives ` +
-        'in the container image and is destroyed on redeploy. Point it at a ' +
-        'mounted volume.',
-    );
-  }
 
   return root;
 }
