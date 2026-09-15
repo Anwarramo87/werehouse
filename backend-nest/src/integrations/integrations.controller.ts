@@ -3,6 +3,8 @@ import { ApiCookieAuth, ApiTags } from '@nestjs/swagger';
 import { IntegrationsService } from './integrations.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { PermissionsGuard } from '../common/guards/permissions.guard';
+import { RequiresPage } from '../common/entitlements/requires-page.decorator';
+import { PageAccessGuard } from '../common/entitlements/page-access.guard';
 import { Permissions } from '../common/decorators/permissions.decorator';
 import { CreateConnectionDto } from './dto/create-connection.dto';
 import { UpdateConnectionDto } from './dto/update-connection.dto';
@@ -11,7 +13,8 @@ import { CreateWebhookDto } from './dto/create-webhook.dto';
 @ApiTags('integrations')
 @ApiCookieAuth()
 @Controller('integrations')
-@UseGuards(JwtAuthGuard, PermissionsGuard)
+@UseGuards(JwtAuthGuard, PermissionsGuard, PageAccessGuard)
+@RequiresPage('admin.integrations')
 export class IntegrationsController {
   constructor(private readonly integrations: IntegrationsService) {}
 

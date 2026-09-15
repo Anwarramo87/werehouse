@@ -13,6 +13,8 @@ import { ApiTags, ApiCookieAuth } from '@nestjs/swagger';
 import { DailyLogsService } from './daily-logs.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { PermissionsGuard } from '../common/guards/permissions.guard';
+import { RequiresPage } from '../common/entitlements/requires-page.decorator';
+import { PageAccessGuard } from '../common/entitlements/page-access.guard';
 import { Permissions } from '../common/decorators/permissions.decorator';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { CreateDailyLogDto } from './dto/create-daily-log.dto';
@@ -24,7 +26,8 @@ import { AuthenticatedUser } from '../common/types/authenticated-user.types';
 @ApiTags('attendance')
 @ApiCookieAuth()
 @Controller('attendance/daily-logs')
-@UseGuards(JwtAuthGuard, PermissionsGuard)
+@UseGuards(JwtAuthGuard, PermissionsGuard, PageAccessGuard)
+@RequiresPage('hr.attendance')
 export class DailyLogsController {
   constructor(private readonly dailyLogsService: DailyLogsService) {}
 

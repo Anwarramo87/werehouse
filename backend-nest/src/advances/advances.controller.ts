@@ -3,6 +3,8 @@ import { ApiTags, ApiCookieAuth } from '@nestjs/swagger';
 import { AdvancesService } from './advances.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { PermissionsGuard } from '../common/guards/permissions.guard';
+import { RequiresPage } from '../common/entitlements/requires-page.decorator';
+import { PageAccessGuard } from '../common/entitlements/page-access.guard';
 import { Permissions } from '../common/decorators/permissions.decorator';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { AuthenticatedUser } from '../common/types/authenticated-user.types';
@@ -13,7 +15,8 @@ import { AdvancesListQueryDto } from './dto/advances-list-query.dto';
 @ApiTags('advances')
 @ApiCookieAuth()
 @Controller('advances')
-@UseGuards(JwtAuthGuard, PermissionsGuard) // الحماية مطبقة على كل الدوال تلقائياً
+@UseGuards(JwtAuthGuard, PermissionsGuard, PageAccessGuard) // الحماية مطبقة على كل الدوال تلقائياً
+@RequiresPage('payroll.discounts')
 export class AdvancesController {
   constructor(private readonly advancesService: AdvancesService) {}
 

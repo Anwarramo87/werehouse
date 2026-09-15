@@ -9,6 +9,8 @@ import { ApiTags, ApiCookieAuth } from '@nestjs/swagger';
 import { AttendanceAggregationService } from './attendance-aggregation.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { PermissionsGuard } from '../common/guards/permissions.guard';
+import { RequiresPage } from '../common/entitlements/requires-page.decorator';
+import { PageAccessGuard } from '../common/entitlements/page-access.guard';
 import { Permissions } from '../common/decorators/permissions.decorator';
 
 // ─── DTOs (inline, small enough to not warrant separate files) ────────────────
@@ -36,7 +38,8 @@ class AggregateEmployeeDto {
 @ApiTags('attendance-aggregation')
 @ApiCookieAuth()
 @Controller('attendance/aggregation')
-@UseGuards(JwtAuthGuard, PermissionsGuard)
+@UseGuards(JwtAuthGuard, PermissionsGuard, PageAccessGuard)
+@RequiresPage('hr.attendance')
 export class AttendanceAggregationController {
   constructor(
     private readonly aggregationService: AttendanceAggregationService,

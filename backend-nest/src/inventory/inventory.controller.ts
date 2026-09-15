@@ -4,6 +4,8 @@ import { Request } from 'express';
 import { InventoryService } from './inventory.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { PermissionsGuard } from '../common/guards/permissions.guard';
+import { RequiresPage } from '../common/entitlements/requires-page.decorator';
+import { PageAccessGuard } from '../common/entitlements/page-access.guard';
 import { Permissions } from '../common/decorators/permissions.decorator';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { AuthenticatedUser } from '../common/types/authenticated-user.types';
@@ -19,7 +21,8 @@ import { UpdateWarehouseDto } from './dto/update-warehouse.dto';
 @ApiTags('inventory')
 @ApiCookieAuth()
 @Controller('inventory')
-@UseGuards(JwtAuthGuard, PermissionsGuard)
+@UseGuards(JwtAuthGuard, PermissionsGuard, PageAccessGuard)
+@RequiresPage('inventory.products')
 export class InventoryController {
   constructor(private readonly inventoryService: InventoryService) {}
 
@@ -121,6 +124,7 @@ export class InventoryController {
   // ---------------------------------------------------------------- movements
 
   @Get('movements')
+  @RequiresPage('inventory.movements') // sold separately from inventory.products
   @Permissions('view_inventory')
   listMovements(@Query() query: StockMovementQueryDto) {
     return this.inventoryService.listMovements(query);
@@ -149,6 +153,7 @@ export class InventoryController {
   }
 
   @Post('warehouses')
+  @RequiresPage('inventory.warehouses') // management actions are page-specific; the shared read stays under inventory.products
   @Permissions('edit_inventory')
   createWarehouse(
     @Body() dto: CreateWarehouseDto,
@@ -159,6 +164,7 @@ export class InventoryController {
   }
 
   @Put('warehouses/:warehouseId')
+  @RequiresPage('inventory.warehouses')
   @Permissions('edit_inventory')
   updateWarehouse(
     @Param('warehouseId') warehouseId: string,
@@ -170,6 +176,7 @@ export class InventoryController {
   }
 
   @Delete('warehouses/:warehouseId')
+  @RequiresPage('inventory.warehouses')
   @Permissions('edit_inventory')
   removeWarehouse(
     @Param('warehouseId') warehouseId: string,

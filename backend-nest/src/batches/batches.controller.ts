@@ -16,6 +16,8 @@ import { BatchesService } from './batches.service';
 import { ExpiryService } from './expiry.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { PermissionsGuard } from '../common/guards/permissions.guard';
+import { RequiresPage } from '../common/entitlements/requires-page.decorator';
+import { PageAccessGuard } from '../common/entitlements/page-access.guard';
 import { Permissions } from '../common/decorators/permissions.decorator';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { AuthenticatedUser } from '../common/types/authenticated-user.types';
@@ -31,7 +33,8 @@ import { UpdateExpiryRuleDto } from './dto/update-expiry-rule.dto';
 @ApiTags('batches')
 @ApiCookieAuth()
 @Controller('batches')
-@UseGuards(JwtAuthGuard, PermissionsGuard)
+@UseGuards(JwtAuthGuard, PermissionsGuard, PageAccessGuard)
+@RequiresPage('inventory.batches')
 export class BatchesController {
   constructor(
     private readonly batches: BatchesService,
@@ -77,8 +80,11 @@ export class BatchesController {
   }
 
   // -------------------------------------------------------------- expiry board
+  // The expiry page is sold separately from the batches page, so each handler
+  // overrides the class-level inventory.batches requirement.
 
   @Get('expiry/dashboard')
+  @RequiresPage('inventory.expiry')
   @Permissions('view_inventory')
   expiryDashboard(@Query('horizonDays') horizonDays?: string) {
     return this.expiry.dashboard({
@@ -87,30 +93,35 @@ export class BatchesController {
   }
 
   @Post('expiry/scan')
+  @RequiresPage('inventory.expiry')
   @Permissions('edit_inventory')
   runExpiryScan() {
     return this.expiry.scan();
   }
 
   @Get('expiry/rules')
+  @RequiresPage('inventory.expiry')
   @Permissions('view_inventory')
   listRules() {
     return this.expiry.listRules();
   }
 
   @Post('expiry/rules')
+  @RequiresPage('inventory.expiry')
   @Permissions('edit_inventory')
   createRule(@Body() dto: CreateExpiryRuleDto) {
     return this.expiry.createRule(dto);
   }
 
   @Put('expiry/rules/:ruleId')
+  @RequiresPage('inventory.expiry')
   @Permissions('edit_inventory')
   updateRule(@Param('ruleId') ruleId: string, @Body() dto: UpdateExpiryRuleDto) {
     return this.expiry.updateRule(ruleId, dto);
   }
 
   @Delete('expiry/rules/:ruleId')
+  @RequiresPage('inventory.expiry')
   @Permissions('edit_inventory')
   deleteRule(@Param('ruleId') ruleId: string) {
     return this.expiry.deleteRule(ruleId);

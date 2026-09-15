@@ -3,6 +3,8 @@ import { ApiTags, ApiCookieAuth } from '@nestjs/swagger';
 import { BonusesService } from './bonuses.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { PermissionsGuard } from '../common/guards/permissions.guard';
+import { RequiresPage } from '../common/entitlements/requires-page.decorator';
+import { PageAccessGuard } from '../common/entitlements/page-access.guard';
 import { Permissions } from '../common/decorators/permissions.decorator';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { AuthenticatedUser } from '../common/types/authenticated-user.types';
@@ -13,7 +15,8 @@ import { BonusesListQueryDto } from './dto/bonuses-list-query.dto';
 @ApiTags('bonuses')
 @ApiCookieAuth()
 @Controller('bonuses')
-@UseGuards(JwtAuthGuard, PermissionsGuard)
+@UseGuards(JwtAuthGuard, PermissionsGuard, PageAccessGuard)
+@RequiresPage('payroll.rewards')
 export class BonusesController {
   constructor(private readonly bonusesService: BonusesService) {}
 

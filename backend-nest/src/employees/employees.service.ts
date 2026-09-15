@@ -208,6 +208,79 @@ export class EmployeesService {
     } as const;
   }
 
+  /**
+   * The projection for list-shaped rows, used by every endpoint that returns
+   * many employees (list, byDepartment, resigned). `photo` is deliberately
+   * absent: a single avatar is ~41 KB of base64, and N of them cost N × 41 KB
+   * per page for avatars the browser then has to re-download. Callers get
+   * `photoUrl` instead (added by withPhotoUrls) and fetch the one avatar they
+   * actually render.
+   */
+  private employeeListSelect() {
+    return {
+      id: true,
+      employeeId: true,
+      name: true,
+      mobile: true,
+      nationalId: true,
+      residence: true,
+      dateOfBirth: true,
+      gender: true,
+      department: true,
+      jobTitle: true,
+      profession: true,
+      status: true,
+      biometricNumber: true,
+      scheduledStart: true,
+      scheduledEnd: true,
+      gracePeriodMinutes: true,
+      workDaysInPeriod: true,
+      hoursPerDay: true,
+      // Pay fields are selected here and stripped below for callers without
+      // `manage_salary`. Selecting them conditionally would fork the Prisma
+      // types for no benefit -- the row is already being read, and nothing
+      // leaves this method unfiltered.
+      hourlyRate: true,
+      baseSalary: true,
+      livingAllowance: true,
+      transportAllowanceOverride: true,
+      insuranceAmount: true,
+      currency: true,
+      employmentStartDate: true,
+      terminationDate: true,
+      terminationType: true,
+      terminationReason: true,
+      terminationNotes: true,
+      financialSettlementStatus: true,
+      isSettled: true,
+      createdAt: true,
+      updatedAt: true,
+      roleId: true,
+      departmentId: true,
+      departmentEntity: true,
+      role: true,
+    } as const;
+  }
+
+  /** Fetches a page of list-shaped rows, then salary-strips and photoUrl-annotates them. */
+  private async fetchListRows(
+    where: Prisma.EmployeeWhereInput,
+    orderBy: Prisma.EmployeeOrderByWithRelationInput,
+    skip: number,
+    take: number,
+    user?: AuthenticatedUser,
+  ) {
+    const employees = await this.prisma.employee.findMany({
+      where,
+      orderBy,
+      skip,
+      take,
+      select: this.employeeListSelect(),
+    });
+
+    return this.withPhotoUrls(this.stripSalaryFields(employees, user));
+  }
+
   private async findAuthUserByLogin(loginName: string) {
     return this.prisma.user.findFirst({
       where: {
@@ -230,7 +303,16 @@ export class EmployeesService {
     where.status = { notIn: excluded };
   }
 
-  async list(query: EmployeesListQueryDto) {
+  /** Pay fields. Returned only to a caller holding `manage_salary`. */
+  private static readonly SALARY_FIELDS = [
+    'baseSalary',
+    'hourlyRate',
+    'livingAllowance',
+    'transportAllowanceOverride',
+    'insuranceAmount',
+  ] as const;
+
+  async list(query: EmployeesListQueryDto, user?: AuthenticatedUser) {
     const { page, limit, skip } = resolvePagination(query);
     const where: Prisma.EmployeeWhereInput = {};
 
@@ -247,56 +329,84 @@ export class EmployeesService {
     }
 
     const [employees, total] = await Promise.all([
-      this.prisma.employee.findMany({
-        where,
-        orderBy: { createdAt: 'desc' },
-        skip,
-        take: limit,
-        select: {
-          id: true,
-          employeeId: true,
-          name: true,
-          mobile: true,
-          nationalId: true,
-          residence: true,
-          dateOfBirth: true,
-          gender: true,
-          department: true,
-          jobTitle: true,
-          profession: true,
-          photo: true,
-          status: true,
-          biometricNumber: true,
-          scheduledStart: true,
-          scheduledEnd: true,
-          gracePeriodMinutes: true,
-          workDaysInPeriod: true,
-          hoursPerDay: true,
-          hourlyRate: true,
-          baseSalary: true,
-          livingAllowance: true,
-          transportAllowanceOverride: true,
-          insuranceAmount: true,
-          currency: true,
-          employmentStartDate: true,
-          terminationDate: true,
-          terminationType: true,
-          terminationReason: true,
-          terminationNotes: true,
-          financialSettlementStatus: true,
-          isSettled: true,
-          createdAt: true,
-          updatedAt: true,
-          roleId: true,
-          departmentId: true,
-          departmentEntity: true,
-          role: true,
-        },
-      }),
+      this.fetchListRows(where, { createdAt: 'desc' }, skip, limit, user),
       this.prisma.employee.count({ where }),
     ]);
 
-    return paginatedResponse(employees, page, limit, total);
+    const visible = await this.withPhotoUrls(
+      this.stripSalaryFields(employees, user),
+    );
+
+    return paginatedResponse(visible, page, limit, total);
+  }
+
+  /**
+   * Removes pay from rows the caller is not entitled to see.
+   *
+   * Deleting the keys rather than blanking them keeps the shape honest: a
+   * consumer can tell "not permitted" from "genuinely zero", which matters when
+   * an unpaid intern and a hidden salary would otherwise both read as 0.
+   */
+  private stripSalaryFields<T extends Record<string, unknown>>(
+    rows: T[],
+    user?: AuthenticatedUser,
+  ): T[] {
+    if (this.hasPermission(user, 'manage_salary')) {
+      return rows;
+    }
+
+    return rows.map((row) => {
+      const copy = { ...row };
+      for (const field of EmployeesService.SALARY_FIELDS) {
+        delete copy[field];
+      }
+      return copy;
+    });
+  }
+
+  /**
+   * Adds a `photoUrl` to the rows that actually have a photo.
+   *
+   * One extra indexed query returning nothing but ids, which is far cheaper
+   * than carrying the base64 payloads: it lets the browser fetch each avatar
+   * once and cache it across every page that shows the same person, instead of
+   * re-downloading all of them inside every list response.
+   */
+  private async withPhotoUrls<T extends { employeeId: string }>(rows: T[]) {
+    if (rows.length === 0) return rows as Array<T & { photoUrl: string | null }>;
+
+    const withPhoto = await this.prisma.employee.findMany({
+      where: {
+        employeeId: { in: rows.map((row) => row.employeeId) },
+        photo: { not: null },
+      },
+      select: { employeeId: true },
+    });
+
+    const hasPhoto = new Set(withPhoto.map((row) => row.employeeId));
+
+    return rows.map((row) => ({
+      ...row,
+      photoUrl: hasPhoto.has(row.employeeId)
+        ? `/employees/${encodeURIComponent(row.employeeId)}/photo`
+        : null,
+    }));
+  }
+
+  /**
+   * One employee's photo, as the stored data URL.
+   *
+   * Separate from the list so the payload is fetched only when it is going to
+   * be displayed, and can be cached per employee.
+   */
+  async getPhoto(employeeId: string): Promise<string | null> {
+    const employee = await this.prisma.employee.findFirst({
+      where: { employeeId },
+      select: { photo: true },
+    });
+
+    if (!employee) throw new NotFoundException('Employee not found');
+    return employee.photo ?? null;
   }
 
   async stats() {
@@ -335,7 +445,7 @@ export class EmployeesService {
     });
   }
 
-  async byDepartment(department: string, query: Record<string, any> = {}) {
+  async byDepartment(department: string, query: Record<string, any> = {}, user?: AuthenticatedUser) {
     const page = Math.max(1, query?.page ?? 1);
     const limit = Math.min(200, Math.max(1, query?.limit ?? 50));
     const skip = (page - 1) * limit;
@@ -344,13 +454,7 @@ export class EmployeesService {
     this.applyEmployeeStatusFilter(where, query?.status ?? undefined);
 
     const [employees, total] = await Promise.all([
-      this.prisma.employee.findMany({
-        where,
-        include: this.employeeSelect(),
-        orderBy: { createdAt: 'desc' },
-        skip,
-        take: limit,
-      }),
+      this.fetchListRows(where, { createdAt: 'desc' }, skip, limit, user),
       this.prisma.employee.count({ where }),
     ]);
 
@@ -537,7 +641,19 @@ export class EmployeesService {
     return { message: 'Employee created successfully', employee: created.employee };
   }
 
-  async getByEmployeeId(employeeId: string) {
+  /**
+   * One employee's record.
+   *
+   * Salary fields leave this method only for callers holding `manage_salary`.
+   * `asSelf` is the one carve-out: a person reading their OWN record (identity
+   * resolved from the token, never from a URL — see EmployeeSelfController)
+   * needs no permission, because the data is already theirs.
+   */
+  async getByEmployeeId(
+    employeeId: string,
+    user?: AuthenticatedUser,
+    options?: { asSelf?: boolean },
+  ) {
     const employee = await this.prisma.employee.findFirst({
       where: { employeeId },
       include: this.employeeSelect(),
@@ -545,7 +661,18 @@ export class EmployeesService {
 
     if (!employee) throw new NotFoundException('Employee not found');
 
-    return employee;
+    const canViewSalary = options?.asSelf === true || this.hasPermission(user, 'manage_salary');
+    return canViewSalary
+      ? employee
+      : EmployeesService.stripSalaryRow(employee);
+  }
+
+  private static stripSalaryRow<T extends Record<string, unknown>>(row: T): T {
+    const copy: Record<string, unknown> = { ...row };
+    for (const field of EmployeesService.SALARY_FIELDS) {
+      delete copy[field];
+    }
+    return copy as T;
   }
 
   async update(employeeId: string, dto: UpdateEmployeeDto) {
@@ -796,13 +923,31 @@ export class EmployeesService {
     return { message: 'Employee updated successfully', employee: updated };
   }
 
-  async getProfile(employeeId: string, query: EmployeeProfileQueryDto, user?: AuthenticatedUser) {
-    const employee = await this.getByEmployeeId(employeeId);
+  /**
+   * One employee's full profile.
+   *
+   * `asSelf` is what makes per-employee accounts possible. An administrator
+   * needs `manage_salary` to see someone else's pay; a person looking at their
+   * OWN record needs no permission at all, because the data is already theirs.
+   * Without this distinction the only way to let staff see their own payslip was
+   * to grant them `manage_salary`, which would have shown them everyone's.
+   *
+   * Callers must never pass `asSelf` on an employeeId taken from a URL — see
+   * EmployeeSelfController, which takes it from the verified token instead.
+   */
+  async getProfile(
+    employeeId: string,
+    query: EmployeeProfileQueryDto,
+    user?: AuthenticatedUser,
+    options?: { asSelf?: boolean },
+  ) {
+    const employee = await this.getByEmployeeId(employeeId, user, options);
 
-    const canViewSalary = this.hasPermission(user, 'manage_salary');
-    const canViewAttendance = this.hasPermission(user, 'view_attendance');
-    const canViewAdvances = this.hasPermission(user, 'manage_advances');
-    const canViewBonuses = this.hasPermission(user, 'manage_bonuses');
+    const asSelf = options?.asSelf === true;
+    const canViewSalary = asSelf || this.hasPermission(user, 'manage_salary');
+    const canViewAttendance = asSelf || this.hasPermission(user, 'view_attendance');
+    const canViewAdvances = asSelf || this.hasPermission(user, 'manage_advances');
+    const canViewBonuses = asSelf || this.hasPermission(user, 'manage_bonuses');
 
     const attendanceRange = this.resolveProfileRange(query.startDate, query.endDate);
     const attendanceLimit = query.attendanceLimit ?? DEFAULT_PROFILE_LIMIT;
@@ -1374,7 +1519,7 @@ export class EmployeesService {
     };
   }
 
-  async getResignedEmployees(query: ResignedEmployeesQueryDto) {
+  async getResignedEmployees(query: ResignedEmployeesQueryDto, user?: AuthenticatedUser) {
     const { page, limit, skip } = resolvePagination(query);
 
     // Build where clause for resigned/terminated employees
@@ -1449,13 +1594,7 @@ export class EmployeesService {
       pendingSettlementCount,
       byDepartment,
     ] = await Promise.all([
-      this.prisma.employee.findMany({
-        where,
-        orderBy: { terminationDate: 'desc' },
-        skip,
-        take: limit,
-        include: this.employeeSelect(),
-      }),
+      this.fetchListRows(where, { terminationDate: 'desc' }, skip, limit, user),
       this.prisma.employee.count({ where }),
       this.prisma.employee.count({
         where: {
@@ -1547,7 +1686,7 @@ export class EmployeesService {
     return { message: 'Employee terminated and archived successfully' };
   }
 
-  async restoreEmployee(historyId: string, restoredBy?: string) {
+  async restoreEmployee(historyId: string, restoredBy?: string, user?: AuthenticatedUser) {
     const history = await this.prisma.deletedRecordHistory.findFirst({
       where: { id: historyId, entityType: EMPLOYEE_DELETION_ENTITY, restoredAt: null },
     });
@@ -1576,7 +1715,7 @@ export class EmployeesService {
 
     await this.invalidateEmployeeCaches();
 
-    return this.getByEmployeeId(payload.employeeId);
+    return this.getByEmployeeId(payload.employeeId, user);
   }
 
   async listDeletedEmployees() {

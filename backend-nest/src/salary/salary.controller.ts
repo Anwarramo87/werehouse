@@ -3,6 +3,8 @@ import { ApiTags, ApiCookieAuth } from '@nestjs/swagger';
 import { SalaryService } from './salary.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { PermissionsGuard } from '../common/guards/permissions.guard';
+import { RequiresPage } from '../common/entitlements/requires-page.decorator';
+import { PageAccessGuard } from '../common/entitlements/page-access.guard';
 import { Permissions } from '../common/decorators/permissions.decorator';
 import { UpsertSalaryDto } from './dto/upsert-salary.dto';
 import { CalculateAllowancesDto } from './dto/calculate-allowances.dto';
@@ -13,7 +15,8 @@ import { AuthenticatedUser } from '../common/types/authenticated-user.types';
 @ApiTags('salary')
 @ApiCookieAuth()
 @Controller('salary')
-@UseGuards(JwtAuthGuard, PermissionsGuard)
+@UseGuards(JwtAuthGuard, PermissionsGuard, PageAccessGuard)
+@RequiresPage('payroll.settings')
 export class SalaryController {
   constructor(private readonly salaryService: SalaryService) {}
 

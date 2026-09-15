@@ -15,6 +15,8 @@ import { NotificationsService } from '../notifications/notifications.service';
 import { DeviceApiKeyGuard } from '../common/guards/device-api-key.guard';
 import { toFactoryDateKey } from '../common/utils/timezone.util';
 import { checkLeaveConflictForAttendance } from '../common/utils/leave-attendance-conflict.util';
+import { runUnscoped, runWithTenant } from '../common/tenant/tenant-context';
+import { DevicePunchDto } from './dto/device-punch.dto';
 
 function formatTimeHHmm(value: Date): string {
   const d = value instanceof Date ? value : new Date(value);
@@ -37,6 +39,49 @@ export class PublicAttendanceController {
     private readonly notifications: NotificationsService,
   ) {}
 
+  /**
+   * Which factory this badge belongs to.
+   *
+   * A punch arrives authenticated by a device key, not a session, so nothing
+   * upstream established a tenant -- and every model this controller touches is
+   * tenant-scoped, so an unwrapped write throws inside the Prisma extension and
+   * the device gets a 500 for every scan. The badge number is the only identity
+   * on the wire, so the factory is resolved from it.
+   *
+   * Employee numbers are unique per factory, not globally, so a number carried
+   * by two factories is genuinely ambiguous: refuse rather than guess, which
+   * would post one factory's attendance onto another's payroll.
+   */
+  private async resolveTenantForEmployee(employeeId: string): Promise<string> {
+    const matches = await runUnscoped('device-punch-tenant', async () =>
+      this.prisma.employee.findMany({
+        where: { employeeId },
+        select: { tenantId: true },
+        take: 2,
+      }),
+    );
+
+    if (matches.length === 0) {
+      throw new BadRequestException(`Unknown employee ${employeeId}`);
+    }
+
+    if (matches.length > 1) {
+      this.logger.error(
+        `Employee number ${employeeId} exists in more than one factory; refusing the punch`,
+      );
+      throw new BadRequestException(
+        `Employee number ${employeeId} is ambiguous across factories`,
+      );
+    }
+
+    const tenantId = matches[0].tenantId;
+    if (!tenantId) {
+      throw new BadRequestException(`Employee ${employeeId} belongs to no factory`);
+    }
+
+    return tenantId;
+  }
+
   private async safeGetEmployeeName(employeeId: string): Promise<string> {
     try {
       const employee = await this.prisma.employee.findFirst({
@@ -51,13 +96,17 @@ export class PublicAttendanceController {
 
   @Post('check-in')
   @ApiOperation({ summary: 'Check-in an employee' })
-  async checkIn(@Body() dto: { employeeId: string }) {
-    const { employeeId } = dto;
+  async checkIn(@Body() dto: DevicePunchDto) {
+    const employeeId = dto.employeeId.trim();
+    const tenantId = await this.resolveTenantForEmployee(employeeId);
 
-    if (!employeeId) {
-      throw new BadRequestException('employeeId is required');
-    }
+    return runWithTenant(
+      { tenantId, bypass: false, actor: 'device:check-in' },
+      async () => await this.performCheckIn(employeeId),
+    );
+  }
 
+  private async performCheckIn(employeeId: string) {
     const dateKey = toFactoryDateKey();
     const now = new Date();
 
@@ -123,13 +172,17 @@ export class PublicAttendanceController {
 
   @Post('check-out')
   @ApiOperation({ summary: 'Check-out an employee' })
-  async checkOut(@Body() dto: { employeeId: string }) {
-    const { employeeId } = dto;
+  async checkOut(@Body() dto: DevicePunchDto) {
+    const employeeId = dto.employeeId.trim();
+    const tenantId = await this.resolveTenantForEmployee(employeeId);
 
-    if (!employeeId) {
-      throw new BadRequestException('employeeId is required');
-    }
+    return runWithTenant(
+      { tenantId, bypass: false, actor: 'device:check-out' },
+      async () => await this.performCheckOut(employeeId),
+    );
+  }
 
+  private async performCheckOut(employeeId: string) {
     const dateKey = toFactoryDateKey();
     const now = new Date();
 
@@ -231,12 +284,17 @@ export class PublicAttendanceController {
   @Get('employee/:employeeId/today')
   @ApiOperation({ summary: "Get today's attendance for an employee" })
   async getTodayAttendance(@Param('employeeId') employeeId: string) {
+    const tenantId = await this.resolveTenantForEmployee(employeeId);
     const dateKey = toFactoryDateKey();
 
-    const records = await this.prisma.attendanceRecord.findMany({
-      where: { employeeId, date: dateKey },
-      orderBy: { timestamp: 'asc' },
-    });
+    const records = await runWithTenant(
+      { tenantId, bypass: false, actor: 'device:today' },
+      async () =>
+        await this.prisma.attendanceRecord.findMany({
+          where: { employeeId, date: dateKey },
+          orderBy: { timestamp: 'asc' },
+        }),
+    );
 
     return { employeeId, date: dateKey, records };
   }

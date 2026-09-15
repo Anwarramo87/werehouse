@@ -2,6 +2,8 @@ import { Controller, Delete, Get, Param, Post, Query, UseGuards, ParseUUIDPipe }
 import { ApiTags, ApiCookieAuth } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { PermissionsGuard } from '../common/guards/permissions.guard';
+import { RequiresPage } from '../common/entitlements/requires-page.decorator';
+import { PageAccessGuard } from '../common/entitlements/page-access.guard';
 import { Permissions } from '../common/decorators/permissions.decorator';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { AuthenticatedUser } from '../common/types/authenticated-user.types';
@@ -10,7 +12,8 @@ import { TrashService } from './trash.service';
 @ApiTags('trash')
 @ApiCookieAuth()
 @Controller('trash')
-@UseGuards(JwtAuthGuard, PermissionsGuard)
+@UseGuards(JwtAuthGuard, PermissionsGuard, PageAccessGuard)
+@RequiresPage('admin.trash')
 export class TrashController {
   constructor(private readonly trashService: TrashService) {}
 

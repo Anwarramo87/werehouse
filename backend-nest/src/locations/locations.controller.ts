@@ -14,6 +14,8 @@ import { PutawayStatus } from '@prisma/client';
 import { LocationsService } from './locations.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { PermissionsGuard } from '../common/guards/permissions.guard';
+import { RequiresPage } from '../common/entitlements/requires-page.decorator';
+import { PageAccessGuard } from '../common/entitlements/page-access.guard';
 import { Permissions } from '../common/decorators/permissions.decorator';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { AuthenticatedUser } from '../common/types/authenticated-user.types';
@@ -28,7 +30,8 @@ import { CompletePutawayDto } from './dto/complete-putaway.dto';
 @ApiTags('locations')
 @ApiCookieAuth()
 @Controller('locations')
-@UseGuards(JwtAuthGuard, PermissionsGuard)
+@UseGuards(JwtAuthGuard, PermissionsGuard, PageAccessGuard)
+@RequiresPage('inventory.locations')
 export class LocationsController {
   constructor(private readonly locations: LocationsService) {}
 

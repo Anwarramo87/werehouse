@@ -5,6 +5,8 @@ import { PickingService } from './picking.service';
 import { ShippingService } from './shipping.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { PermissionsGuard } from '../common/guards/permissions.guard';
+import { RequiresPage } from '../common/entitlements/requires-page.decorator';
+import { PageAccessGuard } from '../common/entitlements/page-access.guard';
 import { Permissions } from '../common/decorators/permissions.decorator';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { AuthenticatedUser } from '../common/types/authenticated-user.types';
@@ -18,7 +20,8 @@ import { UpdateShipmentStatusDto } from './dto/update-shipment-status.dto';
 @ApiTags('fulfillment')
 @ApiCookieAuth()
 @Controller('fulfillment')
-@UseGuards(JwtAuthGuard, PermissionsGuard)
+@UseGuards(JwtAuthGuard, PermissionsGuard, PageAccessGuard)
+@RequiresPage('fulfillment.picking')
 export class FulfillmentController {
   constructor(
     private readonly picking: PickingService,
@@ -87,18 +90,21 @@ export class FulfillmentController {
   // ----------------------------------------------------------------- carriers
 
   @Get('carriers')
+  @RequiresPage('fulfillment.shipments') // carriers belong to the shipments page
   @Permissions('view_sales')
   listCarriers() {
     return this.shipping.listCarriers();
   }
 
   @Post('carriers')
+  @RequiresPage('fulfillment.shipments')
   @Permissions('edit_sales')
   createCarrier(@Body() dto: CreateCarrierDto) {
     return this.shipping.createCarrier(dto);
   }
 
   @Put('carriers/:carrierId')
+  @RequiresPage('fulfillment.shipments')
   @Permissions('edit_sales')
   updateCarrier(@Param('carrierId') carrierId: string, @Body() dto: Partial<CreateCarrierDto>) {
     return this.shipping.updateCarrier(carrierId, dto);
@@ -107,6 +113,7 @@ export class FulfillmentController {
   // ----------------------------------------------------------------- packages
 
   @Get('packages')
+  @RequiresPage('fulfillment.shipments')
   @Permissions('view_sales')
   listPackages(
     @Query('shipmentId') shipmentId?: string,
@@ -116,6 +123,7 @@ export class FulfillmentController {
   }
 
   @Post('packages')
+  @RequiresPage('fulfillment.shipments')
   @Permissions('edit_sales')
   createPackage(@Body() dto: CreatePackageDto, @CurrentUser() user: AuthenticatedUser) {
     return this.shipping.createPackage(dto, user);
@@ -124,6 +132,7 @@ export class FulfillmentController {
   // ---------------------------------------------------------------- shipments
 
   @Get('shipments')
+  @RequiresPage('fulfillment.shipments')
   @Permissions('view_sales')
   listShipments(
     @Query('page') page?: string,
@@ -135,12 +144,14 @@ export class FulfillmentController {
   }
 
   @Get('shipments/:shipmentId')
+  @RequiresPage('fulfillment.shipments')
   @Permissions('view_sales')
   getShipment(@Param('shipmentId') shipmentId: string) {
     return this.shipping.getShipment(shipmentId);
   }
 
   @Post('shipments')
+  @RequiresPage('fulfillment.shipments')
   @Permissions('edit_sales')
   createShipment(@Body() dto: CreateShipmentDto, @CurrentUser() user: AuthenticatedUser) {
     return this.shipping.createShipment(dto, user);
@@ -148,6 +159,7 @@ export class FulfillmentController {
 
   /** Renders the shipping label (Code128 SVG + payload) and marks it LABELED. */
   @Post('shipments/:shipmentId/label')
+  @RequiresPage('fulfillment.shipments')
   @Permissions('edit_sales')
   generateLabel(
     @Param('shipmentId') shipmentId: string,
@@ -157,6 +169,7 @@ export class FulfillmentController {
   }
 
   @Put('shipments/:shipmentId/status')
+  @RequiresPage('fulfillment.shipments')
   @Permissions('edit_sales')
   updateStatus(
     @Param('shipmentId') shipmentId: string,

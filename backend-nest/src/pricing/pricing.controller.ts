@@ -3,6 +3,8 @@ import { ApiCookieAuth, ApiTags } from '@nestjs/swagger';
 import { PricingService } from './pricing.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { PermissionsGuard } from '../common/guards/permissions.guard';
+import { RequiresPage } from '../common/entitlements/requires-page.decorator';
+import { PageAccessGuard } from '../common/entitlements/page-access.guard';
 import { Permissions } from '../common/decorators/permissions.decorator';
 import { CreateTaxRateDto } from './dto/create-tax-rate.dto';
 import { UpdateTaxRateDto } from './dto/update-tax-rate.dto';
@@ -14,7 +16,8 @@ import { QuoteDto } from './dto/quote.dto';
 @ApiTags('pricing')
 @ApiCookieAuth()
 @Controller('pricing')
-@UseGuards(JwtAuthGuard, PermissionsGuard)
+@UseGuards(JwtAuthGuard, PermissionsGuard, PageAccessGuard)
+@RequiresPage('sales.pricing')
 export class PricingController {
   constructor(private readonly pricing: PricingService) {}
 
