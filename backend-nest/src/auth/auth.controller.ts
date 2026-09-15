@@ -52,7 +52,13 @@ export class AuthController implements OnModuleInit {
     }
   }
 
-  @Throttle({ default: { limit: 5, ttl: 60_000 } })
+  // 10 per minute PER CLIENT. The old limit of 5 was effectively 5 for the whole
+  // system: the tracker keyed on req.ip, and every browser reaches this API
+  // through the Next.js proxy, so one address covered every user. Now that
+  // ClientIpThrottlerGuard keys on the forwarded client (or the authenticated
+  // user id), the budget belongs to one person and can be generous enough to
+  // survive a fat-fingered password without locking out a shift change.
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @Post('login')
   @ApiOperation({ summary: 'تسجيل الدخول', description: 'يقبل username أو email مع كلمة المرور، يُرجع JWT في HttpOnly Cookie' })
   @ApiResponse({ status: 200, description: 'تم تسجيل الدخول بنجاح' })

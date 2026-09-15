@@ -14,9 +14,13 @@ type ExceptionResponseShape = {
   message?: string | string[];
 };
 
+/** What a client is told when the server broke and the reason is internal. */
+const OPAQUE_SERVER_ERROR = 'Internal server error';
+
 @Catch()
 export class GlobalExceptionFilter implements ExceptionFilter {
   private readonly logger = new Logger(GlobalExceptionFilter.name);
+  private readonly isProduction = process.env.NODE_ENV === 'production';
 
   catch(exception: unknown, host: ArgumentsHost) {
     const ctx = host.switchToHttp();
@@ -38,6 +42,16 @@ export class GlobalExceptionFilter implements ExceptionFilter {
       ? 'Database connection failed. Check DATABASE_URL or database availability.'
       : this.extractMessage(exceptionResponse, exception);
 
+    // What the client is told and what the log records deliberately diverge for
+    // 5xx: an unhandled exception's message is written by whatever threw it --
+    // a Prisma error naming columns, a tenant-scope failure naming internals --
+    // and none of that belongs in a response body. The correlation id is the
+    // bridge: the user quotes it, the log has the detail.
+    const clientMessage =
+      this.isProduction && statusCode >= 500 && !isHttpException && !isDbConnectionError
+        ? OPAQUE_SERVER_ERROR
+        : message;
+
     if (statusCode >= 500) {
       this.logger.error(
         JSON.stringify({
@@ -47,6 +61,9 @@ export class GlobalExceptionFilter implements ExceptionFilter {
           statusCode,
           message,
         }),
+        // Without the stack a production 500 is undiagnosable: the log line
+        // named the message but never where it came from.
+        exception instanceof Error ? exception.stack : undefined,
       );
     } else if (statusCode >= 400) {
       this.logger.warn(
@@ -69,7 +86,7 @@ export class GlobalExceptionFilter implements ExceptionFilter {
       success: false,
       error: {
         statusCode,
-        message,
+        message: clientMessage,
         code: this.resolveErrorCode(statusCode),
       },
       metadata: {

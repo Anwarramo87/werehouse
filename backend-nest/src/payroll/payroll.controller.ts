@@ -5,6 +5,8 @@ import { Request, Response } from 'express';
 import { PayrollService } from './payroll.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { PermissionsGuard } from '../common/guards/permissions.guard';
+import { RequiresPage } from '../common/entitlements/requires-page.decorator';
+import { PageAccessGuard } from '../common/entitlements/page-access.guard';
 import { Permissions } from '../common/decorators/permissions.decorator';
 import { EmployeeAccessService } from '../common/services/employee-access.service';
 import { CalculatePayrollDto } from './dto/calculate-payroll.dto';
@@ -24,7 +26,8 @@ import {
 @ApiTags('payroll')
 @ApiCookieAuth()
 @Controller('payroll')
-@UseGuards(JwtAuthGuard, PermissionsGuard)
+@UseGuards(JwtAuthGuard, PermissionsGuard, PageAccessGuard)
+@RequiresPage('payroll.reports')
 export class PayrollController {
   constructor(
     private readonly payrollService: PayrollService,

@@ -285,10 +285,13 @@ export class SalesInvoicesService {
         });
 
         await tx.salesInvoiceItem.deleteMany({ where: { invoiceId } });
-        for (const [index, item] of dto.items.entries()) {
-          const priced = quote.lines[index];
-          await tx.salesInvoiceItem.create({
-            data: {
+        // One insert for the whole invoice rather than one per line. A 50-line
+        // invoice was 50 round trips, each holding the transaction — and the
+        // transaction holds a pool connection for the duration of all of them.
+        await tx.salesInvoiceItem.createMany({
+          data: dto.items.map((item, index) => {
+            const priced = quote.lines[index];
+            return {
               invoiceId,
               salesOrderItemId: item.salesOrderItemId ?? null,
               sku: item.sku,
@@ -300,9 +303,9 @@ export class SalesInvoicesService {
               taxAmount: priced.taxAmount,
               lineTotal: priced.lineTotal,
               location: item.location ?? 'WH-A',
-            },
-          });
-        }
+            };
+          }),
+        });
       }
 
       return this.recalculate(tx, invoiceId);
@@ -361,11 +364,18 @@ export class SalesInvoicesService {
           location: string;
         }> = [];
 
+        // Every product the invoice touches, in one query instead of one per
+        // line. Posting a 50-line invoice previously issued 50 identical-shaped
+        // lookups inside the transaction.
+        const skus = [...new Set(invoice.items.map((item) => item.sku))];
+        const products = await tx.product.findMany({
+          where: { sku: { in: skus } },
+          select: { sku: true, batchTracked: true, costPrice: true, name: true },
+        });
+        const productBySku = new Map(products.map((product) => [product.sku, product]));
+
         for (const item of invoice.items) {
-          const product = await tx.product.findFirst({
-            where: { sku: item.sku },
-            select: { batchTracked: true, costPrice: true, name: true },
-          });
+          const product = productBySku.get(item.sku);
           if (!product) throw new NotFoundException(`Product with SKU "${item.sku}" not found`);
 
           if (product.batchTracked) {

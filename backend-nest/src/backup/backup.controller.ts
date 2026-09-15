@@ -186,6 +186,9 @@ export class BackupController {
 
     let snapshot: SnapshotFile;
     try {
+      // Memory bound: buffer is already capped at 256 MB by restoreUpload.limits,
+      // so a decode+parse here is at most ~2x file size in RAM. Acceptable today;
+      // a streaming/disk-backed parse is a backlog item (see SCALE_BACKLOG.md).
       snapshot = JSON.parse(file.buffer.toString('utf8')) as SnapshotFile;
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);

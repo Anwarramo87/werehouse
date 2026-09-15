@@ -1,12 +1,16 @@
 import { MiddlewareConsumer, Module, NestModule, RequestMethod } from '@nestjs/common';
-import { APP_GUARD } from '@nestjs/core';
+import { APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import * as Joi from 'joi';
-import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
+import { ThrottlerModule, ThrottlerStorage } from '@nestjs/throttler';
+import { ClientIpThrottlerGuard } from './common/throttler/client-ip.throttler-guard';
+import { RedisThrottlerStorage } from './common/throttler/redis-throttler.storage';
+import { ThrottlerStorageModule } from './common/throttler/throttler-storage.module';
 import { ScheduleModule } from '@nestjs/schedule';
 import { BullModule } from '@nestjs/bullmq';
 import { WinstonModule } from 'nest-winston';
 import { winstonConfig } from './common/logger/winston.config';
+import { shouldRegisterSchedules } from './cluster';
 import { AuthModule } from './auth';
 import { EmployeesModule } from './employees';
 import { DevicesModule } from './devices';
@@ -42,6 +46,8 @@ import { BiometricModule } from './biometric/biometric.module';
 import { TrashModule } from './trash/trash.module';
 import { BackupModule } from './backup/backup.module';
 import { MetricsModule } from './common/metrics/metrics.module';
+import { EntitlementsModule } from './common/entitlements/entitlements.module';
+import { FactoryScopeInterceptor } from './common/tenant/factory-scope.interceptor';
 import { AuditLogModule } from './audit/audit-log.module';
 // --- WMS extension ---
 import { WmsCommonModule } from './common/wms/wms-common.module';
@@ -128,6 +134,11 @@ const queueInfraModules = queuesEnabled
         JWT_REFRESH_COOKIE_NAME: Joi.string().default('warehouse_refresh_token'),
         JWT_ROTATE_THRESHOLD_SEC: Joi.number().min(30).max(3_600).default(300),
         AUTH_MAX_LOGIN_ATTEMPTS: Joi.number().min(3).max(20).default(5),
+        // Comma-separated usernames (or "all") whose password the bootstrap may
+        // reset from the environment on the next boot. Empty by default: a
+        // bootstrap account's password is otherwise set once, at creation, and
+        // changing the env var alone never rotates it.
+        AUTH_FORCE_PASSWORD_RESET: Joi.string().allow('').default(''),
         AUTH_LOCKOUT_MINUTES: Joi.number().min(1).max(1_440).default(15),
         CSRF_PROTECTION_ENABLED: Joi.when('NODE_ENV', {
           is: 'production',
@@ -179,7 +190,29 @@ const queueInfraModules = queuesEnabled
           otherwise: Joi.string().allow('').default(''),
         }),
         DEVICE_AUTH_ENFORCED: Joi.boolean().default(true),
+        // The biometric simulator fabricates attendance. It exists for demos and
+        // test fixtures only, so production must say "false" explicitly: a
+        // production box running the simulator would record attendance nobody
+        // actually clocked. BiometricService also refuses to start in that case.
+        USE_BIOMETRIC_SIMULATOR: Joi.when('NODE_ENV', {
+          is: 'production',
+          then: Joi.boolean().valid(false).default(false),
+          otherwise: Joi.boolean().default(false),
+        }),
         APP_TIMEZONE_OFFSET_MINUTES: Joi.number().min(-720).max(840).default(180),
+        // Storage root for uploaded files. Required in production and validated
+        // properly by resolveUploadRoot() in files.service.ts, which rejects any
+        // path inside the container image.
+        UPLOAD_ROOT: Joi.string().allow('').default(''),
+        // Where finished backups are written. Defaults under UPLOAD_ROOT so a
+        // single mounted volume covers both.
+        BACKUP_ROOT: Joi.string().allow('').default(''),
+        BACKUP_RETENTION_DAYS: Joi.number().min(1).max(3650).default(30),
+        // "auto", a worker count, or unset for a single process. See src/cluster.ts.
+        CLUSTER_WORKERS: Joi.string().allow('').default(''),
+        // Set by cluster.fork() in the child's environment, never by an
+        // operator. Declared so the schema documents it rather than hiding it.
+        CRON_WORKER: Joi.string().valid('true', 'false').optional(),
         TRUST_PROXY: Joi.when('NODE_ENV', {
           is: 'production',
           then: Joi.boolean().default(true),
@@ -188,6 +221,7 @@ const queueInfraModules = queuesEnabled
         BCRYPT_ROUNDS: Joi.number().min(8).max(14).default(12),
         THROTTLE_TTL_MS: Joi.number().min(1_000).default(60_000),
         THROTTLE_LIMIT: Joi.number().min(10).default(120),
+        AUTH_THROTTLE_LIMIT: Joi.number().min(3).max(100).default(10),
         QUEUES_ENABLED: Joi.when('NODE_ENV', {
           is: 'production',
           then: Joi.boolean().default(true),
@@ -203,18 +237,30 @@ const queueInfraModules = queuesEnabled
       }),
     }),
     ThrottlerModule.forRootAsync({
-      inject: [ConfigService],
-      useFactory: (config: ConfigService) => [
-        {
-          ttl: config.get<number>('THROTTLE_TTL_MS', 60_000),
-          limit: config.get<number>('THROTTLE_LIMIT', 120),
-        },
-      ],
+      // Required: the factory below resolves inside ThrottlerModule's own
+      // injector, which cannot see AppModule's providers.
+      imports: [ThrottlerStorageModule],
+      inject: [ConfigService, RedisThrottlerStorage],
+      useFactory: (config: ConfigService, storage: RedisThrottlerStorage) => ({
+        throttlers: [
+          {
+            ttl: config.get<number>('THROTTLE_TTL_MS', 60_000),
+            limit: config.get<number>('THROTTLE_LIMIT', 120),
+          },
+        ],
+        // Shared across instances and surviving restarts; see the class comment.
+        storage,
+      }),
     }),
-    ScheduleModule.forRoot(),
+    // Only the cron-owning worker registers schedules. Without this every
+    // clustered worker would run the hourly absence sweep and each factory
+    // would receive N copies of every notification.
+    ...(shouldRegisterSchedules() ? [ScheduleModule.forRoot()] : []),
     ...queueInfraModules,
     WinstonModule.forRoot(winstonConfig),
+    ThrottlerStorageModule,
     MetricsModule,
+    EntitlementsModule,
     ShortCacheModule,
     EmployeeAccessModule,
     PrismaModule,
@@ -262,8 +308,15 @@ const queueInfraModules = queuesEnabled
   ],
   providers: [
     {
+      // Keys on the real client rather than the Vercel proxy's single address.
       provide: APP_GUARD,
-      useClass: ThrottlerGuard,
+      useClass: ClientIpThrottlerGuard,
+    },
+    {
+      // Global, so it runs after every controller-scoped guard has established
+      // who the caller is. See the class comment for why a guard cannot do this.
+      provide: APP_INTERCEPTOR,
+      useClass: FactoryScopeInterceptor,
     },
   ],
 })

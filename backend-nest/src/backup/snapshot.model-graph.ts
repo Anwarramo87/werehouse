@@ -122,6 +122,11 @@ export const MODEL_DEPENDENCIES: Record<string, readonly string[]> = {
 
   // خريطة الحسابات: تُرمَّم بعد شجرة الحسابات نفسها.
   accountMapping: ['tenant', 'account'],
+
+  // Which modules and pages the factory was sold. Depends on nothing but the
+  // factory itself, and belongs in a snapshot: restoring a factory without its
+  // entitlements would hand it either everything or nothing.
+  tenantEntitlement: ['tenant'],
 };
 
 /**

@@ -3,12 +3,15 @@ import { ApiTags, ApiCookieAuth, ApiOperation } from '@nestjs/swagger';
 import { BiometricService } from './biometric.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { PermissionsGuard } from '../common/guards/permissions.guard';
+import { RequiresPage } from '../common/entitlements/requires-page.decorator';
+import { PageAccessGuard } from '../common/entitlements/page-access.guard';
 import { Permissions } from '../common/decorators/permissions.decorator';
 
 @ApiTags('biometric')
 @ApiCookieAuth()
 @Controller('biometric')
-@UseGuards(JwtAuthGuard, PermissionsGuard)
+@UseGuards(JwtAuthGuard, PermissionsGuard, PageAccessGuard)
+@RequiresPage('hr.biometric')
 export class BiometricController {
   constructor(private readonly biometricService: BiometricService) {}
 

@@ -5,7 +5,8 @@
  * Usage: npx ts-node scripts/test-duplicate-scenarios.ts
  */
 
-import { PrismaClient } from '@prisma/client';
+import { Prisma, PrismaClient } from '@prisma/client';
+import { tenantKey } from '../src/common/tenant/tenant-key';
 
 const prisma = new PrismaClient();
 
@@ -140,7 +141,7 @@ async function runLiveTest() {
   try {
     // Create test employee if doesn't exist
     await prisma.employee.upsert({
-      where: { employeeId: testEmployeeId },
+      where: tenantKey<Prisma.EmployeeWhereUniqueInput>({ employeeId: testEmployeeId }),
       update: {},
       create: {
         employeeId: testEmployeeId,
@@ -180,7 +181,7 @@ if (require.main === module) {
   const args = process.argv.slice(2);
 
   if (args.includes('--live')) {
-    runLiveTest();
+    void runLiveTest();
   } else {
     printScenarios();
     console.log('\n💡 Tip: Run with --live flag to test with real database');

@@ -20,6 +20,7 @@ type CachedAuthUser = {
   roles: string[];
   permissions: string[];
   tenantId: string | null;
+  employeeId: string | null;
 };
 
 @Injectable()
@@ -74,7 +75,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
         runUnscoped('jwt-validate', async () => {
           const user = await this.prisma.user.findUnique({
             where: { id: payload.userId },
-            include: { role: true },
+            include: { role: true, employee: { select: { employeeId: true } } },
           });
 
           if (!user || user.status !== 'active') {
@@ -90,6 +91,10 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
             roles: [roleName],
             permissions: user.role?.permissions || [],
             tenantId: user.tenantId ?? null,
+            // Resolved from the database on every cache miss rather than trusted
+            // from the token body, so revoking someone's staff link takes effect
+            // within the cache TTL instead of at token expiry.
+            employeeId: user.employee?.employeeId ?? null,
           };
         }),
       ));

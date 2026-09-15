@@ -1,4 +1,8 @@
 import { tenantKey } from '../common/tenant/tenant-key';
+import {
+  SerializedTenantScope,
+  captureTenantScope,
+} from '../common/tenant/tenant-job-scope';
 import { BadRequestException, Injectable, NotFoundException, Optional } from '@nestjs/common';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Prisma } from '@prisma/client';
@@ -31,6 +35,8 @@ const PRODUCT_ALLOWED_STATUSES = new Set(['active', 'inactive']);
 type ImportQueuePayload = {
   importJobRecordId: string;
   rows: ParsedRow[];
+  /** The factory this import belongs to, carried across the queue. */
+  tenant?: SerializedTenantScope;
 };
 
 type RowParseValue = string | number | boolean | Date | null | undefined;
@@ -351,7 +357,11 @@ export class ImportsService {
       },
     });
 
-    await this.enqueueImportJob(QUEUE_JOBS.IMPORT_EMPLOYEES, { importJobRecordId: job.id, rows });
+    await this.enqueueImportJob(QUEUE_JOBS.IMPORT_EMPLOYEES, {
+      importJobRecordId: job.id,
+      rows,
+      tenant: captureTenantScope(),
+    });
 
     return {
       message: 'Employee import queued',
@@ -437,7 +447,11 @@ export class ImportsService {
       },
     });
 
-    await this.enqueueImportJob(QUEUE_JOBS.IMPORT_PRODUCTS, { importJobRecordId: job.id, rows });
+    await this.enqueueImportJob(QUEUE_JOBS.IMPORT_PRODUCTS, {
+      importJobRecordId: job.id,
+      rows,
+      tenant: captureTenantScope(),
+    });
 
     return {
       message: 'Product import queued',

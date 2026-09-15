@@ -262,10 +262,12 @@ export class PurchaseInvoicesService {
       if (dto.items) {
         await this.assertProductsExist(dto.items.map((i) => i.sku));
         await tx.purchaseInvoiceItem.deleteMany({ where: { invoiceId } });
-        for (const item of dto.items) {
-          const totals = this.lineTotals(item);
-          await tx.purchaseInvoiceItem.create({
-            data: {
+        // One insert for every line, rather than one round trip each while the
+        // transaction holds a pool connection.
+        await tx.purchaseInvoiceItem.createMany({
+          data: dto.items.map((item) => {
+            const totals = this.lineTotals(item);
+            return {
               invoiceId,
               purchaseOrderItemId: item.purchaseOrderItemId ?? null,
               sku: item.sku,
@@ -281,9 +283,9 @@ export class PurchaseInvoicesService {
               lineTotal: totals.lineTotal,
               finalUnitCost: D(item.unitCost),
               location: item.location ?? 'WH-A',
-            },
-          });
-        }
+            };
+          }),
+        });
       }
 
       return this.recalculate(tx, invoiceId);
@@ -369,6 +371,18 @@ export class PurchaseInvoicesService {
         // a margin that is quietly too high.
         const allocated = await this.allocateLandedCosts(tx, invoiceId);
 
+        // Every product these lines touch, in one query. Posting an invoice
+        // previously issued one identical lookup per line, inside the
+        // transaction.
+        const productBySku = new Map(
+          (
+            await tx.product.findMany({
+              where: { sku: { in: [...new Set(invoice.items.map((i) => i.sku))] } },
+              select: { sku: true, batchTracked: true, name: true },
+            })
+          ).map((product) => [product.sku, product]),
+        );
+
         for (const item of invoice.items) {
           const share = allocated.get(item.id) ?? ZERO;
           const finalUnitCost = D(item.unitCost)
@@ -389,10 +403,7 @@ export class PurchaseInvoicesService {
             createdById: actor?.userId,
           });
 
-          const product = await tx.product.findFirst({
-            where: { sku: item.sku },
-            select: { batchTracked: true, name: true },
-          });
+          const product = productBySku.get(item.sku) ?? null;
 
           if (product?.batchTracked || item.batchNumber) {
             const batchNumber =

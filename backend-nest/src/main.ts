@@ -12,6 +12,7 @@ import cookieParser from 'cookie-parser';
 import { AppModule } from './app.module';
 import { PrismaService } from './prisma/prisma.service';
 import { GlobalExceptionFilter } from './common/filters/global-exception.filter';
+import { bootstrapClustered } from './cluster';
 
 // EPIPE guard — prevents crash when stdout/stderr is redirected to a file
 // and the pipe is broken or closed. This must run before any logger or
@@ -121,12 +122,23 @@ async function bootstrap() {
     );
   }
 
-  // --- Startup Guard: Biometric simulator warning ---
+  // --- Startup Guard: Biometric simulator ---
+  // The simulator fabricates attendance punches. Attendance drives payroll, so
+  // in production a stray `true` here would quietly pay people from random
+  // numbers -- a warning in a log nobody reads is not enough of a guard.
   const biometricSimulator = configService.get<string>('USE_BIOMETRIC_SIMULATOR', 'false') === 'true';
   if (biometricSimulator) {
+    if (isProd) {
+      logger.error(
+        'USE_BIOMETRIC_SIMULATOR=true in production. The simulator invents attendance ' +
+        'records and payroll is calculated from them. Refusing to start.',
+      );
+      process.exit(1);
+    }
+
     logger.warn(
-      '⚠️  USE_BIOMETRIC_SIMULATOR is enabled — attendance data from biometric device is ' +
-      'GENERATED RANDOMALLY (simulated), NOT from real hardware. Do not use in production.',
+      '⚠️  USE_BIOMETRIC_SIMULATOR is enabled — attendance data from the biometric device is ' +
+      'GENERATED RANDOMLY (simulated), NOT read from real hardware.',
     );
   }
 
@@ -255,7 +267,8 @@ async function bootstrap() {
   logger.log(`🔗 API base URL: http://${host}:${port}/api/v1`);
 }
 
-bootstrap().catch((err) => {
+// Single process unless CLUSTER_WORKERS says otherwise; see src/cluster.ts.
+bootstrapClustered(bootstrap).catch((err) => {
   logger.error('Fatal error during bootstrap:', err);
   process.exit(1);
 });

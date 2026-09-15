@@ -50,9 +50,65 @@ type StoredGeneralFileMetadata = {
   uploadedBy: string | null;
 };
 
+/**
+ * Where uploaded files live on disk.
+ *
+ * This used to be hard-coded to `<cwd>/tmp/uploads`, which is inside the
+ * container image: on Railway, and on any container host, that directory is
+ * recreated empty on every redeploy and every uploaded file is gone. Nothing
+ * warned about it, because the code path is identical either way — the loss
+ * only shows up the next time someone opens an old document.
+ *
+ * UPLOAD_ROOT must therefore point at a mounted volume in production. It is
+ * still allowed to default to the old location in development, where losing the
+ * directory costs nothing.
+ */
+export function resolveUploadRoot(env: NodeJS.ProcessEnv = process.env): string {
+  const configured = (env.UPLOAD_ROOT || '').trim();
+  const isProduction = env.NODE_ENV === 'production';
+  const fallback = resolve(process.cwd(), 'tmp', 'uploads');
+
+  if (!configured) {
+    if (isProduction) {
+      throw new Error(
+        'UPLOAD_ROOT must be set in production and must point at a mounted ' +
+          'volume. Without it, uploads are written inside the container and are ' +
+          'destroyed on the next redeploy.',
+      );
+    }
+    return fallback;
+  }
+
+  const root = resolve(configured);
+
+  // A configured path that still sits inside the working directory is the same
+  // trap wearing a different name, so it is refused just as loudly.
+  if (isProduction && (root === process.cwd() || root.startsWith(process.cwd() + sep))) {
+    throw new Error(
+      `UPLOAD_ROOT (${root}) is inside the application directory, so it lives ` +
+        'in the container image and is destroyed on redeploy. Point it at a ' +
+        'mounted volume.',
+    );
+  }
+
+  return root;
+}
+
 @Injectable()
 export class FilesService {
-  private readonly uploadRoot = resolve(process.cwd(), 'tmp', 'uploads', 'general');
+  /** Storage root for every uploaded file. See resolveUploadRoot. */
+  private readonly storageRoot = resolveUploadRoot();
+  private readonly uploadRoot = join(this.storageRoot, 'general');
+
+  /**
+   * The path recorded in a file's metadata and returned to callers.
+   *
+   * Kept relative to the storage root rather than absolute, so moving the
+   * volume — or changing UPLOAD_ROOT — does not invalidate every stored record.
+   */
+  private relativePathFor(bucket: string, storedName: string) {
+    return `general/${bucket}/${storedName}`;
+  }
 
   async uploadGeneralFile(file: Express.Multer.File, userId?: string) {
     this.assertUploadableFile(file);
@@ -68,7 +124,7 @@ export class FilesService {
     const absoluteDirectory = join(this.uploadRoot, bucket);
     const absolutePath = join(absoluteDirectory, storedName);
     const metadataAbsolutePath = join(absoluteDirectory, this.getMetadataFileName(id));
-    const relativePath = `tmp/uploads/general/${bucket}/${storedName}`;
+    const relativePath = this.relativePathFor(bucket, storedName);
     const size = file.size ?? file.buffer.length;
     const checksum = createHash('sha256').update(file.buffer).digest('hex');
     const uploadedAtIso = uploadedAt.toISOString();
@@ -199,7 +255,7 @@ export class FilesService {
                     id,
                     originalName,
                     storedName: entry.name,
-                    path: `tmp/uploads/general/${bucket.name}/${entry.name}`,
+                    path: this.relativePathFor(bucket.name, entry.name),
                     mimeType,
                     size,
                     extension,
@@ -323,10 +379,23 @@ export class FilesService {
   }
 
   async getLocalFile(filePath: string) {
-    const resolved = resolve(process.cwd(), filePath);
-    const uploadRoot = resolve(process.cwd(), 'tmp', 'uploads');
+    // Paths are stored relative to the storage root. Legacy records written
+    // before UPLOAD_ROOT existed carry the old `tmp/uploads/...` prefix, so both
+    // shapes have to resolve; the containment check below is what keeps either
+    // of them honest.
+    const legacyPrefix = 'tmp/uploads/';
+    const normalised = filePath.replace(/\\/g, '/').replace(/^\.\//, '');
+    const relative = normalised.startsWith(legacyPrefix)
+      ? normalised.slice(legacyPrefix.length)
+      : normalised;
 
-    if (!resolved.startsWith(uploadRoot)) {
+    const uploadRoot = this.storageRoot;
+    const resolved = resolve(uploadRoot, relative);
+
+    // A bare startsWith() also accepts a sibling whose name merely begins with
+    // the root -- `uploads-old`, `uploadsecrets` -- so the separator has to be
+    // part of the comparison.
+    if (resolved !== uploadRoot && !resolved.startsWith(uploadRoot + sep)) {
       throw new BadRequestException('Access denied: path outside uploads directory');
     }
 

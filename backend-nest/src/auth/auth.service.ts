@@ -28,7 +28,11 @@ import { RefreshTokenService } from './refresh-token.service';
 import { AuthCacheService } from './auth-cache.service';
 import { toFactoryDateKey, resolveTimezoneOffsetMinutes } from '../common/utils/timezone.util';
 import { currentTenant, runUnscoped } from '../common/tenant/tenant-context';
-import { MANAGE_TENANTS, SUPERADMIN_ROLE } from '../common/tenant/tenant.constants';
+import {
+  DEFAULT_TENANT_CODE,
+  MANAGE_TENANTS,
+  SUPERADMIN_ROLE,
+} from '../common/tenant/tenant.constants';
 
 type BiometricChallengePurpose = 'REGISTER' | 'LOGIN';
 
@@ -44,6 +48,7 @@ type SessionResult = {
 export class AuthService {
   private readonly logger = new Logger(AuthService.name);
   private readonly timezoneOffsetMinutes: number;
+  private static readonly decoyHashes = new Map<number, string>();
 
   private static readonly ADMIN_PERMISSIONS = [
     'view_employees',
@@ -106,6 +111,19 @@ export class AuthService {
     return this.config.get<number>('BCRYPT_ROUNDS', BCRYPT_DEFAULT_ROUNDS);
   }
 
+  /**
+   * AUTH_MAX_LOGIN_ATTEMPTS and AUTH_LOCKOUT_MINUTES are declared and validated
+   * in the config schema, but the lockout used to read the hard-coded constants
+   * instead, so setting either environment variable did nothing at all.
+   */
+  private maxLoginAttempts(): number {
+    return this.config.get<number>('AUTH_MAX_LOGIN_ATTEMPTS', DEFAULT_MAX_LOGIN_ATTEMPTS);
+  }
+
+  private lockoutMinutes(): number {
+    return this.config.get<number>('AUTH_LOCKOUT_MINUTES', DEFAULT_LOCKOUT_MINUTES);
+  }
+
   async login(dto: LoginDto) {
     const normalizedUsername = dto.username.trim();
 
@@ -114,13 +132,18 @@ export class AuthService {
     // is the whole point of the lookup. Usernames and emails remain globally
     // unique precisely so this stays unambiguous. Everything after the lookup
     // runs under the caller's own tenant via the JWT.
+    // `employee` is included so the session can carry the staff identity; see
+    // buildAuthPayload. It is a 1:1 relation, so this costs one join.
     const user = await runUnscoped('login-lookup', async () => {
+      const withEmployee = { employee: { select: { employeeId: true } } };
       const byUsername = await this.prisma.user.findFirst({
         where: { username: normalizedUsername },
+        include: withEmployee,
       });
       if (byUsername) return byUsername;
       return this.prisma.user.findFirst({
         where: { email: normalizedUsername },
+        include: withEmployee,
       });
     });
 
@@ -129,14 +152,29 @@ export class AuthService {
       throw new UnauthorizedException('الحساب مقفل حالياً');
     }
 
+    // Comparing against a real hash for an unknown username keeps the response
+    // time flat, so the endpoint does not leak which usernames exist. The
+    // previous placeholder was not a well-formed bcrypt digest, so bcryptjs
+    // rejected it immediately without doing the work -- which is precisely the
+    // timing difference the comparison was there to hide. The cost must track
+    // BCRYPT_ROUNDS, or a mismatch reintroduces the same signal.
     const isPasswordCorrect = user
       ? await bcrypt.compare(dto.password, user.passwordHash)
-      : await bcrypt.compare(dto.password, '$2a$10$n7.T/aVvE.R.v.v.v.v.v.v.v.v.v.v.v.v.v.v.v.v.v.v.v.v.');
+      : await bcrypt.compare(dto.password, this.timingDecoyHash());
 
     if (!user || !isPasswordCorrect) {
       if (user) {
         await this.registerFailedLoginAttempt(user);
       }
+      throw new UnauthorizedException('بيانات الدخول غير صحيحة');
+    }
+
+    // Deactivating a user has to stop them at the door. Only JwtStrategy and
+    // refreshSession checked `status`, so a suspended account could still log
+    // in successfully and be issued a full session -- it merely failed on the
+    // next request. Same wording as a wrong password: whether an account exists
+    // and is suspended is not something an anonymous caller should learn.
+    if (user.status !== 'active') {
       throw new UnauthorizedException('بيانات الدخول غير صحيحة');
     }
 
@@ -166,26 +204,42 @@ export class AuthService {
       throw new BadRequestException('Registration is disabled');
     }
 
-    const existing = await this.prisma.user.findFirst({
-      where: { OR: [{ username: dto.username }, { email: dto.email }] },
+    // Self-registration arrives with no session, so the request scope is empty
+    // and every tenant-scoped query below would fail closed. The signup form
+    // does not ask which factory the person belongs to, so the only defensible
+    // answer is the default one -- the same factory the bootstrap admin owns.
+    return runUnscoped('self-registration', async () => {
+      const defaultTenant = await this.ensureDefaultTenant();
+
+      const existing = await this.prisma.user.findFirst({
+        where: { OR: [{ username: dto.username }, { email: dto.email }] },
+      });
+
+      if (existing) {
+        throw new BadRequestException('المستخدم موجود مسبقاً');
+      }
+
+      const role =
+        (await this.prisma.role.findUnique({ where: { name: 'staff' } })) ??
+        (await this.prisma.role.create({
+          data: { name: 'staff', permissions: ['view_attendance'] },
+        }));
+
+      const hash = await bcrypt.hash(dto.password, this.bcryptRounds());
+      const user = await this.prisma.user.create({
+        data: {
+          username: dto.username,
+          email: dto.email,
+          passwordHash: hash,
+          roleId: role.id,
+          tenantId: defaultTenant.id,
+        },
+        include: { role: true },
+      });
+
+      const payload = this.buildAuthPayload(user);
+      return this.createSession(user, payload);
     });
-
-    if (existing) {
-      throw new BadRequestException('المستخدم موجود مسبقاً');
-    }
-
-    const role =
-      (await this.prisma.role.findUnique({ where: { name: 'staff' } })) ??
-      (await this.prisma.role.create({ data: { name: 'staff', permissions: ['view_attendance'] } }));
-
-    const hash = await bcrypt.hash(dto.password, this.bcryptRounds());
-    const user = await this.prisma.user.create({
-      data: { username: dto.username, email: dto.email, passwordHash: hash, roleId: role.id },
-      include: { role: true },
-    });
-
-    const payload = this.buildAuthPayload(user);
-    return this.createSession(user, payload);
   }
 
   async me(userId: string) {
@@ -293,7 +347,7 @@ export class AuthService {
     }
 
     const user = await this.prisma.user.findUnique({ where: { id: challenge.userId }, include: { role: true } });
-    if (!user) {
+    if (!user || user.status !== 'active') {
       throw new UnauthorizedException();
     }
 
@@ -386,7 +440,7 @@ export class AuthService {
 
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
-      include: { role: true },
+      include: { role: true, employee: { select: { employeeId: true } } },
     });
 
     if (!user || user.status !== 'active') {
@@ -401,7 +455,10 @@ export class AuthService {
   async rotateSessionIfNeeded(user: any) {
     const now = Math.floor(Date.now() / 1000);
     if (user?.exp && user.exp - now < AUTO_REFRESH_THRESHOLD_SECONDS) {
-      const dbUser = await this.prisma.user.findUnique({ where: { id: user.userId }, include: { role: true } });
+      const dbUser = await this.prisma.user.findUnique({
+        where: { id: user.userId },
+        include: { role: true, employee: { select: { employeeId: true } } },
+      });
       if (dbUser) {
         await this.authCache.invalidateUser(dbUser.id);
         return this.jwtService.signAsync(this.buildAuthPayload(dbUser));
@@ -437,8 +494,72 @@ export class AuthService {
     return updated;
   }
 
+  /**
+   * Rotates a bootstrap account's password, but only when explicitly asked to.
+   *
+   * The bootstrap sets a password when it CREATES an account and never again,
+   * which means changing ADMIN_BOOTSTRAP_PASSWORD or SUPERADMIN_PASSWORD in the
+   * environment looks like a rotation and silently is not: the hash in the
+   * database keeps whatever it was on first boot. That is how a password can
+   * stay live long after the operator believes they replaced it.
+   *
+   * Syncing on every boot would be worse -- it would fight any password changed
+   * by hand, and would re-apply a compromised value on every restart. So the
+   * reset is opt-in: name the accounts in AUTH_FORCE_PASSWORD_RESET, deploy
+   * once, then remove the variable.
+   */
+  private async rotateBootstrapPasswordIfRequested(
+    user: { id: string; username: string },
+    hash: string,
+  ): Promise<boolean> {
+    const raw = this.config.get<string>('AUTH_FORCE_PASSWORD_RESET', '').trim();
+    if (!raw) return false;
+
+    const wanted = raw.toLowerCase() === 'all'
+      ? null
+      : new Set(raw.split(',').map((n) => n.trim().toLowerCase()).filter(Boolean));
+
+    if (wanted && !wanted.has(user.username.toLowerCase())) return false;
+
+    await this.prisma.user.update({
+      where: { id: user.id },
+      data: { passwordHash: hash, failedLoginAttempts: 0, lockoutUntil: null },
+    });
+    await this.authCache.invalidateUser(user.id);
+
+    this.logger.warn(
+      `Password for "${user.username}" was reset from the environment because ` +
+        `AUTH_FORCE_PASSWORD_RESET names it. Remove that variable once the ` +
+        `deploy has completed, or the password resets on every restart.`,
+    );
+    return true;
+  }
+
+  /**
+   * The factory a bootstrapped admin belongs to.
+   *
+   * Every model but Role and Tenant is tenant-scoped, and a non-superadmin
+   * principal with no factory fails `requireScope()` on its very first query --
+   * so an admin created without one can log in and then gets a 500 from every
+   * endpoint. Creating the factory here rather than in a manual script means a
+   * fresh deployment is usable without one.
+   */
+  private async ensureDefaultTenant() {
+    const existing = await this.prisma.tenant.findUnique({
+      where: { code: DEFAULT_TENANT_CODE },
+    });
+    if (existing) {
+      return existing;
+    }
+
+    return this.prisma.tenant.create({
+      data: { name: 'Default', code: DEFAULT_TENANT_CODE, status: 'active' },
+    });
+  }
+
   async ensureAdminBootstrap() {
     return runUnscoped('bootstrap-admin', async () => {
+    const defaultTenant = await this.ensureDefaultTenant();
     const existingAdminRole = await this.prisma.role.findUnique({ where: { name: 'admin' } });
     const adminRole = existingAdminRole
       ? await this.reconcileRolePermissions(existingAdminRole, AuthService.ADMIN_PERMISSIONS)
@@ -462,8 +583,21 @@ export class AuthService {
           passwordHash: hash,
           roleId: adminRole.id,
           status: 'active',
+          tenantId: defaultTenant.id,
         },
       });
+    } else {
+      await this.rotateBootstrapPasswordIfRequested(existingAdmin, hash);
+    }
+
+    if (existingAdmin && !existingAdmin.tenantId) {
+      // An admin created before multi-tenancy (or by an earlier build of this
+      // bootstrap) carries no factory and is locked out of every endpoint.
+      await this.prisma.user.update({
+        where: { id: existingAdmin.id },
+        data: { tenantId: defaultTenant.id },
+      });
+      await this.authCache.invalidateUser(existingAdmin.id);
     }
   });
   }
@@ -509,17 +643,24 @@ export class AuthService {
           email,
           passwordHash: hash,
           roleId: superadminRole.id,
-          // No tenantId: the overseer belongs to no single factory.
+          // Explicitly null: the overseer belongs to no single factory. Said
+          // out loud because the tenant extension refuses a bypassed create
+          // that simply omits it.
+          tenantId: null,
           status: 'active',
         },
       });
-    } else if (existingSuperadmin.roleId !== superadminRole.id) {
-      // Existing installs have a superadmin still carrying the shared `admin`
-      // role. Promote it, otherwise the guard change locks them out entirely.
-      await this.prisma.user.update({
-        where: { id: existingSuperadmin.id },
-        data: { roleId: superadminRole.id, tenantId: null },
-      });
+    } else {
+      if (existingSuperadmin.roleId !== superadminRole.id) {
+        // Existing installs have a superadmin still carrying the shared `admin`
+        // role. Promote it, otherwise the guard change locks them out entirely.
+        await this.prisma.user.update({
+          where: { id: existingSuperadmin.id },
+          data: { roleId: superadminRole.id, tenantId: null },
+        });
+      }
+
+      await this.rotateBootstrapPasswordIfRequested(existingSuperadmin, hash);
     }
   });
   }
@@ -590,6 +731,9 @@ export class AuthService {
       role: user.role?.name || 'staff',
       permissions: user.role?.permissions || [],
       tenantId: user.tenantId ?? null,
+      // Only ever taken from the User->Employee relation, never from anything
+      // the caller supplied.
+      employeeId: user.employee?.employeeId ?? null,
     };
   }
 
@@ -600,6 +744,20 @@ export class AuthService {
       role: user.role?.name || 'staff',
       photo: user.photo || null,
     };
+  }
+
+  /**
+   * A real bcrypt digest of a value nobody can supply, cached per cost factor
+   * so the decoy comparison costs the same as a genuine one.
+   */
+  private timingDecoyHash(): string {
+    const rounds = this.bcryptRounds();
+    let hash = AuthService.decoyHashes.get(rounds);
+    if (!hash) {
+      hash = bcrypt.hashSync(randomBytes(32).toString('hex'), rounds);
+      AuthService.decoyHashes.set(rounds, hash);
+    }
+    return hash;
   }
 
   private hashChallenge(value: string) {
@@ -615,8 +773,8 @@ export class AuthService {
   private async registerFailedLoginAttempt(user: any) {
     const attempts = (user.failedLoginAttempts || 0) + 1;
 
-    if (attempts >= DEFAULT_MAX_LOGIN_ATTEMPTS) {
-      const lockoutUntil = new Date(Date.now() + DEFAULT_LOCKOUT_MINUTES * 60_000);
+    if (attempts >= this.maxLoginAttempts()) {
+      const lockoutUntil = new Date(Date.now() + this.lockoutMinutes() * 60_000);
       await runUnscoped('login-lockout', async () =>
         await this.prisma.user.update({
           where: { id: user.id },

@@ -94,6 +94,108 @@ function requireScope(model: string, operation: string) {
   return scope;
 }
 
+/**
+ * Rejects a Super Admin create that never says which factory the row is for.
+ *
+ * `tenantId: null` written on purpose is allowed through -- restoring a legacy
+ * snapshot reproduces what was backed up, nulls included. Only silence is
+ * refused, because silence is always a bug.
+ */
+export function assertTenantNamed(
+  model: string,
+  operation: string,
+  args: Record<string, unknown>,
+) {
+  const named = (payload: unknown): boolean => {
+    if (Array.isArray(payload)) return payload.every(named);
+    return !!payload && typeof payload === 'object' && 'tenantId' in payload;
+  };
+
+  const payload = operation === 'upsert' ? args.create : args.data;
+  if (payload === undefined || named(payload)) {
+    return;
+  }
+
+  throw new Error(
+    `${model}.${operation}() ran as the super admin without a tenantId. The ` +
+      `super admin belongs to no factory, so nothing is stamped automatically ` +
+      `and the row would be orphaned. Pass tenantId explicitly, or run the ` +
+      `write under runWithTenant(factoryId).`,
+  );
+}
+
+/**
+ * Rewrites one Prisma call so it can only touch the caller's factory.
+ *
+ * Pure: it takes the scope rather than reading ambient state, so a test can
+ * hand it another factory's id and assert the query comes back narrowed. The
+ * extension below supplies the real scope.
+ *
+ * Returns the args to run. For a Super Admin the args are returned untouched --
+ * that is what makes cross-factory reads possible -- except that a create must
+ * still name its factory, which `assertTenantNamed` enforces.
+ */
+export function applyTenantScope(
+  model: string,
+  operation: string,
+  args: Record<string, unknown>,
+  scope: { tenantId: string | null; bypass: boolean },
+): Record<string, unknown> {
+  // Super Admin sees every factory: leave the query untouched. Reads and
+  // updates are unambiguous that way, but a *create* is not -- with nothing to
+  // stamp and nothing said, the row lands with tenantId NULL and becomes
+  // invisible to every factory, including the one that meant to own it. Say
+  // which factory, or do not create the row.
+  if (scope.bypass) {
+    if (STAMPED.has(operation)) {
+      assertTenantNamed(model, operation, args);
+    }
+    return args;
+  }
+
+  const tenantId = scope.tenantId as string;
+  const next: Record<string, unknown> = { ...args };
+
+  if (FILTERED.has(operation)) {
+    // Prisma's extended-where-unique (GA since v5) allows non-unique fields
+    // alongside the unique one, so this is safe for findUnique, update and
+    // delete as well as the plain filters.
+    //
+    // tenantId is applied LAST so a caller-supplied `where.tenantId` cannot
+    // widen the query to another factory.
+    let where = { ...((next.where as object) ?? {}), tenantId } as Record<string, unknown>;
+    if (NEEDS_UNIQUE.has(operation)) {
+      where = toCompoundWhere(model, where, tenantId);
+    }
+    next.where = where;
+  }
+
+  if (STAMPED.has(operation)) {
+    if (operation === 'upsert') {
+      // `where` was already narrowed + folded by the FILTERED branch.
+      next.create = stampTenantOnData(model, (next.create as object) ?? {}, tenantId);
+      next.update = walkWriteData(model, (next.update as object) ?? {}, tenantId);
+    } else if (operation === 'createMany') {
+      // createMany takes flat rows only -- no nested writes to walk.
+      const data = (next.data as unknown[]) ?? [];
+      next.data = Array.isArray(data)
+        ? data.map((row) => ({ ...(row as object), tenantId }))
+        : { ...(data as object), tenantId };
+    } else {
+      next.data = stampTenantOnData(model, (next.data as object) ?? {}, tenantId);
+    }
+  } else if (WALKED.has(operation)) {
+    // update/updateMany are narrowed above but their `data` can still carry
+    // nested writes -- items created, connected or deleted through the parent.
+    // Those get the same treatment as a create's.
+    if (next.data !== undefined) {
+      next.data = walkWriteData(model, next.data as object, tenantId);
+    }
+  }
+
+  return next;
+}
+
 export function tenantExtension() {
   return Prisma.defineExtension({
     name: 'tenant-isolation',
@@ -105,52 +207,9 @@ export function tenantExtension() {
           }
 
           const scope = requireScope(model, operation);
-          // Super Admin sees every factory: leave the query untouched.
-          if (scope.bypass) {
-            return query(args);
-          }
-
-          const tenantId = scope.tenantId as string;
-          const next: Record<string, unknown> = { ...(args as object) };
-
-          if (FILTERED.has(operation)) {
-            // Prisma's extended-where-unique (GA since v5) allows non-unique
-            // fields alongside the unique one, so this is safe for findUnique,
-            // update and delete as well as the plain filters.
-            let where = { ...((next.where as object) ?? {}), tenantId } as Record<
-              string,
-              unknown
-            >;
-            if (NEEDS_UNIQUE.has(operation)) {
-              where = toCompoundWhere(model, where, tenantId);
-            }
-            next.where = where;
-          }
-
-          if (STAMPED.has(operation)) {
-            if (operation === 'upsert') {
-              // `where` was already narrowed + folded by the FILTERED branch.
-              next.create = stampTenantOnData(model, (next.create as object) ?? {}, tenantId);
-              next.update = walkWriteData(model, (next.update as object) ?? {}, tenantId);
-            } else if (operation === 'createMany') {
-              // createMany takes flat rows only -- no nested writes to walk.
-              const data = (next.data as unknown[]) ?? [];
-              next.data = Array.isArray(data)
-                ? data.map((row) => ({ ...(row as object), tenantId }))
-                : { ...(data as object), tenantId };
-            } else {
-              next.data = stampTenantOnData(model, (next.data as object) ?? {}, tenantId);
-            }
-          } else if (WALKED.has(operation)) {
-            // update/updateMany are narrowed above but their `data` can still
-            // carry nested writes -- items created, connected or deleted through
-            // the parent. Those get the same treatment as a create's.
-            if (next.data !== undefined) {
-              next.data = walkWriteData(model, next.data as object, tenantId);
-            }
-          }
-
-          return query(next);
+          return query(
+            applyTenantScope(model, operation, args as Record<string, unknown>, scope),
+          );
         },
       },
     },

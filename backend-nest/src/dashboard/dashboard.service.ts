@@ -467,17 +467,20 @@ export class DashboardService {
     }
 
     // Log per-query timing so we can identify which query is the bottleneck.
-    // Write to a temp file (not console) because the detached backend discards stdout.
+    // Only writes when DASHBOARD_PROFILE_LOG is set (dev/diagnostics); no-op elsewhere.
+    const profileLogPath = process.env.DASHBOARD_PROFILE_LOG;
     const totalMs = timers.reduce((a, t) => a + t.ms, 0);
     const summary = timers.map((t) => `${t.name}=${t.ms}ms`).join(' | ');
     const pool = this.prisma.getPoolStats();
-    try {
-      appendFileSync(
-        'C:/Users/BootCamp/AppData/Local/Temp/opencode/dashboard-profile.log',
-        `[${new Date().toISOString()}] TOTAL=${totalMs}ms | pool: total=${pool.totalCount} idle=${pool.idleCount} waiting=${pool.waitingCount} | ${summary}\n`,
-      );
-    } catch {
-      /* ignore */
+    if (profileLogPath) {
+      try {
+        appendFileSync(
+          profileLogPath,
+          `[${new Date().toISOString()}] TOTAL=${totalMs}ms | pool: total=${pool.totalCount} idle=${pool.idleCount} waiting=${pool.waitingCount} | ${summary}\n`,
+        );
+      } catch {
+        /* ignore */
+      }
     }
 
     return {

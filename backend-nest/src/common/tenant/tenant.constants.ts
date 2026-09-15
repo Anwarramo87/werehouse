@@ -21,3 +21,10 @@ export const SUPERADMIN_ONLY_PERMISSIONS = ['manage_roles', 'manage_tenants'];
 
 /** Permission gating tenant (factory) CRUD. Held only by the Super Admin. */
 export const MANAGE_TENANTS = 'manage_tenants';
+
+/**
+ * The factory every pre-multi-tenancy row and every bootstrapped admin belongs
+ * to. Kept in sync with the `default` tenant created by the
+ * 20260909120000_backfill_default_tenant migration.
+ */
+export const DEFAULT_TENANT_CODE = 'default';

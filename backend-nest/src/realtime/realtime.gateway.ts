@@ -9,7 +9,7 @@ import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../prisma/prisma.service';
 import { WsJwtGuard } from './ws-jwt.guard';
-import { currentTenant } from '../common/tenant/tenant-context';
+import { currentTenant, runUnscoped } from '../common/tenant/tenant-context';
 
 export type AttendanceUpdateEventPayload = {
   employeeId: string;
@@ -112,10 +112,18 @@ export class RealtimeGateway implements OnGatewayConnection, OnModuleInit {
         return;
       }
 
-      const dbUser = await this.prisma.user.findUnique({
-        where: { id: userId },
-        include: { role: true },
-      });
+      // A socket.io handshake never passes through Express, so TenantMiddleware
+      // never ran and there is no ambient scope -- `user` is tenant-scoped, so
+      // an unwrapped lookup here throws inside the extension, lands in the
+      // catch below, and every single connection is dropped as "invalid token".
+      // Looking a principal up by the id inside an already signature-verified
+      // token is cross-tenant by nature, exactly as in JwtStrategy.
+      const dbUser = await runUnscoped('ws-handshake', async () =>
+        this.prisma.user.findUnique({
+          where: { id: userId },
+          include: { role: true },
+        }),
+      );
 
       if (!dbUser || dbUser.status !== 'active') {
         client.disconnect(true);
@@ -143,8 +151,12 @@ export class RealtimeGateway implements OnGatewayConnection, OnModuleInit {
         `WS client connected: socket=${client.id} userId=${user.userId} ` +
           `role=${user.role} tenant=${user.tenantId ?? 'none'}`,
       );
-    } catch {
-      this.logger.warn(`WS connection rejected — invalid token (socket ${client.id})`);
+    } catch (error) {
+      // The reason matters: an expired token and a server-side fault both
+      // ended here as "invalid token", which is how a gateway that rejected
+      // every connection went unnoticed.
+      const reason = error instanceof Error ? error.message : String(error);
+      this.logger.warn(`WS connection rejected (socket ${client.id}): ${reason}`);
       client.disconnect(true);
     }
   }

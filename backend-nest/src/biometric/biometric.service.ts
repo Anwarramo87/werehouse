@@ -1,4 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../prisma/prisma.service';
 import { DuplicateHandlingService, DuplicateStrategy } from './duplicate-handling.service';
 import { AttendanceAggregationService } from '../attendance/attendance-aggregation.service';
@@ -36,8 +37,18 @@ export class BiometricService {
     private readonly prisma: PrismaService,
     private readonly duplicateHandler: DuplicateHandlingService,
     private readonly aggregationService: AttendanceAggregationService,
+    config: ConfigService,
   ) {
     this.useSimulator = process.env.USE_BIOMETRIC_SIMULATOR === 'true';
+    const nodeEnv = config.get<string>('NODE_ENV', 'development').toLowerCase();
+    if (nodeEnv === 'production' && this.useSimulator) {
+      // The simulator fabricates in-check and out-check records. A production box
+      // must never record attendance nobody actually clocked; this is the runtime
+      // half of the gate that app.module's Joi schema enforces at boot.
+      throw new Error(
+        'USE_BIOMETRIC_SIMULATOR=true is not allowed in production; remove it and configure a real ZKTeco device.',
+      );
+    }
     this.deviceIp = process.env.BIOMETRIC_DEVICE_IP || '192.168.1.201';
     this.devicePort = parseInt(process.env.BIOMETRIC_DEVICE_PORT || '4370', 10);
 

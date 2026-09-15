@@ -73,8 +73,11 @@ export class PrismaService
     // burst. Neon's pooler caps the *server* connections anyway, so a larger
     // local pool just means we hold waiting clients ready instead of queueing
     // them at the Node level.
-    const maxConnections = Number(process.env.DATABASE_MAX_CONNECTIONS || 20);
-    const poolMax = Number.isFinite(maxConnections) && maxConnections > 0 ? maxConnections : 20;
+    // 50, not 20. One dashboard page view opens eight connections at once, so a
+    // pool of 20 saturated at roughly three simultaneous loads while the
+    // database itself allows 901 server-side -- the ceiling was ours, not its.
+    const maxConnections = Number(process.env.DATABASE_MAX_CONNECTIONS || 50);
+    const poolMax = Number.isFinite(maxConnections) && maxConnections > 0 ? maxConnections : 50;
 
     const pool = new Pool({
       connectionString: process.env.DATABASE_URL,

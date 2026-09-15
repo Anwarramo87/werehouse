@@ -1,5 +1,9 @@
 import { tenantKey } from '../common/tenant/tenant-key';
 import {
+  SerializedTenantScope,
+  captureTenantScope,
+} from '../common/tenant/tenant-job-scope';
+import {
   BadRequestException,
   Injectable,
   Logger,
@@ -44,6 +48,13 @@ type PayrollQueuePayload = {
   payrollRunId: string;
   dto: CalculatePayrollDto;
   userId?: string;
+  /**
+   * The factory this run belongs to, carried across the queue.
+   *
+   * The worker has no request behind it, so nothing else can tell it which
+   * factory's employees to pay.
+   */
+  tenant?: SerializedTenantScope;
 };
 
 /** تحويل timestamp (UTC مخزّن) إلى دقائق بالتوقيت المحلي السعودي (+3) */
@@ -644,21 +655,6 @@ export class PayrollService {
     const otherLeaves = periodLeaves.filter((l) => l.leaveType === 'OTHER');
     let otherLeaveWorkedPay = new Prisma.Decimal(0);
 
-    // ── DEBUG OTHER LEAVE PIPELINE (entry point) ────────────────────────────
-    console.log(`=== [DEBUG OTHER LEAVE PIPELINE] ===`);
-    console.log(`Total periodLeaves: ${periodLeaves.length}`);
-    console.log(
-      `All leave types/status: ${JSON.stringify(
-        periodLeaves.map((l) => ({ t: l.leaveType, s: (l as { status?: string }).status, h: l.isHourly })),
-      )}`,
-    );
-    console.log(`OTHER leaves found: ${otherLeaves.length}`);
-    for (const ol of otherLeaves) {
-      console.log(
-        `  OTHER leave -> startDate=${ol.startDate} endDate=${ol.endDate} isHourly=${ol.isHourly} notes=${JSON.stringify(ol.notes)}`,
-      );
-    }
-    // ── END DEBUG ───────────────────────────────────────────────────────────
     // Factory-local YYYY-MM-DD formatter — MUST match the stored
     // AttendanceRecord.date key (which is produced by toFactoryDateKey, +3h).
     // Using plain UTC components here caused the lookup key to mismatch the
@@ -676,25 +672,15 @@ export class PayrollService {
         const firstInTs = firstInByDate.get(dateStr);
         const lastOutTs = lastOutByDate.get(dateStr);
 
-        // ── DEBUG OTHER LEAVE MULTIPLIER ──────────────────────────────────
-        const dateKey = dateStr;
-        const leave = otherLeave;
-        const notesStrDebug = (leave && (leave as { notes?: string | null }).notes) || '';
-        // Robust match: tolerate optional whitespace after the colon,
-        // and also scan the reason field as a fallback source.
-        const reasonStrDebug =
-          (leave && (leave as { reason?: string | null }).reason) || '';
-        const multiplierMatchDebug =
-          /__multiplier:\s*([12])/.exec(notesStrDebug) ||
-          /__multiplier:\s*([12])/.exec(reasonStrDebug);
-        const multiplier = multiplierMatchDebug ? Number(multiplierMatchDebug[1]) : 1;
-        console.log(`=== [DEBUG OTHER LEAVE MULTIPLIER] ===`);
-        console.log(`Date Key: ${dateKey}`);
-        console.log(`Is Hourly Leave?: ${leave.isHourly}`);
-        console.log(`Raw Notes Content: ${notesStrDebug}`);
-        console.log(`Extracted Multiplier: ${multiplier}`);
-        console.log(`Punch In Found: ${firstInByDate.get(dateKey)}, Punch Out Found: ${lastOutByDate.get(dateKey)}`);
-        // ── END DEBUG ─────────────────────────────────────────────────────
+        // Holiday pay multiplier, written into the leave as `__multiplier:1|2`.
+        // Tolerates whitespace after the colon and falls back to the reason
+        // field, which is where the older leave form put it.
+        const notesStr = (otherLeave as { notes?: string | null }).notes || '';
+        const reasonStr = (otherLeave as { reason?: string | null }).reason || '';
+        const multiplierMatch =
+          /__multiplier:\s*([12])/.exec(notesStr) ||
+          /__multiplier:\s*([12])/.exec(reasonStr);
+        const multiplier = multiplierMatch ? Number(multiplierMatch[1]) : 1;
 
         // determine worked minutes: prefer actual punches; for hourly OTHER
         // leaves with no punches, fall back to the leave's own time window.
@@ -712,8 +698,6 @@ export class PayrollService {
           }
         }
 
-        console.log(`Calculated Minutes: ${actualWorkedMinutes}`);
-
         if (actualWorkedMinutes > 0) {
           // قراءة المعامل من notes: __multiplier:1 أو __multiplier:2
           // fallback safely to 1 if notes missing or regex mismatch
@@ -721,7 +705,6 @@ export class PayrollService {
             minuteWage.times(new Prisma.Decimal(actualWorkedMinutes)).times(new Prisma.Decimal(multiplier)),
           );
         }
-        console.log(`Resulting Pay: ${otherLeaveWorkedPay}`);
 
         // advance exactly one local calendar day
         cur = new Date(cur.getFullYear(), cur.getMonth(), cur.getDate() + 1);
@@ -1067,7 +1050,12 @@ export class PayrollService {
     });
 
     try {
-      await this.enqueuePayrollJob({ payrollRunId: run.id, dto, userId });
+      await this.enqueuePayrollJob({
+        payrollRunId: run.id,
+        dto,
+        userId,
+        tenant: captureTenantScope(),
+      });
     } catch (error) {
       // Mark the run as failed if job enqueueing fails
       await this.markPayrollRunFailed(
