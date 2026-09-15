@@ -54,6 +54,7 @@ jobs:
         uses: gitleaks/gitleaks-action@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_CONFIG: backend-nest/.gitleaks.toml
 
       - name: Setup Node.js
         uses: actions/setup-node@v4

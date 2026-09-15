@@ -1,0 +1,8 @@
+title = "Gitleaks config"
+
+[allowlist]
+  description = ".env is gitignored and not deployed; secrets are being rotated"
+  paths = [
+    '''.env$''',
+    '''.env\.bak.*''',
+  ]
