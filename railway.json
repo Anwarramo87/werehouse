@@ -6,11 +6,12 @@
     "watchPatterns": [
       "backend-nest/**",
       "Dockerfile",
+      "docker-entrypoint.sh",
       "railway.json"
     ]
   },
   "deploy": {
-    "preDeployCommand": "npx prisma migrate deploy",
+    "preDeployCommand": "node scripts/prisma-safe.js remote migrate deploy",
     "restartPolicyType": "ON_FAILURE"
   }
 }
