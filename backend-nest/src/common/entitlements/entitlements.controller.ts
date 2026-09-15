@@ -16,6 +16,7 @@ import {
 import { ApiCookieAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { Request, Response } from 'express';
 import { IsArray, IsBoolean, IsString } from 'class-validator';
+import { Transform } from 'class-transformer';
 import { CurrentUser } from '../decorators/current-user.decorator';
 import { JwtAuthGuard } from '../guards/jwt-auth.guard';
 import { SuperAdminGuard } from '../guards/superadmin.guard';
@@ -35,6 +36,11 @@ class ToggleDto {
   @IsString()
   key!: string;
 
+  @Transform(({ value }: { value: unknown }) => {
+    if (value === true || value === 'true' || value === 1) return true;
+    if (value === false || value === 'false' || value === 0) return false;
+    return value;
+  })
   @IsBoolean()
   enabled!: boolean;
 }
