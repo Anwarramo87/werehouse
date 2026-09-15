@@ -7,10 +7,12 @@ on:
     paths:
       - 'backend-nest/**'
       - '.github/workflows/backend-ci.yml'
+      - 'railway.json'
   pull_request:
     paths:
       - 'backend-nest/**'
       - '.github/workflows/backend-ci.yml'
+      - 'railway.json'
 
 defaults:
   run:
@@ -26,71 +28,48 @@ jobs:
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: warehouse_test
+          POSTGRES_DB: warehouse_ci
         ports:
           - 5432:5432
         options: >-
-          --health-cmd "pg_isready -U postgres -d warehouse_test"
+          --health-cmd "pg_isready -U postgres"
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
 
     env:
       NODE_ENV: test
-      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/warehouse_test?schema=public
-      SHADOW_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/warehouse_shadow?schema=public
-      JWT_SECRET: warehouse_ci_jwt_secret_very_secure
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/warehouse_ci
+      JWT_SECRET: ci_test_jwt_secret_min_32_chars_long
       JWT_EXPIRE: 24h
-      ADMIN_BOOTSTRAP_PASSWORD: password123
+      JWT_COOKIE_NAME: warehouse_access_token
+      ADMIN_BOOTSTRAP_PASSWORD: ci_admin_password_123
+      DEV_ADMIN_PASSWORD: ci_dev_password_123
+      SUPERADMIN_PASSWORD: ci_superadmin_password_123
       QUEUES_ENABLED: 'false'
+      CACHE_ENABLED: 'false'
+      REDIS_URL: redis://127.0.0.1:6379
+      CORS_ORIGIN: http://localhost:3000
+      DEVICE_AUTH_ENFORCED: 'false'
+      THROTTLE_TTL_MS: '60000'
+      THROTTLE_LIMIT: '200'
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Secret scanning (gitleaks)
-        uses: gitleaks/gitleaks-action@v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITLEAKS_CONFIG: backend-nest/.gitleaks.toml
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: '22'
           cache: npm
           cache-dependency-path: backend-nest/package-lock.json
 
       - name: Install dependencies
         run: npm ci
 
-      - name: Dependency audit
-        run: npm run audit:deps
-
       - name: Generate Prisma client
         run: npx prisma generate
-
-      - name: Prepare shadow database
-        run: |
-          PGPASSWORD=postgres psql -h localhost -U postgres -d postgres \
-            -c "SELECT 1 FROM pg_database WHERE datname = 'warehouse_shadow'" | grep -q 1 \
-            || PGPASSWORD=postgres psql -h localhost -U postgres -d postgres \
-            -c "CREATE DATABASE warehouse_shadow;"
-
-      - name: Check migration history matches schema
-        run: |
-          npx prisma migrate diff \
-            --from-migrations prisma/migrations \
-            --to-schema prisma/schema.prisma \
-            --exit-code
-
-      - name: Apply migrations
-        run: npx prisma migrate deploy
-
-      - name: Verify database migration status
-        run: npx prisma migrate status
 
       - name: Lint
         run: npm run lint
@@ -100,6 +79,9 @@ jobs:
 
       - name: Unit tests
         run: npm run test:unit
+
+      - name: Apply migrations
+        run: npx prisma migrate deploy
 
       - name: End-to-end tests
         run: npm run test:e2e

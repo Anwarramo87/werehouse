@@ -16,7 +16,7 @@ RUN set -e; \
 	npm run build; \
 	mkdir -p /out; \
 	cp package.json package-lock.json /out/; \
-	cp -R node_modules dist prisma /out/; \
+	cp -R node_modules dist prisma scripts /out/; \
 	cp prisma.config.ts /out/prisma.config.ts
 
 FROM node:24-alpine AS runner
@@ -29,9 +29,7 @@ COPY --from=build /out/node_modules ./node_modules
 COPY --from=build /out/dist ./dist
 COPY --from=build /out/prisma ./prisma
 COPY --from=build /out/prisma.config.ts ./prisma.config.ts
+COPY --from=build /out/scripts ./scripts
 
 EXPOSE 5003
-# Migrations must run as a separate pre-deploy step before starting the app:
-#   docker run --rm <image> npm run migrate:deploy
-# Then start the long-running process without migrations:
 CMD ["node", "dist/main"]

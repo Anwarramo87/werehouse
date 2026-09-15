@@ -2,16 +2,15 @@
   "$schema": "https://railway.com/railway.schema.json",
   "build": {
     "builder": "DOCKERFILE",
-    "dockerfilePath": "Dockerfile",
+    "dockerfilePath": "backend-nest/Dockerfile",
     "watchPatterns": [
       "backend-nest/**",
-      "Dockerfile",
-      "docker-entrypoint.sh",
       "railway.json"
     ]
   },
   "deploy": {
-    "preDeployCommand": "node scripts/prisma-safe.js remote migrate deploy",
-    "restartPolicyType": "ON_FAILURE"
+    "preDeployCommand": "npx prisma migrate deploy",
+    "restartPolicyType": "ON_FAILURE",
+    "restartPolicyMaxRetries": 10
   }
 }
