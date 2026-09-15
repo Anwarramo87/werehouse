@@ -87,9 +87,36 @@ model Tenant {
   integrationSyncLogs             IntegrationSyncLog[]
   webhookEndpoints                WebhookEndpoint[]
   accountMappings                 AccountMapping[]
+  entitlement                     TenantEntitlement?
 
   @@index([status])
   @@map("tenants")
+}
+
+/**
+ * Which pages a factory has been sold.
+ *
+ * One row per factory rather than one row per page: this is read on every
+ * gated request, so a single indexed lookup that can be cached whole beats a
+ * join returning dozens of rows. Modules are not stored -- they are a bundle
+ * operation over these page keys, so there is never a "module on, page off"
+ * contradiction to resolve. See src/common/entitlements/catalogue.ts.
+ */
+model TenantEntitlement {
+  id        String   @id @default(uuid()) @db.Uuid
+  tenantId  String   @unique @db.Uuid
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  /// Page keys from the catalogue. Absent key = not entitled.
+  enabledPages String[] @default([])
+
+  /// Who last changed this, for the audit trail the Super Admin UI writes.
+  updatedBy String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("tenant_entitlements")
 }
 
 

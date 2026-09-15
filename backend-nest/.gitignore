@@ -3,6 +3,7 @@ dist/
 .env
 .env.local
 .env.*.local
+env
 coverage/
 *.log
 npm-debug.log*
@@ -25,3 +26,6 @@ test-*.ts
 test-*.ps1
 list-tables.sql
 .dbg/
+
+# Stray Next.js build output — this is the backend; the frontend lives elsewhere.
+.next/
