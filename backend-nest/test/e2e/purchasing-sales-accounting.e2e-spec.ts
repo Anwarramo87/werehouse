@@ -90,6 +90,7 @@ describe('Purchasing + Sales + Accounting flow (e2e)', () => {
     if (accCash) await prisma.account.delete({ where: { id: accCash } }).catch(() => undefined);
     if (accRevenue) await prisma.account.delete({ where: { id: accRevenue } }).catch(() => undefined);
 
+    await prisma.stockMovement.deleteMany({ where: { sku: testSku } });
     await prisma.stockLevel.deleteMany({ where: { sku: testSku } });
     await prisma.product.deleteMany({ where: { sku: testSku } });
   }));

@@ -6,7 +6,7 @@ import { resolve } from 'path';
 /* eslint-disable @typescript-eslint/no-var-requires */
 const guard = require('../../scripts/db-target');
 
-const REPO = resolve(__dirname, '..');
+const REPO = resolve(__dirname, '../..');
 const SAFE = resolve(REPO, 'scripts/prisma-safe.js');
 
 const NEON =

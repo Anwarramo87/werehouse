@@ -26,8 +26,11 @@ describe('Files API (e2e)', () => {
     }
   };
 
+  // Paths returned by the API are relative to UPLOAD_ROOT (see
+  // resolveUploadRoot in files.service.ts). In this environment the root falls
+  // back to <cwd>/tmp/uploads, so disk paths resolve under that directory.
   const resolveWorkspacePath = (relativePath: string) =>
-    resolve(process.cwd(), ...relativePath.split('/'));
+    resolve(process.cwd(), 'tmp', 'uploads', ...relativePath.split('/'));
 
   const toMetadataPath = (absoluteFilePath: string) => {
     const extension = extname(absoluteFilePath);
@@ -110,7 +113,9 @@ describe('Files API (e2e)', () => {
       .expect(201);
 
     expect(response.body?.file?.originalName).toBe('policy.pdf');
-    expect(response.body?.file?.path).toContain('tmp/uploads/general/');
+    expect(response.body?.file?.path).toMatch(
+      /^general\/\d{4}-\d{2}\/[0-9a-f-]+\.pdf$/,
+    );
     expect(response.body?.file?.checksum).toHaveLength(64);
     trackUploadedPath(response.body?.file?.path);
   });

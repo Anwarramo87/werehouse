@@ -18,20 +18,23 @@ describe('SalaryService — calculateAllowances', () => {
     // Act
     const result = svc.calculateAllowances(dto as any);
 
-    // Assert — values are strings with 4 decimal places per implementation
+    // Assert — values are strings with 4 decimal places per implementation.
+    // Allowances are deliberately no longer auto-computed (see the comment in
+    // SalaryService.calculateAllowances): all derived figures are 0 unless the
+    // caller records them manually.
     expect(result.salary).toBe('10000000.0000');
     expect(result.lumpSumSalary).toBe('750000.0000');
     expect(result.livingAllowance).toBe('12000.0000');
 
-    expect(result.difference).toBe('9238000.0000');
-    expect(result.responsibilityAllowance).toBe('4619000.0000');
-    expect(result.extraEffortAllowance).toBe('2771400.0000');
-    expect(result.productionIncentives).toBe('1847600.0000');
+    expect(result.difference).toBe('0.0000');
+    expect(result.responsibilityAllowance).toBe('0.0000');
+    expect(result.extraEffortAllowance).toBe('0.0000');
+    expect(result.productionIncentives).toBe('0.0000');
 
     // verification
-    expect(result.verification.sum).toBe('9238000.0000');
+    expect(result.verification.sum).toBe('0.0000');
     expect(result.verification.isExact).toBe(true);
-    expect(result.verification.ratiosSum).toBe('1.00');
-    expect(result.verification.ratiosSumIs1).toBe(true);
+    expect(result.verification.ratiosSum).toBe('0.00');
+    expect(result.verification.ratiosSumIs1).toBe(false);
   });
 });

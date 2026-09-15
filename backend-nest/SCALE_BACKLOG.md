@@ -69,3 +69,23 @@ safe to attempt in a future phase once a real factory grows past current bounds.
    kills only the presented token. A "sign out everywhere" action requires the
    per-user index that #8 introduces; today there is no way to enumerate a
    user's live refresh tokens.
+10. **WMS-extension scalar FKs → composite (id, tenantId)** — the WMS extension
+    added 29 tenant-to-tenant relations whose DB FK is scalar (referenced from
+    the single child id instead of the composite id+tenantId). The tenant
+    extension scopes every app-layer query/write, so today's risk is a future
+    extension bypass, not a live leak. Retrofit = add `UNIQUE (id, tenantId)`
+    parents/`(childId, tenantId)` FKs, per the earlier
+    `20260830120000_tenant_composite_foreign_keys` migration. Tracked (exact
+    list) by the scalar-FK schema guard in
+    `test/e2e/scalar-fk-isolation.e2e-spec.ts`:
+    AccountMapping.account, BatchStockLevel.batch, Customer.priceTier,
+    CycleCountItem.batch, CycleCountItem.cycleCount, DeliveryNote.salesInvoice,
+    DeliveryNoteItem.deliveryNote, IntegrationSyncLog.connection,
+    LandedCost.purchaseInvoice, Package.shipment, PackageItem.package,
+    PickListItem.batch, PickListItem.pickList, Product.taxRate,
+    ProductPrice.priceTier, PurchaseInvoice.purchaseOrder,
+    PurchaseInvoice.supplier, PurchaseInvoiceItem.invoice,
+    PurchasePayment.purchaseInvoice, PutawayTask.batch, SalesInvoice.customer,
+    SalesInvoice.priceTier, SalesInvoice.salesOrder, SalesInvoiceItem.batch,
+    SalesInvoiceItem.invoice, Shipment.carrier, Shipment.salesInvoice,
+    StorageBin.zone, WarehouseZone.warehouse.

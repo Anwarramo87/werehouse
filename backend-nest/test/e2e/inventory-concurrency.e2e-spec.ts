@@ -42,6 +42,7 @@ describe('InventoryService concurrency (e2e)', () => {
 
   afterEach(async () => {
     await asTenant(async () => {
+      await prisma.stockMovement.deleteMany({ where: { sku: testSku } });
       await prisma.stockLevel.deleteMany({ where: { sku: testSku } });
       await prisma.product.deleteMany({ where: { sku: testSku } });
     });

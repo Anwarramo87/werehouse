@@ -268,16 +268,18 @@ describe('Backup snapshot → restore round trip (e2e, real PostgreSQL)', () => 
 
   describe('snapshot', () => {
     it(
-      'covers all 42 tenant-scoped models',
+      'covers all tenant-scoped models',
       async () => {
         snapshot = await asA(() => snapshots.createSnapshot({ username: 'e2e' }));
 
-        expect(RESTORE_ORDER).toHaveLength(42);
+        // The catalog grows as models are added; compare it against what the
+        // snapshot actually contains rather than a hard-coded count.
+        expect(RESTORE_ORDER.length).toBe(Object.keys(snapshot.data).length);
         for (const model of RESTORE_ORDER) {
           expect(snapshot.data).toHaveProperty(model);
           expect(Array.isArray(snapshot.data[model])).toBe(true);
         }
-        expect(Object.keys(snapshot.manifest.counts)).toHaveLength(42);
+        expect(Object.keys(snapshot.manifest.counts).length).toBe(RESTORE_ORDER.length);
       },
       TEST_TIMEOUT,
     );
@@ -318,7 +320,7 @@ describe('Backup snapshot → restore round trip (e2e, real PostgreSQL)', () => 
     it(
       'carries an accurate checksum',
       async () => {
-        const { checksumOf } = await import('../src/backup/snapshot.codec');
+        const { checksumOf } = await import('../../src/backup/snapshot.codec');
         expect(snapshot.manifest.checksum).toHaveLength(64);
         expect(snapshot.manifest.checksum).toBe(checksumOf(snapshot.data));
       },
@@ -389,7 +391,7 @@ describe('Backup snapshot → restore round trip (e2e, real PostgreSQL)', () => 
       async () => {
         const bad = JSON.parse(JSON.stringify(snapshot)) as SnapshotFile;
         (bad.data as Record<string, unknown[]>).somethingNew = [{ id: 'x' }];
-        const { checksumOf } = await import('../src/backup/snapshot.codec');
+        const { checksumOf } = await import('../../src/backup/snapshot.codec');
         bad.manifest.checksum = checksumOf(bad.data);
         bad.manifest.counts.somethingNew = 1;
 
@@ -543,14 +545,14 @@ describe('Backup snapshot → restore round trip (e2e, real PostgreSQL)', () => 
         const line = await asA(() =>
           prisma.journalEntryLine.findFirst({ include: { journalEntry: true, account: true } }),
         );
-        expect(line!.journalEntry.entryNumber).toBe(`JE-${stamp}`);
-        expect(line!.account.code).toBe(`1000-${stamp}`);
+        expect(line?.journalEntry?.entryNumber).toBe(`JE-${stamp}`);
+        expect(line?.account?.code).toBe(`1000-${stamp}`);
         expect(line!.debit.toFixed()).toBe('1000');
 
         const item = await asA(() =>
           prisma.salesOrderItem.findFirst({ include: { salesOrder: true } }),
         );
-        expect(item!.salesOrder.soNumber).toBe(`SO-${stamp}`);
+        expect(item?.salesOrder?.soNumber).toBe(`SO-${stamp}`);
       },
       TEST_TIMEOUT,
     );
