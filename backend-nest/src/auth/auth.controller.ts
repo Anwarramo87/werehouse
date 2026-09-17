@@ -189,7 +189,7 @@ export class AuthController implements OnModuleInit {
     @CurrentUser() user: AuthenticatedUser,
     @Req() req: Request,
   ) {
-    const result = await this.authService.createUser(dto);
+    const result = await this.authService.createUser(dto, user);
     this.audit.log(
       {
         action: 'user.create',
@@ -207,8 +207,8 @@ export class AuthController implements OnModuleInit {
   @UseGuards(JwtAuthGuard, PermissionsGuard)
   @Permissions('manage_users')
   @Get('users')
-  listUsers() {
-    return this.authService.listUsers();
+  listUsers(@CurrentUser() user: AuthenticatedUser) {
+    return this.authService.listUsers(user);
   }
 
   // Gated on `manage_users`, not `manage_roles`. Assigning a user or employee to

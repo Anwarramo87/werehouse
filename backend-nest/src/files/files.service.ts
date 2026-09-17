@@ -36,6 +36,7 @@ type ListedGeneralFile = {
   size: number;
   extension: string;
   uploadedAt: string;
+  tenantId?: string | null;
 };
 
 type StoredGeneralFileMetadata = {
@@ -48,7 +49,25 @@ type StoredGeneralFileMetadata = {
   checksum: string;
   uploadedAt: string;
   uploadedBy: string | null;
+  /** Owning factory. Null = legacy file from before tenant scoping (superadmin-only). */
+  tenantId?: string | null;
 };
+
+/** Who is asking — drives tenant isolation for general files. */
+export type FilesActor = {
+  userId?: string;
+  tenantId?: string | null;
+  roles?: string[] | null;
+  role?: string | null;
+} | null | undefined;
+
+const isSuperadminActor = (actor: FilesActor): boolean => {
+  if (!actor) return false;
+  const roles = Array.isArray(actor.roles) ? actor.roles : [];
+  return roles.includes('superadmin') || actor.role === 'superadmin';
+};
+
+const UUID_DIR_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
  * Where uploaded files live on disk.
@@ -88,13 +107,24 @@ export class FilesService {
    *
    * Kept relative to the storage root rather than absolute, so moving the
    * volume — or changing UPLOAD_ROOT — does not invalidate every stored record.
+   *
+   * Since tenant isolation, new uploads live under general/<tenantId>/<bucket>
+   * (or general/shared/<bucket> for the overseer). Files written before this
+   * still sit directly under general/<bucket> and are legacy: visible to the
+   * superadmin only.
    */
-  private relativePathFor(bucket: string, storedName: string) {
-    return `general/${bucket}/${storedName}`;
+  private relativePathFor(tenantSegment: string, bucket: string, storedName: string) {
+    return `general/${tenantSegment}/${bucket}/${storedName}`;
   }
 
-  async uploadGeneralFile(file: Express.Multer.File, userId?: string) {
+  async uploadGeneralFile(file: Express.Multer.File, userId?: string, actor?: FilesActor) {
     this.assertUploadableFile(file);
+
+    const ownerTenantId = isSuperadminActor(actor) ? null : (actor?.tenantId ?? null);
+    if (!isSuperadminActor(actor) && !ownerTenantId) {
+      throw new BadRequestException('Factory context required to upload files');
+    }
+    const tenantSegment = ownerTenantId ?? 'shared';
 
     const originalName = this.sanitizeFileName(file.originalname || 'upload.bin');
     const extension = extname(originalName).toLowerCase();
@@ -104,10 +134,10 @@ export class FilesService {
     const bucket = `${uploadedAt.getUTCFullYear()}-${String(uploadedAt.getUTCMonth() + 1).padStart(2, '0')}`;
     const id = randomUUID();
     const storedName = `${id}${extension}`;
-    const absoluteDirectory = join(this.uploadRoot, bucket);
+    const absoluteDirectory = join(this.uploadRoot, tenantSegment, bucket);
     const absolutePath = join(absoluteDirectory, storedName);
     const metadataAbsolutePath = join(absoluteDirectory, this.getMetadataFileName(id));
-    const relativePath = this.relativePathFor(bucket, storedName);
+    const relativePath = this.relativePathFor(tenantSegment, bucket, storedName);
     const size = file.size ?? file.buffer.length;
     const checksum = createHash('sha256').update(file.buffer).digest('hex');
     const uploadedAtIso = uploadedAt.toISOString();
@@ -122,6 +152,7 @@ export class FilesService {
       checksum,
       uploadedAt: uploadedAtIso,
       uploadedBy: userId || null,
+      tenantId: ownerTenantId,
     };
 
     try {
@@ -150,13 +181,68 @@ export class FilesService {
     };
   }
 
-  async listGeneralFiles(page = 1, limit = 20) {
+  /**
+   * Bucket directories one actor may read. A factory sees only its own
+   * tenant segment; the overseer additionally sees legacy pre-scoping buckets
+   * sitting directly under the root. Directory boundary IS the isolation —
+   * metadata is only descriptive on top of it.
+   */
+  private async bucketDirsFor(
+    actor: FilesActor,
+  ): Promise<Array<{ path: string; segment: string | null }>> {
+    const out: Array<{ path: string; segment: string | null }> = [];
+    const looksLikeBucket = (name: string) => /^\d{4}-\d{2}$/.test(name);
+
+    if (isSuperadminActor(actor)) {
+      let entries: Array<{ name: string; isDirectory: () => boolean }> = [];
+      try {
+        entries = await readdir(this.uploadRoot, { withFileTypes: true });
+      } catch {
+        return [];
+      }
+      for (const entry of entries) {
+        if (!entry.isDirectory()) continue;
+        const full = join(this.uploadRoot, entry.name);
+        if (looksLikeBucket(entry.name)) {
+          out.push({ path: full, segment: null });
+          continue;
+        }
+        try {
+          const sub = await readdir(full, { withFileTypes: true });
+          for (const s of sub) {
+            if (s.isDirectory() && looksLikeBucket(s.name)) {
+              out.push({ path: join(full, s.name), segment: entry.name });
+            }
+          }
+        } catch {
+          // unreadable segment — skip, never fail the whole listing
+        }
+      }
+      return out;
+    }
+
+    const tenantId = actor?.tenantId ?? null;
+    if (!tenantId) return [];
+    try {
+      const sub = await readdir(join(this.uploadRoot, tenantId), { withFileTypes: true });
+      for (const s of sub) {
+        if (s.isDirectory()) {
+          out.push({ path: join(this.uploadRoot, tenantId, s.name), segment: tenantId });
+        }
+      }
+    } catch {
+      // no directory yet — no files
+    }
+    return out;
+  }
+
+  async listGeneralFiles(page = 1, limit = 20, actor?: FilesActor) {
     const normalizedPage = Number.isFinite(page) && page > 0 ? Math.trunc(page) : 1;
     const normalizedLimit = Number.isFinite(limit)
       ? Math.max(1, Math.min(100, Math.trunc(limit)))
       : 20;
 
-    const files = await this.collectStoredFiles();
+    const files = await this.collectStoredFiles(actor);
     const total = files.length;
     const totalPages = Math.max(1, Math.ceil(total / normalizedLimit));
     const safePage = Math.min(normalizedPage, totalPages);
@@ -174,20 +260,13 @@ export class FilesService {
     };
   }
 
-  private async collectStoredFiles(): Promise<ListedGeneralFile[]> {
-    let buckets: Array<{ name: string; isDirectory: () => boolean }> = [];
-
-    try {
-      buckets = await readdir(this.uploadRoot, { withFileTypes: true });
-    } catch {
-      return [];
-    }
+  private async collectStoredFiles(actor?: FilesActor): Promise<ListedGeneralFile[]> {
+    const buckets = await this.bucketDirsFor(actor);
 
     const filesByBucket = await Promise.all(
-      buckets
-        .filter((bucket) => bucket.isDirectory())
-        .map(async (bucket) => {
-          const bucketPath = join(this.uploadRoot, bucket.name);
+      buckets.map(async (bucket) => {
+          const bucketPath = bucket.path;
+          const bucketName = bucketPath.split(sep).pop() ?? '';
 
           let entries: Array<{ name: string; isFile: () => boolean }> = [];
           try {
@@ -234,15 +313,24 @@ export class FilesService {
                     ? recordedSize
                     : fileStats.size;
 
+                  const recordedPath =
+                    typeof metadata?.path === 'string' && metadata.path.trim()
+                      ? metadata.path
+                      : bucket.segment
+                        ? this.relativePathFor(bucket.segment, bucketName, entry.name)
+                        : `general/${bucketName}/${entry.name}`;
+
                   return {
                     id,
                     originalName,
                     storedName: entry.name,
-                    path: this.relativePathFor(bucket.name, entry.name),
+                    path: recordedPath,
                     mimeType,
                     size,
                     extension,
                     uploadedAt,
+                    tenantId:
+                      typeof metadata?.tenantId === 'string' ? metadata.tenantId : null,
                   } as ListedGeneralFile;
                 } catch {
                   return null;
@@ -329,14 +417,19 @@ export class FilesService {
     }
   }
 
-  async getGeneralFileById(id: string) {
-    const buckets = await readdir(this.uploadRoot, { withFileTypes: true });
+  async getGeneralFileById(id: string, actor?: FilesActor) {
+    // Ids are uuids we minted — reject anything path-shaped before touching disk.
+    if (!id || /[/\\]/.test(id) || id.includes('..')) return null;
+
+    const buckets = await this.bucketDirsFor(actor);
 
     for (const bucket of buckets) {
-      if (!bucket.isDirectory()) continue;
-      const bucketPath = join(this.uploadRoot, bucket.name);
-
-      const entries = await readdir(bucketPath, { withFileTypes: true });
+      let entries: Array<{ name: string; isFile: () => boolean }> = [];
+      try {
+        entries = await readdir(bucket.path, { withFileTypes: true });
+      } catch {
+        continue;
+      }
       for (const entry of entries) {
         if (!entry.isFile()) continue;
         const ext = extname(entry.name).toLowerCase();
@@ -345,8 +438,8 @@ export class FilesService {
         const fileId = entry.name.slice(0, Math.max(0, entry.name.length - ext.length));
         if (fileId !== id) continue;
 
-        const absolutePath = join(bucketPath, entry.name);
-        const metadata = await this.readStoredMetadata(bucketPath, id);
+        const absolutePath = join(bucket.path, entry.name);
+        const metadata = await this.readStoredMetadata(bucket.path, id);
         const buffer = await readFile(absolutePath);
 
         return {

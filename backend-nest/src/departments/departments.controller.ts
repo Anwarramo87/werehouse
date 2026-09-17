@@ -4,6 +4,8 @@ import { DepartmentsService } from './departments.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { PermissionsGuard } from '../common/guards/permissions.guard';
 import { Permissions } from '../common/decorators/permissions.decorator';
+import { CurrentUser } from '../common/decorators/current-user.decorator';
+import { AuthenticatedUser } from '../common/types/authenticated-user.types';
 import { CreateDepartmentDto } from './dto/create-department.dto';
 
 @ApiTags('departments')
@@ -15,8 +17,11 @@ export class DepartmentsController {
 
   @Get()
   @Permissions('view_employees')
-  list() {
-    return this.departmentsService.list();
+  list(@CurrentUser() user: AuthenticatedUser) {
+    return this.departmentsService.list({
+      userId: user?.userId,
+      tenantId: user?.tenantId ?? null,
+    });
   }
 
   @Post()

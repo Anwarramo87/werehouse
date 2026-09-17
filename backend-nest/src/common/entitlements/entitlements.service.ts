@@ -386,4 +386,177 @@ export class EntitlementsService {
 
     return this.setPages(tenantId, [...current], actor);
   }
+
+  // ── per-admin entitlements ─────────────────────────────────────────────
+  //
+  // One row per admin account (userId). Effective access for an admin =
+  // factory pages that THE USER ALSO holds. A missing row (or a missing
+  // table, handled like the factory one) means "inherit the whole factory
+  // grant", so a factory with no per-user configuration keeps behaving
+  // exactly as it always has. This is what the Super Admin UI wrote the
+  // "each admin has his own permissions" screen against.
+
+  private userCacheKey(userId: string): string {
+    return `user-entitlements:${userId}`;
+  }
+
+  /**
+   * The pages one admin account effectively holds — independent per-admin.
+   * A missing row (first time) inherits the factory grant for backward
+   * compatibility, but once the superadmin touches this admin (any toggle),
+   * the row becomes the source of truth and is NOT clamped by the factory.
+   * This is what "each admin has his own permissions" means.
+   */
+  async enabledPagesForUser(
+    userId: string,
+    tenantId: string,
+  ): Promise<Set<string>> {
+    const cached = await this.cache.getJson<string[]>(this.userCacheKey(userId));
+    if (cached) return new Set(cached);
+
+    const row = await runUnscoped('user-entitlements-read', async () => {
+      try {
+        return await this.prisma.userEntitlement.findUnique({
+          where: { userId },
+          select: { enabledPages: true },
+        });
+      } catch (error) {
+        if (this.isMissingTable(error)) {
+          this.logger.warn(
+            'user_entitlements is missing — run `prisma migrate deploy`. ' +
+              'Every admin inherits their factory grant until it exists.',
+          );
+          return null;
+        }
+        throw error;
+      }
+    });
+
+    // No per-admin row yet → inherit factory (first-time default)
+    if (!row) {
+      const factory = await this.enabledPagesFor(tenantId);
+      await this.cache.setJson(this.userCacheKey(userId), [...factory], CACHE_TTL_SECONDS);
+      return factory;
+    }
+
+    // Has a row → this admin's own list is the truth (no factory clamp)
+    const effective = new Set(row.enabledPages);
+    await this.cache.setJson(this.userCacheKey(userId), [...effective], CACHE_TTL_SECONDS);
+    return effective;
+  }
+
+  /** Whether one admin account may reach one page. */
+  async isPageEnabledForUser(
+    userId: string,
+    tenantId: string,
+    pageKey: string,
+  ): Promise<boolean> {
+    return (await this.enabledPagesForUser(userId, tenantId)).has(pageKey);
+  }
+
+  /** The catalogue view computed against one admin's effective pages. */
+  async viewForUser(
+    userId: string,
+    tenantId: string,
+  ): Promise<TenantEntitlementView> {
+    const enabled = await this.enabledPagesForUser(userId, tenantId);
+    return {
+      tenantId,
+      enabledPages: [...enabled],
+      modules: MODULES.map((module) => ({
+        key: module.key,
+        label: module.label,
+        description: module.description,
+        state: moduleState(module.key, enabled),
+        pages: module.pages.map((page) => ({
+          key: page.key,
+          route: page.route,
+          label: page.label,
+          enabled: enabled.has(page.key),
+        })),
+      })),
+    };
+  }
+
+  /**
+   * Replaces one admin's page list wholesale — no factory clamp.
+   * The superadmin decides exactly what this admin sees.
+   */
+  async setUserPages(
+    tenantId: string,
+    userId: string,
+    pageKeys: string[],
+    actor?: string,
+  ): Promise<TenantEntitlementView> {
+    const unknown = pageKeys.filter((key) => !isKnownPage(key));
+    if (unknown.length) {
+      throw new BadRequestException(`Unknown page keys: ${unknown.join(', ')}`);
+    }
+
+    const unique = [...new Set(pageKeys)];
+
+    await runWithTenant(
+      { tenantId, bypass: false, actor: actor ?? 'superadmin' },
+      () =>
+        this.prisma.userEntitlement.upsert({
+          where: { userId },
+          create: {
+            userId,
+            tenantId,
+            enabledPages: unique,
+            updatedBy: actor ?? null,
+          },
+          update: { enabledPages: unique, updatedBy: actor ?? null },
+        }),
+    );
+
+    await this.cache.del(this.userCacheKey(userId));
+    this.logger.log(
+      `Per-admin entitlements for ${userId} in factory ${tenantId} set to ` +
+        `${unique.length} pages by ${actor ?? 'unknown'}`,
+    );
+
+    return this.viewForUser(userId, tenantId);
+  }
+
+  /** Toggles a whole module for one admin, leaving other pages alone. */
+  async setUserModule(
+    tenantId: string,
+    userId: string,
+    moduleKey: string,
+    enabled: boolean,
+    actor?: string,
+  ): Promise<TenantEntitlementView> {
+    const keys = pageKeysForModule(moduleKey);
+    if (keys.length === 0) {
+      throw new BadRequestException(`Unknown module: ${moduleKey}`);
+    }
+
+    const current = await this.enabledPagesForUser(userId, tenantId);
+    for (const key of keys) {
+      if (enabled) current.add(key);
+      else current.delete(key);
+    }
+
+    return this.setUserPages(tenantId, userId, [...current], actor);
+  }
+
+  /** Turns one page on or off for one admin. */
+  async setUserPage(
+    tenantId: string,
+    userId: string,
+    pageKey: string,
+    enabled: boolean,
+    actor?: string,
+  ): Promise<TenantEntitlementView> {
+    if (!isKnownPage(pageKey)) {
+      throw new BadRequestException(`Unknown page: ${pageKey}`);
+    }
+
+    const current = await this.enabledPagesForUser(userId, tenantId);
+    if (enabled) current.add(pageKey);
+    else current.delete(pageKey);
+
+    return this.setUserPages(tenantId, userId, [...current], actor);
+  }
 }

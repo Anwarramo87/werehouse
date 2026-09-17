@@ -30,8 +30,8 @@ export class FilesController {
 
   @Get()
   @Permissions('run_imports')
-  list(@Query() query: FilesListQueryDto) {
-    return this.filesService.listGeneralFiles(query.page ?? 1, query.limit ?? 20);
+  list(@Query() query: FilesListQueryDto, @CurrentUser() user: AuthenticatedUser) {
+    return this.filesService.listGeneralFiles(query.page ?? 1, query.limit ?? 20, user);
   }
 
   private static readonly uploadOptions = {
@@ -69,7 +69,7 @@ export class FilesController {
     @UploadedFile() file: Express.Multer.File,
     @CurrentUser() user: AuthenticatedUser,
   ) {
-    return this.filesService.uploadGeneralFile(file, user?.userId);
+    return this.filesService.uploadGeneralFile(file, user?.userId, user);
   }
 
   @Get('local')
@@ -91,8 +91,8 @@ export class FilesController {
 
   @Get(':id')
   @Permissions('run_imports')
-  async getFile(@Param('id') id: string) {
-    const file = await this.filesService.getGeneralFileById(id);
+  async getFile(@Param('id') id: string, @CurrentUser() user: AuthenticatedUser) {
+    const file = await this.filesService.getGeneralFileById(id, user);
     if (!file) {
       return { error: 'File not found' };
     }
@@ -107,8 +107,12 @@ export class FilesController {
 
   @Get(':id/download')
   @Permissions('run_imports')
-  async downloadFile(@Param('id') id: string, @Res() res: Response) {
-    const file = await this.filesService.getGeneralFileById(id);
+  async downloadFile(
+    @Param('id') id: string,
+    @Res() res: Response,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    const file = await this.filesService.getGeneralFileById(id, user);
     if (!file) {
       throw new BadRequestException('File not found');
     }
@@ -124,8 +128,12 @@ export class FilesController {
 
   @Get(':id/preview')
   @Permissions('run_imports')
-  async previewFile(@Param('id') id: string, @Res() res: Response) {
-    const file = await this.filesService.getGeneralFileById(id);
+  async previewFile(
+    @Param('id') id: string,
+    @Res() res: Response,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    const file = await this.filesService.getGeneralFileById(id, user);
     if (!file) {
       throw new BadRequestException('File not found');
     }

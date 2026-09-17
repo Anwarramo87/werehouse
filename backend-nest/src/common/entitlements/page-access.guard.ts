@@ -51,7 +51,18 @@ export class PageAccessGuard implements CanActivate {
       throw new ForbiddenException('This module is not enabled for your factory');
     }
 
-    if (!(await this.entitlements.isPageEnabled(user.tenantId, pageKey))) {
+    // Effective access = the FACTORY grant AND the per-admin grant. The
+    // per-user check internally falls back to the whole factory grant when
+    // this admin has no row, so keeping this single call here preserves the
+    // "factory bought it = every admin may use it" behaviour for factories
+    // that never touch per-admin entitlements.
+    if (
+      !(await this.entitlements.isPageEnabledForUser(
+        user.userId,
+        user.tenantId,
+        pageKey,
+      ))
+    ) {
       throw new ForbiddenException('This module is not enabled for your factory');
     }
 

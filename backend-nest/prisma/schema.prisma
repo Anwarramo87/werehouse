@@ -15,6 +15,7 @@ model Tenant {
   updatedAt DateTime @updatedAt
 
   users                           User[]
+  userEntitlements                UserEntitlement[]
   biometricCredentials            BiometricCredential[]
   employees                       Employee[]
   departments                     Department[]
@@ -119,6 +120,30 @@ model TenantEntitlement {
   @@map("tenant_entitlements")
 }
 
+/**
+ * Which pages one admin account of a factory may actually use.
+ *
+ * One row per admin (userId unique). Effective access = factory pages that the
+ * USER also holds: store pages here, and if a key is absent the factory-level
+ * grant still bites as the ceiling. A factory without per-user rows behaves
+ * exactly as before (every admin inherits the whole factory grant), so existing
+ * factories keep working with zero migration work on their side.
+ */
+model UserEntitlement {
+  id           String   @id @default(uuid()) @db.Uuid
+  userId       String   @unique @db.Uuid
+  tenantId     String   @db.Uuid
+  tenant       Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  enabledPages String[] @default([])
+  updatedBy    String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("user_entitlements")
+}
 
 model Role {
   id          String     @id @default(uuid()) @db.Uuid
@@ -151,6 +176,7 @@ model User {
   updatedAt            DateTime              @updatedAt
   employee             Employee?
   biometricCredentials BiometricCredential[]
+  entitlement          UserEntitlement? // per-admin pages this account may use
 
   // Referenced by tenant-composite foreign keys: Postgres requires the
 

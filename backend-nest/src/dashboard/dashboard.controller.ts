@@ -4,6 +4,8 @@ import { DashboardService } from './dashboard.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { PermissionsGuard } from '../common/guards/permissions.guard';
 import { Permissions } from '../common/decorators/permissions.decorator';
+import { CurrentUser } from '../common/decorators/current-user.decorator';
+import { AuthenticatedUser } from '../common/types/authenticated-user.types';
 
 @ApiTags('dashboard')
 @ApiCookieAuth()
@@ -24,7 +26,10 @@ export class DashboardController {
    */
   @Get('home')
   @Permissions('view_employees')
-  getHomeStats() {
-    return this.dashboardService.getHomeStats();
+  getHomeStats(@CurrentUser() user: AuthenticatedUser) {
+    return this.dashboardService.getHomeStats({
+      userId: user?.userId,
+      tenantId: user?.tenantId ?? null,
+    });
   }
 }

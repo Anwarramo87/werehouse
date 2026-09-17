@@ -22,6 +22,7 @@ import { ResignedEmployeesQueryDto } from './dto/resigned-employees-query.dto';
 import { BulkTerminateDepartmentDto } from './dto/bulk-terminate-department.dto';
 import { AuthenticatedUser } from '../common/types/authenticated-user.types';
 import { BCRYPT_DEFAULT_ROUNDS } from '../common/constants/auth.constants';
+import { assertCanAssignRole } from '../common/auth/role-assignment';
 import {
   DEFAULT_DEPARTMENT,
   DEFAULT_HOURS_PER_DAY,
@@ -465,7 +466,7 @@ export class EmployeesService {
     };
   }
 
-  async create(dto: CreateEmployeeDto) {
+  async create(dto: CreateEmployeeDto, actor?: AuthenticatedUser) {
     const loginName = this.normalizeLoginName(dto.username || dto.employeeId);
     const mobile = this.normalizeOptionalString(dto.mobile);
     const residence = this.normalizeOptionalString(dto.residence);
@@ -564,6 +565,15 @@ export class EmployeesService {
     const created = await this.prisma.$transaction(async (transaction) => {
       const department = await this.resolveDepartment(departmentName, transaction);
       const roleId = (await this.resolveRoleId(dto.roleId, transaction)) ?? null;
+      // Privilege guard: a factory admin may not mint admins/superadmins
+      // through employee creation. Checked on the resolved id, not raw input.
+      if (roleId) {
+        const targetRole = await transaction.role.findUnique({
+          where: { id: roleId },
+          select: { name: true },
+        });
+        assertCanAssignRole(targetRole?.name ?? null, actor);
+      }
 
       const user = await transaction.user.create({
         data: {
@@ -675,7 +685,7 @@ export class EmployeesService {
     return copy as T;
   }
 
-  async update(employeeId: string, dto: UpdateEmployeeDto) {
+  async update(employeeId: string, dto: UpdateEmployeeDto, actor?: AuthenticatedUser) {
     const [employee, existingSalary] = await Promise.all([
       this.prisma.employee.findFirst({
         where: { employeeId },
@@ -779,6 +789,14 @@ export class EmployeesService {
 
     const updated = await this.prisma.$transaction(async (transaction) => {
       const resolvedRoleId = await this.resolveRoleId(dto.roleId, transaction);
+      // Same privilege guard on role changes via employee update.
+      if (dto.roleId !== undefined && resolvedRoleId) {
+        const targetRole = await transaction.role.findUnique({
+          where: { id: resolvedRoleId },
+          select: { name: true },
+        });
+        assertCanAssignRole(targetRole?.name ?? null, actor);
+      }
 
       if (
         loginName !== undefined ||

@@ -33,6 +33,8 @@ import {
   MANAGE_TENANTS,
   SUPERADMIN_ROLE,
 } from '../common/tenant/tenant.constants';
+import { AuthenticatedUser } from '../common/types/authenticated-user.types';
+import { assertCanAssignRole, isSuperadminActor } from '../common/auth/role-assignment';
 
 type BiometricChallengePurpose = 'REGISTER' | 'LOGIN';
 
@@ -366,7 +368,17 @@ export class AuthService {
     return { ok: true };
   }
 
-  async createUser(dto: CreateUserDto) {
+  async createUser(dto: CreateUserDto, actor?: AuthenticatedUser) {
+    // Privilege guard: only the overseer may mint admins/superadmins. A
+    // factory admin with manage_users may only create ordinary accounts.
+    if (dto.roleId) {
+      const targetRole = await this.prisma.role.findUnique({
+        where: { id: dto.roleId },
+        select: { name: true },
+      });
+      assertCanAssignRole(targetRole?.name ?? null, actor);
+    }
+
     const hash = await bcrypt.hash(dto.password, this.bcryptRounds());
 
     // A factory admin runs with bypass=false, so the tenant extension stamps
@@ -407,9 +419,38 @@ export class AuthService {
     return { user: this.toPublicAuthUser(user) };
   }
 
-  async listUsers() {
-    const users = await this.prisma.user.findMany({ include: { role: true } });
-    return { users: users.map((user) => ({ ...this.toPublicAuthUser(user), email: user.email, status: user.status })) };
+  async listUsers(actor?: AuthenticatedUser) {
+    // The overseer sees everyone. A factory admin sees only ordinary accounts
+    // of their OWN factory — never superadmins, never fellow admins, never
+    // other factories. Admins must not see each other.
+    if (isSuperadminActor(actor)) {
+      const users = await this.prisma.user.findMany({ include: { role: true } });
+      return {
+        users: users.map((user) => ({
+          ...this.toPublicAuthUser(user),
+          email: user.email,
+          status: user.status,
+        })),
+      };
+    }
+
+    const tenantId = actor?.tenantId ?? null;
+    if (!tenantId) return { users: [] };
+
+    const users = await this.prisma.user.findMany({
+      where: {
+        tenantId,
+        role: { name: { notIn: [SUPERADMIN_ROLE, 'admin'] } },
+      },
+      include: { role: true },
+    });
+    return {
+      users: users.map((user) => ({
+        ...this.toPublicAuthUser(user),
+        email: user.email,
+        status: user.status,
+      })),
+    };
   }
 
   async getRoles() {

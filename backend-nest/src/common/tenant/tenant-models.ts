@@ -80,6 +80,7 @@ export const TENANT_SCOPED_MODELS: Record<string, true> = {
   webhookEndpoint: true,
   accountMapping: true,
   tenantEntitlement: true,
+  userEntitlement: true,
 };
 
 export function isTenantScoped(model?: string): boolean {

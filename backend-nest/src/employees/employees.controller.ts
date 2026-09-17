@@ -122,8 +122,8 @@ export class EmployeesController {
   @Permissions('edit_employees')
   @ApiOperation({ summary: 'إضافة موظف جديد' })
   @ApiResponse({ status: 201, description: 'تم إنشاء الموظف بنجاح' })
-  create(@Body() dto: CreateEmployeeDto) {
-    return this.employeesService.create(dto);
+  create(@Body() dto: CreateEmployeeDto, @CurrentUser() user: AuthenticatedUser) {
+    return this.employeesService.create(dto, user);
   }
 
   @Get(':employeeId/profile')
@@ -153,8 +153,12 @@ export class EmployeesController {
   @Permissions('edit_employees')
   @ApiOperation({ summary: 'تعديل بيانات الموظف' })
   @ApiParam({ name: 'employeeId', description: 'رقم الموظف' })
-  update(@Param('employeeId') employeeId: string, @Body() dto: UpdateEmployeeDto) {
-    return this.employeesService.update(employeeId, dto);
+  update(
+    @Param('employeeId') employeeId: string,
+    @Body() dto: UpdateEmployeeDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.employeesService.update(employeeId, dto, user);
   }
 
   // Ending, restoring and settling someone's employment are the operations an

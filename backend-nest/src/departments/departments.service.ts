@@ -7,12 +7,14 @@ import {
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateDepartmentDto } from './dto/create-department.dto';
 import { ShortCacheService } from '../common/cache/short-cache.service';
+import { EntitlementsService } from '../common/entitlements/entitlements.service';
 
 @Injectable()
 export class DepartmentsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly shortCache: ShortCacheService,
+    private readonly entitlements: EntitlementsService,
   ) {}
 
   private invalidateListCache() {
@@ -104,8 +106,25 @@ export class DepartmentsService {
     return { message: 'Supervisor removed', department: dept };
   }
 
-  async list() {
-    return this.shortCache.getOrSetJson('departments:list', 30, async () => {
+  /**
+   * Department list scoped to what the caller may see. The employeeCount
+   * leaks roster size, so without the hr.employees page it comes back zero —
+   * same rule as the dashboard KPIs. The cache key carries tenant+user: the
+   * previous day-global key served one factory's counts to every other
+   * factory for 30s.
+   */
+  async list(actor?: { userId?: string; tenantId?: string | null } | null) {
+    const tenantId = actor?.tenantId ?? null;
+    const userId = actor?.userId ?? null;
+
+    let canSeeEmployees = true;
+    if (tenantId && userId) {
+      const pages = await this.entitlements.enabledPagesForUser(userId, tenantId);
+      canSeeEmployees = pages.has('hr.employees');
+    }
+
+    const cacheKey = `departments:list:${tenantId ?? 'none'}:${userId ?? 'none'}`;
+    return this.shortCache.getOrSetJson(cacheKey, 30, async () => {
       const departments = await this.prisma.department.findMany({
         orderBy: [{ createdAt: 'desc' }, { name: 'asc' }],
         include: {
@@ -118,7 +137,7 @@ export class DepartmentsService {
       return {
         departments: departments.map((department) => ({
           ...department,
-          employeeCount: department._count.employees,
+          employeeCount: canSeeEmployees ? department._count.employees : 0,
         })),
       };
     });

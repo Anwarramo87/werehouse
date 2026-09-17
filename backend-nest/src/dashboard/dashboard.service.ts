@@ -3,6 +3,7 @@ import { Prisma } from '@prisma/client';
 import { appendFileSync } from 'fs';
 import { PrismaService } from '../prisma/prisma.service';
 import { ShortCacheService } from '../common/cache/short-cache.service';
+import { EntitlementsService } from '../common/entitlements/entitlements.service';
 import {
   formatFactoryLocalTime,
   monthDateRange,
@@ -37,6 +38,7 @@ export class DashboardService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly shortCache: ShortCacheService,
+    private readonly entitlements: EntitlementsService,
   ) {}
 
   private parseClockMinutes(time: string): number {
@@ -88,17 +90,49 @@ export class DashboardService {
     return resolveSalary(employee, salary as any).monthlyTotal;
   }
 
-  async getHomeStats() {
+  /**
+   * Home KPIs scoped to what the CALLER may see — not the whole factory.
+   *
+   * An admin with HR disabled must not see employee counts or names on the
+   * dashboard (that was leaking the roster through totalEmployees/absence
+   * lists even while the sidebar and API correctly refused the pages).
+   * Sections the caller holds no page for come back zeroed, so the dashboard
+   * never discloses what entitlements hide. The overseer (no tenant) keeps
+   * the full view.
+   *
+   * The cache key carries tenant+user: the previous day-only key served one
+   * factory's numbers to every other factory for 30s.
+   */
+  async getHomeStats(actor?: { userId?: string; tenantId?: string | null } | null) {
     const today = toFactoryDateKey();
+    const tenantId = actor?.tenantId ?? null;
+    const userId = actor?.userId ?? null;
+
+    let pages: Set<string> | null = null;
+    if (tenantId && userId) {
+      pages = await this.entitlements.enabledPagesForUser(userId, tenantId);
+    }
+
+    const canSeeEmployees = !pages || pages.has('hr.employees');
+    const canSeeAttendance = !pages || pages.has('hr.attendance');
+    const canSeePayroll =
+      !pages || pages.has('payroll.reports') || pages.has('payroll.settings');
+
+    const scope = { canSeeEmployees, canSeeAttendance, canSeePayroll };
+    const cacheKey = `dashboard:home-stats:${today}:${tenantId ?? 'none'}:${userId ?? 'none'}`;
 
     // TTL قصير (30s) — تُبطَّل الكاش فوراً عند أي تغيير في الحضور/الموظفين/الرواتب
     // عبر ShortCacheService.invalidatePrefix('dashboard:home-stats:')
-    return this.shortCache.getOrSetJson(`dashboard:home-stats:${today}`, 30, async () =>
-      this.buildHomeStats(today),
+    return this.shortCache.getOrSetJson(cacheKey, 30, async () =>
+      this.buildHomeStats(today, scope),
     );
   }
 
-  private async buildHomeStats(today: string) {
+  private async buildHomeStats(
+    today: string,
+    scope: { canSeeEmployees: boolean; canSeeAttendance: boolean; canSeePayroll: boolean },
+  ) {
+    const { canSeeEmployees, canSeeAttendance, canSeePayroll } = scope;
     const now = new Date();
     const { start: monthStart, end: monthEnd } = monthDateRange(now.getFullYear(), now.getMonth());
 
@@ -483,36 +517,51 @@ export class DashboardService {
       }
     }
 
+    // Sections the caller holds no page for are zeroed — names, counts and
+    // pay figures must never leak through the dashboard while the sidebar,
+    // the gate and the API all refuse the underlying pages.
+    const showRoster = canSeeEmployees;
+    const showAttendance = canSeeAttendance;
+    const showAbsence = canSeeEmployees && canSeeAttendance;
+
     return {
-      totalEmployees,
+      totalEmployees: showRoster ? totalEmployees : 0,
       attendance: {
-        count: presentCount,
-        employees: Array.from(presentMap.values()),
+        count: showAttendance ? presentCount : 0,
+        employees: showAttendance ? Array.from(presentMap.values()) : [],
       },
       absence: {
-        count: absentCount,
-        employees: absentNotOnLeave.map((emp) => ({
-          employeeId: emp.employeeId,
-          name: emp.name,
-          department: emp.department,
-          scheduledStart: emp.scheduledStart,
-          lastWorkDay: emp.attendanceRecords?.[0]?.date ?? null,
-          lastCheckIn: emp.attendanceRecords?.[0]?.timestamp
-            ? formatFactoryLocalTime(emp.attendanceRecords[0].timestamp)
-            : null,
-        })),
+        count: showAbsence ? absentCount : 0,
+        employees: showAbsence
+          ? absentNotOnLeave.map((emp) => ({
+              employeeId: emp.employeeId,
+              name: emp.name,
+              department: emp.department,
+              scheduledStart: emp.scheduledStart,
+              lastWorkDay: emp.attendanceRecords?.[0]?.date ?? null,
+              lastCheckIn: emp.attendanceRecords?.[0]?.timestamp
+                ? formatFactoryLocalTime(emp.attendanceRecords[0].timestamp)
+                : null,
+            }))
+          : [],
       },
-      totalDueSalaries: Number(totalDueSalaries.toFixed(2)),
-      totalReceivedSalaries: Number(totalReceivedSalaries.toFixed(2)),
+      totalDueSalaries: canSeePayroll ? Number(totalDueSalaries.toFixed(2)) : 0,
+      totalReceivedSalaries: canSeePayroll ? Number(totalReceivedSalaries.toFixed(2)) : 0,
       lateness: {
-        totalMinutes: totalLateMinutes,
-        count: lateEmployees.length,
-        employees: lateEmployees,
+        totalMinutes: showAttendance ? totalLateMinutes : 0,
+        count: showAttendance ? lateEmployees.length : 0,
+        employees: showAttendance ? lateEmployees : [],
       },
       overtime: {
-        totalMinutes: totalOvertimeMinutes,
-        count: overtimeEmployees.length,
-        employees: overtimeEmployees,
+        totalMinutes: showAttendance ? totalOvertimeMinutes : 0,
+        count: showAttendance ? overtimeEmployees.length : 0,
+        employees: showAttendance
+          ? overtimeEmployees.map((e) => ({
+              ...e,
+              // Pay figures are salary data, not attendance data.
+              overtimePay: canSeePayroll ? e.overtimePay : 0,
+            }))
+          : [],
       },
       reportDate: today,
     };

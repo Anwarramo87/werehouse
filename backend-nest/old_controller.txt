@@ -16,7 +16,6 @@ import {
 import { ApiCookieAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { Request, Response } from 'express';
 import { IsArray, IsBoolean, IsString } from 'class-validator';
-import { Transform } from 'class-transformer';
 import { CurrentUser } from '../decorators/current-user.decorator';
 import { JwtAuthGuard } from '../guards/jwt-auth.guard';
 import { SuperAdminGuard } from '../guards/superadmin.guard';
@@ -36,11 +35,6 @@ class ToggleDto {
   @IsString()
   key!: string;
 
-  @Transform(({ value }: { value: unknown }) => {
-    if (value === true || value === 'true' || value === 1) return true;
-    if (value === false || value === 'false' || value === 0) return false;
-    return value;
-  })
   @IsBoolean()
   enabled!: boolean;
 }
@@ -81,9 +75,7 @@ export class EntitlementsController {
       };
     }
 
-    // Per-admin view: this admin's own pages (superadmin sees all via bypass
-    // in the guard; factory admins see exactly what was toggled for them).
-    const view = await this.entitlements.viewForUser(user.userId, user.tenantId);
+    const view = await this.entitlements.viewFor(user.tenantId);
     return { ...view, alwaysAvailable: ALWAYS_AVAILABLE_ROUTES };
   }
 }
@@ -272,116 +264,6 @@ export class TenantEntitlementsController {
         actorUsername: user?.username,
         targetType: 'tenant',
         targetId: tenantId,
-        metadata: { page: dto.key, enabled: dto.enabled },
-      },
-      req,
-    );
-    return result;
-  }
-
-  // ── per-admin (user-level) ────────────────────────────────────────────
-  //
-  // One admin of a factory, and the pages THAT ACCOUNT may use. Effective
-  // access = factory pages the user also holds, so the Super Admin can now
-  // hand a module to a single operator instead of lighting it up for every
-  // operator in that factory. With no row the admin inherits the whole
-  // factory grant, so factories that never configure per-user keep working
-  // exactly as before.
-
-  @Get(':tenantId/users/:userId/entitlements')
-  @ApiOperation({ summary: "One admin's own modules and pages (super admin)" })
-  viewForUser(
-    @Param('tenantId', ParseUUIDPipe) tenantId: string,
-    @Param('userId', ParseUUIDPipe) userId: string,
-  ) {
-    return this.entitlements.viewForUser(userId, tenantId);
-  }
-
-  @Put(':tenantId/users/:userId/entitlements')
-  @ApiOperation({ summary: "Replace one admin's page list (super admin)" })
-  async setUserPages(
-    @Param('tenantId', ParseUUIDPipe) tenantId: string,
-    @Param('userId', ParseUUIDPipe) userId: string,
-    @Body() dto: SetPagesDto,
-    @CurrentUser() user: AuthenticatedUser,
-    @Req() req: Request,
-  ) {
-    const result = await this.entitlements.setUserPages(
-      tenantId,
-      userId,
-      dto.pageKeys,
-      user?.username,
-    );
-    this.audit.log(
-      {
-        action: 'entitlements.user.replace',
-        actorId: user?.userId,
-        actorUsername: user?.username,
-        targetType: 'user',
-        targetId: userId,
-        targetTenantId: tenantId,
-        metadata: { pageCount: dto.pageKeys.length, pageKeys: dto.pageKeys },
-      },
-      req,
-    );
-    return result;
-  }
-
-  @Put(':tenantId/users/:userId/entitlements/module')
-  @ApiOperation({ summary: 'Enable or disable a whole module for one admin (super admin)' })
-  async setUserModule(
-    @Param('tenantId', ParseUUIDPipe) tenantId: string,
-    @Param('userId', ParseUUIDPipe) userId: string,
-    @Body() dto: ToggleDto,
-    @CurrentUser() user: AuthenticatedUser,
-    @Req() req: Request,
-  ) {
-    const result = await this.entitlements.setUserModule(
-      tenantId,
-      userId,
-      dto.key,
-      dto.enabled,
-      user?.username,
-    );
-    this.audit.log(
-      {
-        action: 'entitlements.user.module',
-        actorId: user?.userId,
-        actorUsername: user?.username,
-        targetType: 'user',
-        targetId: userId,
-        targetTenantId: tenantId,
-        metadata: { module: dto.key, enabled: dto.enabled },
-      },
-      req,
-    );
-    return result;
-  }
-
-  @Put(':tenantId/users/:userId/entitlements/page')
-  @ApiOperation({ summary: 'Enable or disable a single page for one admin (super admin)' })
-  async setUserPage(
-    @Param('tenantId', ParseUUIDPipe) tenantId: string,
-    @Param('userId', ParseUUIDPipe) userId: string,
-    @Body() dto: ToggleDto,
-    @CurrentUser() user: AuthenticatedUser,
-    @Req() req: Request,
-  ) {
-    const result = await this.entitlements.setUserPage(
-      tenantId,
-      userId,
-      dto.key,
-      dto.enabled,
-      user?.username,
-    );
-    this.audit.log(
-      {
-        action: 'entitlements.user.page',
-        actorId: user?.userId,
-        actorUsername: user?.username,
-        targetType: 'user',
-        targetId: userId,
-        targetTenantId: tenantId,
         metadata: { page: dto.key, enabled: dto.enabled },
       },
       req,

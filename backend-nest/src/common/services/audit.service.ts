@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+﻿import { Injectable, Logger } from '@nestjs/common';
 import { Request } from 'express';
 import { PrismaService } from '../../prisma/prisma.service';
 import { RequestWithCorrelationId } from '../types/request-context.types';
@@ -9,6 +9,7 @@ export type AuditEvent = {
   actorUsername?: string;
   targetType?: string;
   targetId?: string;
+  targetTenantId?: string;
   metadata?: Record<string, unknown>;
 };
 
