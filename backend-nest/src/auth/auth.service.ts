@@ -784,6 +784,7 @@ export class AuthService {
       username: user.username,
       role: user.role?.name || 'staff',
       photo: user.photo || null,
+      tenantId: user.tenantId ?? null,
     };
   }
 

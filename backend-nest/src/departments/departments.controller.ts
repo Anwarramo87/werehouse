@@ -26,8 +26,11 @@ export class DepartmentsController {
 
   @Post()
   @Permissions('edit_employees')
-  create(@Body() dto: CreateDepartmentDto) {
-    return this.departmentsService.create(dto);
+  create(@Body() dto: CreateDepartmentDto, @CurrentUser() user: AuthenticatedUser) {
+    return this.departmentsService.create(dto, {
+      userId: user?.userId,
+      tenantId: user?.tenantId ?? null,
+    });
   }
 
   @Put(':id')

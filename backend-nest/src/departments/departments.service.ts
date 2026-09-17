@@ -30,11 +30,14 @@ export class DepartmentsService {
     return normalized;
   }
 
-  async create(dto: CreateDepartmentDto) {
+  async create(dto: CreateDepartmentDto, actor?: { userId?: string; tenantId?: string | null } | null) {
     const name = this.normalizeName(dto.name);
+    const createTenantId = actor?.tenantId ?? null;
 
     const existing = await this.prisma.department.findFirst({
-      where: { name: { equals: name, mode: 'insensitive' } },
+      where: createTenantId
+        ? { tenantId: createTenantId, name: { equals: name, mode: 'insensitive' } }
+        : { name: { equals: name, mode: 'insensitive' } },
     });
 
     if (existing) {
@@ -44,6 +47,7 @@ export class DepartmentsService {
     const department = await this.prisma.department.create({
       data: {
         name,
+        ...(createTenantId ? { tenantId: createTenantId } : {}),
         ...(dto.manager !== undefined && { manager: dto.manager }),
         ...(dto.establishedAt !== undefined && { establishedAt: new Date(dto.establishedAt) }),
       },
