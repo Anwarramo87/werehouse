@@ -20,6 +20,7 @@ import { Transform } from 'class-transformer';
 import { CurrentUser } from '../decorators/current-user.decorator';
 import { JwtAuthGuard } from '../guards/jwt-auth.guard';
 import { SuperAdminGuard } from '../guards/superadmin.guard';
+import { SetSubscriptionDto } from './dto/set-subscription.dto';
 import { AuthenticatedUser } from '../types/authenticated-user.types';
 import { AuditService } from '../services/audit.service';
 import { ALWAYS_AVAILABLE_ROUTES, MODULES } from './catalogue';
@@ -273,6 +274,42 @@ export class TenantEntitlementsController {
         targetType: 'tenant',
         targetId: tenantId,
         metadata: { page: dto.key, enabled: dto.enabled },
+      },
+      req,
+    );
+    return result;
+  }
+
+  // ── subscription (time-boxed factory access) ──────────────────────────
+
+  @Get(':tenantId/subscription')
+  @ApiOperation({ summary: "One factory's subscription window (super admin)" })
+  subscription(@Param('tenantId', ParseUUIDPipe) tenantId: string) {
+    return this.entitlements.getSubscription(tenantId);
+  }
+
+  @Put(':tenantId/subscription')
+  @ApiOperation({ summary: 'Start/extend one factory subscription (super admin)' })
+  async setSubscription(
+    @Param('tenantId', ParseUUIDPipe) tenantId: string,
+    @Body() dto: SetSubscriptionDto,
+    @CurrentUser() user: AuthenticatedUser,
+    @Req() req: Request,
+  ) {
+    const result = await this.entitlements.setSubscription(
+      tenantId,
+      { months: dto.months, endsAt: dto.endsAt },
+      user?.username,
+    );
+    this.audit.log(
+      {
+        action: 'subscription.set',
+        actorId: user?.userId,
+        actorUsername: user?.username,
+        targetType: 'tenant',
+        targetId: tenantId,
+        targetTenantId: tenantId,
+        metadata: { plan: result.plan, endsAt: result.endsAt },
       },
       req,
     );

@@ -26,6 +26,17 @@ export interface TenantEntitlementView {
   }>;
 }
 
+export type SubscriptionStatus = 'active' | 'expired' | 'none';
+
+export interface SubscriptionView {
+  plan: string;
+  startsAt: string;
+  endsAt: string;
+  status: SubscriptionStatus;
+  /** Whole days left while active, 0 or negative once past the end. */
+  daysLeft: number;
+}
+
 @Injectable()
 export class EntitlementsService {
   private readonly logger = new Logger(EntitlementsService.name);
@@ -40,6 +51,51 @@ export class EntitlementsService {
   }
 
   /**
+   * The subscription row of one factory, if the Super Admin ever set one.
+   * Missing table (migration not deployed) reads as "no subscription", same
+   * fail-open rule as the entitlement tables.
+   */
+  private async subscriptionRowFor(tenantId: string): Promise<{
+    plan: string;
+    startsAt: Date;
+    endsAt: Date;
+  } | null> {
+    try {
+      return await runUnscoped('subscription-read', () =>
+        this.prisma.tenantSubscription.findUnique({
+          where: { tenantId },
+          select: { plan: true, startsAt: true, endsAt: true },
+        }),
+      );
+    } catch (error) {
+      if (this.isMissingTable(error)) {
+        this.logger.warn(
+          'tenant_subscriptions is missing — run `prisma migrate deploy`. ' +
+            'Subscriptions are ignored until it exists.',
+        );
+        return null;
+      }
+      throw error;
+    }
+  }
+
+  subscriptionViewFor(
+    row: { plan: string; startsAt: Date; endsAt: Date } | null,
+    now: Date = new Date(),
+  ): SubscriptionView | null {
+    if (!row) return null;
+    const active = now >= row.startsAt && now <= row.endsAt;
+    const daysLeft = Math.floor((row.endsAt.getTime() - now.getTime()) / 86400000);
+    return {
+      plan: row.plan,
+      startsAt: row.startsAt.toISOString(),
+      endsAt: row.endsAt.toISOString(),
+      status: active ? 'active' : 'expired',
+      daysLeft,
+    };
+  }
+
+  /**
    * The page keys a factory currently holds.
    *
    * A factory with no row yet is treated as fully entitled rather than fully
@@ -47,6 +103,11 @@ export class EntitlementsService {
    * the safe reading of that is the access it had before entitlements existed —
    * failing closed here would silently dark-launch a blackout on any factory
    * created outside the normal path.
+   *
+   * The single exception is an EXPIRED subscription: while a subscription row
+   * exists and now is past its end, the factory holds nothing — every gated
+   * surface (guard, sidebar, dashboard, departments) derives from here, so one
+   * check closes them all and only the always-available routes survive.
    */
   async enabledPagesFor(tenantId: string): Promise<Set<string>> {
     const cached = await this.cache.getJson<string[]>(this.cacheKey(tenantId));
@@ -75,7 +136,11 @@ export class EntitlementsService {
       }
     });
 
-    const pages = row?.enabledPages ?? ALL_PAGE_KEYS;
+    const now = new Date();
+    const subscription = await this.subscriptionRowFor(tenantId);
+    const expired = subscription !== null && now > subscription.endsAt;
+
+    const pages = expired ? [] : (row?.enabledPages ?? ALL_PAGE_KEYS);
     await this.cache.setJson(this.cacheKey(tenantId), pages, CACHE_TTL_SECONDS);
     return new Set(pages);
   }
@@ -155,10 +220,32 @@ export class EntitlementsService {
       }
     });
 
+    // Subscriptions in one query (own try/catch: the table may not exist yet
+    // on deployments that have not run the migration — same rule as above).
+    let subscriptions: Array<{ tenantId: string; plan: string; startsAt: Date; endsAt: Date }> = [];
+    try {
+      subscriptions = await runUnscoped('subscription-overview', () =>
+        this.prisma.tenantSubscription.findMany({
+          select: { tenantId: true, plan: true, startsAt: true, endsAt: true },
+        }),
+      );
+    } catch (error) {
+      if (!this.isMissingTable(error)) throw error;
+    }
+    const subscriptionByTenant = new Map(subscriptions.map((s) => [s.tenantId, s]));
+    const now = new Date();
+
     return tenants.map((tenant) => {
       // A factory with no row yet is fully entitled — same rule as
-      // enabledPagesFor, kept in step deliberately.
-      const enabled = new Set(tenant.entitlement?.enabledPages ?? ALL_PAGE_KEYS);
+      // enabledPagesFor, kept in step deliberately. An EXPIRED subscription
+      // empties the set here too, so the overseer list never disagrees with
+      // what the factory actually sees.
+      const subRow = subscriptionByTenant.get(tenant.id) ?? null;
+      const subscription = this.subscriptionViewFor(subRow, now);
+      const expired = subscription !== null && subscription.status === 'expired';
+      const enabled = expired
+        ? new Set<string>()
+        : new Set(tenant.entitlement?.enabledPages ?? ALL_PAGE_KEYS);
 
       return {
         id: tenant.id,
@@ -177,6 +264,7 @@ export class EntitlementsService {
         })),
         entitlementsUpdatedAt: tenant.entitlement?.updatedAt ?? null,
         entitlementsUpdatedBy: tenant.entitlement?.updatedBy ?? null,
+        subscription,
       };
     });
   }
@@ -385,6 +473,65 @@ export class EntitlementsService {
     else current.delete(pageKey);
 
     return this.setPages(tenantId, [...current], actor);
+  }
+
+  /** This factory's subscription view, or null when the Super Admin never set one. */
+  async getSubscription(tenantId: string): Promise<SubscriptionView | null> {
+    const row = await this.subscriptionRowFor(tenantId);
+    return this.subscriptionViewFor(row);
+  }
+
+  /**
+   * (Re)starts a factory's subscription. months=1 → شهر, months=12 → سنة,
+   * starting now; or pass an explicit endsAt ISO date. Writes are audited by
+   * the controller. The factory entitlement cache is dropped so expiry and
+   * renewal take effect on the next request (≤30s via TTL otherwise).
+   */
+  async setSubscription(
+    tenantId: string,
+    input: { months?: number; endsAt?: string },
+    actor?: string,
+  ): Promise<SubscriptionView> {
+    const now = new Date();
+    let startsAt = now;
+    let endsAt: Date;
+    let plan: string;
+
+    if (input.months !== undefined) {
+      if (!Number.isInteger(input.months) || input.months < 1 || input.months > 60) {
+        throw new BadRequestException('months must be an integer between 1 and 60');
+      }
+      endsAt = new Date(now);
+      endsAt.setMonth(endsAt.getMonth() + input.months);
+      plan = input.months === 12 ? 'yearly' : input.months === 1 ? 'monthly' : 'custom';
+    } else if (input.endsAt !== undefined) {
+      endsAt = new Date(input.endsAt);
+      if (Number.isNaN(endsAt.getTime())) {
+        throw new BadRequestException('endsAt must be a valid ISO date');
+      }
+      plan = 'custom';
+    } else {
+      throw new BadRequestException('Provide months or endsAt');
+    }
+
+    const row = await runWithTenant(
+      { tenantId, bypass: false, actor: actor ?? 'superadmin' },
+      () =>
+        this.prisma.tenantSubscription.upsert({
+          where: { tenantId },
+          create: { tenantId, plan, startsAt, endsAt, updatedBy: actor ?? null },
+          update: { plan, startsAt, endsAt, updatedBy: actor ?? null },
+        }),
+    );
+
+    await this.cache.del(this.cacheKey(tenantId));
+    this.logger.log(
+      `Subscription for factory ${tenantId} set to ${plan} until ${endsAt.toISOString()} by ${actor ?? 'unknown'}`,
+    );
+
+    const view = this.subscriptionViewFor(row, new Date());
+    if (!view) throw new BadRequestException('Could not read back subscription');
+    return view;
   }
 
   // ── per-admin entitlements ─────────────────────────────────────────────

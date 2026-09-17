@@ -89,6 +89,7 @@ model Tenant {
   webhookEndpoints                WebhookEndpoint[]
   accountMappings                 AccountMapping[]
   entitlement                     TenantEntitlement?
+  subscription                    TenantSubscription?
 
   @@index([status])
   @@map("tenants")
@@ -143,6 +144,35 @@ model UserEntitlement {
   updatedAt DateTime @updatedAt
 
   @@map("user_entitlements")
+}
+
+/**
+ * Time-boxed subscription of one factory: plan + window.
+ *
+ * Enforcement lives in EntitlementsService.effectiveFactoryPages: while a row
+ * exists and now is past endsAt, the factory holds NOTHING — sidebar modules
+ * vanish and the API 403s, leaving only the always-available routes. A
+ * factory with NO row keeps the legacy behaviour (fully entitled), so this
+ * migration takes nothing away from existing factories: nothing changes until
+ * the Super Admin actually sets a subscription.
+ */
+model TenantSubscription {
+  id        String   @id @default(uuid()) @db.Uuid
+  tenantId  String   @unique @db.Uuid
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  /// monthly | yearly | custom
+  plan     String
+  startsAt DateTime
+  endsAt   DateTime
+
+  updatedBy String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([endsAt])
+  @@map("tenant_subscriptions")
 }
 
 model Role {

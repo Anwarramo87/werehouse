@@ -81,6 +81,7 @@ export const TENANT_SCOPED_MODELS: Record<string, true> = {
   accountMapping: true,
   tenantEntitlement: true,
   userEntitlement: true,
+  tenantSubscription: true,
 };
 
 export function isTenantScoped(model?: string): boolean {
