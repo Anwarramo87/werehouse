@@ -28,6 +28,11 @@ export interface TenantEntitlementView {
 
 export type SubscriptionStatus = 'active' | 'expired' | 'none';
 
+/** Plan tag for lifetime access — never expires within any real horizon. */
+export const LIFETIME_PLAN = 'lifetime';
+/** Far-future end stored for lifetime rows (displayed as "دائم", never counted down). */
+export const LIFETIME_ENDS_AT = '2100-01-01T00:00:00.000Z';
+
 export interface SubscriptionView {
   plan: string;
   startsAt: string;
@@ -35,6 +40,8 @@ export interface SubscriptionView {
   status: SubscriptionStatus;
   /** Whole days left while active, 0 or negative once past the end. */
   daysLeft: number;
+  /** True for lifetime rows — the UI shows "دائم" instead of a countdown. */
+  permanent: boolean;
 }
 
 @Injectable()
@@ -84,7 +91,8 @@ export class EntitlementsService {
     now: Date = new Date(),
   ): SubscriptionView | null {
     if (!row) return null;
-    const active = now >= row.startsAt && now <= row.endsAt;
+    const permanent = row.plan === LIFETIME_PLAN;
+    const active = permanent || (now >= row.startsAt && now <= row.endsAt);
     const daysLeft = Math.floor((row.endsAt.getTime() - now.getTime()) / 86400000);
     return {
       plan: row.plan,
@@ -92,6 +100,7 @@ export class EntitlementsService {
       endsAt: row.endsAt.toISOString(),
       status: active ? 'active' : 'expired',
       daysLeft,
+      permanent,
     };
   }
 
@@ -373,7 +382,15 @@ export class EntitlementsService {
       }),
     );
 
-    return users;
+    // One admin's own subscription window (a missing row inherits the factory's,
+    // so unconfigured admins report the factory view). Cached per user, so this
+    // stays cheap for the handful of accounts a factory has.
+    return Promise.all(
+      users.map(async (user) => ({
+        ...user,
+        subscription: await this.getUserSubscription(user.id, tenantId),
+      })),
+    );
   }
 
   /** The full catalogue annotated with what this factory holds — what the UI renders. */
@@ -483,13 +500,15 @@ export class EntitlementsService {
 
   /**
    * (Re)starts a factory's subscription. months=1 → شهر, months=12 → سنة,
-   * starting now; or pass an explicit endsAt ISO date. Writes are audited by
-   * the controller. The factory entitlement cache is dropped so expiry and
-   * renewal take effect on the next request (≤30s via TTL otherwise).
+   * starting now; or pass an explicit endsAt ISO date; or permanent=true for
+   * lifetime access (plan=lifetime, ends 2100 — never expires in practice).
+   * Writes are audited by the controller. The factory entitlement cache is
+   * dropped so expiry and renewal take effect on the next request (≤30s via
+   * TTL otherwise).
    */
   async setSubscription(
     tenantId: string,
-    input: { months?: number; endsAt?: string },
+    input: { months?: number; endsAt?: string; permanent?: boolean },
     actor?: string,
   ): Promise<SubscriptionView> {
     const now = new Date();
@@ -497,7 +516,10 @@ export class EntitlementsService {
     let endsAt: Date;
     let plan: string;
 
-    if (input.months !== undefined) {
+    if (input.permanent) {
+      endsAt = new Date(LIFETIME_ENDS_AT);
+      plan = LIFETIME_PLAN;
+    } else if (input.months !== undefined) {
       if (!Number.isInteger(input.months) || input.months < 1 || input.months > 60) {
         throw new BadRequestException('months must be an integer between 1 and 60');
       }
@@ -511,7 +533,7 @@ export class EntitlementsService {
       }
       plan = 'custom';
     } else {
-      throw new BadRequestException('Provide months or endsAt');
+      throw new BadRequestException('Provide months, endsAt, or permanent');
     }
 
     const row = await runWithTenant(
@@ -547,6 +569,10 @@ export class EntitlementsService {
     return `user-entitlements:${userId}`;
   }
 
+  private userSubscriptionCacheKey(userId: string): string {
+    return `user-subscription:${userId}`;
+  }
+
   /**
    * The pages one admin account effectively holds — independent per-admin.
    * A missing row (first time) inherits the factory grant for backward
@@ -580,16 +606,24 @@ export class EntitlementsService {
     });
 
     // No per-admin row yet → inherit factory (first-time default)
+    let pages: string[];
     if (!row) {
       const factory = await this.enabledPagesFor(tenantId);
-      await this.cache.setJson(this.userCacheKey(userId), [...factory], CACHE_TTL_SECONDS);
-      return factory;
+      pages = [...factory];
+    } else {
+      // Has a row → this admin's own list is the truth (no factory clamp)
+      pages = row.enabledPages;
     }
 
-    // Has a row → this admin's own list is the truth (no factory clamp)
-    const effective = new Set(row.enabledPages);
-    await this.cache.setJson(this.userCacheKey(userId), [...effective], CACHE_TTL_SECONDS);
-    return effective;
+    // An EXPIRED per-admin subscription window locks ONE account out (pages =
+    // nothing) even while the factory stays open — the exact counterpart of the
+    // factory-level expiry check in enabledPagesFor. No row anywhere means
+    // "nothing configured", which stays fully open as it always has been.
+    const active = await this.subscriptionWindowActiveForUser(userId, tenantId);
+    const effective = active ? pages : [];
+
+    await this.cache.setJson(this.userCacheKey(userId), effective, CACHE_TTL_SECONDS);
+    return new Set(effective);
   }
 
   /** Whether one admin account may reach one page. */
@@ -705,5 +739,139 @@ export class EntitlementsService {
     else current.delete(pageKey);
 
     return this.setUserPages(tenantId, userId, [...current], actor);
+  }
+
+  /**
+   * The subscription row of one admin, if the Super Admin ever set one.
+   * Missing table (migration not deployed) reads as "no row" — the same
+   * fail-open rule as the other entitlement tables.
+   */
+  private async userSubscriptionRowFor(userId: string): Promise<{
+    plan: string;
+    startsAt: Date;
+    endsAt: Date;
+  } | null> {
+    try {
+      return await runUnscoped('user-subscription-read', () =>
+        this.prisma.userSubscription.findUnique({
+          where: { userId },
+          select: { plan: true, startsAt: true, endsAt: true },
+        }),
+      );
+    } catch (error) {
+      if (this.isMissingTable(error)) {
+        this.logger.warn(
+          'user_subscriptions is missing — run `prisma migrate deploy`. ' +
+            'Every admin inherits the factory subscription until it exists.',
+        );
+        return null;
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * ONE admin's own subscription window. A missing user row falls back to the
+   * factory's subscription, mirror image of how enabledPagesForUser inherits
+   * the factory page grant — so a factory that never configured per-admin
+   * windows keeps behaving exactly as before.
+   */
+  async getUserSubscription(
+    userId: string,
+    tenantId: string,
+  ): Promise<SubscriptionView | null> {
+    const cached = await this.cache.getJson<SubscriptionView>(
+      this.userSubscriptionCacheKey(userId),
+    );
+    if (cached) return cached;
+
+    const row = await this.userSubscriptionRowFor(userId);
+    const view = row
+      ? this.subscriptionViewFor(row)
+      : await this.getSubscription(tenantId);
+
+    if (view) {
+      await this.cache.setJson(this.userSubscriptionCacheKey(userId), view, CACHE_TTL_SECONDS);
+    }
+    return view;
+  }
+
+  /**
+   * Whether ONE admin's own time window is still open. No row anywhere (neither
+   * a user row nor a factory row) reads as open — "nothing configured" stays
+   * open exactly as it always has been; only a real, past endsAt locks out.
+   */
+  private async subscriptionWindowActiveForUser(
+    userId: string,
+    tenantId: string,
+  ): Promise<boolean> {
+    const view = await this.getUserSubscription(userId, tenantId);
+    if (view === null) return true;
+    return view.status === 'active';
+  }
+
+  /**
+   * (Re)starts ONE admin's subscription window. Same shape as the factory-level
+   * setSubscription: months=1 → شهر, months=12 → سنة, starting now; or an
+   * explicit endsAt ISO date; or permanent=true for lifetime access (plan
+   * =lifetime, ends 2100 — never expires in practice). Upserts one row per
+   * admin; a factory that never sets per-admin rows is untouched and keeps
+   * inheriting the factory subscription. Writes are audited by the controller.
+   * Both caches are dropped so expiry/renewal take effect on the next request.
+   */
+  async setUserSubscription(
+    tenantId: string,
+    userId: string,
+    input: { months?: number; endsAt?: string; permanent?: boolean },
+    actor?: string,
+  ): Promise<SubscriptionView> {
+    const now = new Date();
+    let startsAt = now;
+    let endsAt: Date;
+    let plan: string;
+
+    if (input.permanent) {
+      endsAt = new Date(LIFETIME_ENDS_AT);
+      plan = LIFETIME_PLAN;
+    } else if (input.months !== undefined) {
+      if (!Number.isInteger(input.months) || input.months < 1 || input.months > 60) {
+        throw new BadRequestException('months must be an integer between 1 and 60');
+      }
+      endsAt = new Date(now);
+      endsAt.setMonth(endsAt.getMonth() + input.months);
+      plan = input.months === 12 ? 'yearly' : input.months === 1 ? 'monthly' : 'custom';
+    } else if (input.endsAt !== undefined) {
+      endsAt = new Date(input.endsAt);
+      if (Number.isNaN(endsAt.getTime())) {
+        throw new BadRequestException('endsAt must be a valid ISO date');
+      }
+      plan = 'custom';
+    } else {
+      throw new BadRequestException('Provide months, endsAt, or permanent');
+    }
+
+    await runWithTenant(
+      { tenantId, bypass: false, actor: actor ?? 'superadmin' },
+      () =>
+        this.prisma.userSubscription.upsert({
+          where: { userId },
+          create: { userId, plan, startsAt, endsAt, updatedBy: actor ?? null },
+          update: { plan, startsAt, endsAt, updatedBy: actor ?? null },
+        }),
+    );
+
+    // Both keys drop: the user's effective page set (an expired/renewed window
+    // flips this account between locked and open) and the window view itself.
+    await this.cache.del(this.userCacheKey(userId));
+    await this.cache.del(this.userSubscriptionCacheKey(userId));
+    this.logger.log(
+      `Subscription for admin ${userId} in factory ${tenantId} set to ${plan} ` +
+        `until ${endsAt.toISOString()} by ${actor ?? 'unknown'}`,
+    );
+
+    const row = await this.userSubscriptionRowFor(userId);
+    const view = this.subscriptionViewFor(row, new Date());
+    if (!view) throw new BadRequestException('Could not read back subscription');
+    return view;
   }
 }

@@ -21,6 +21,7 @@ import { CurrentUser } from '../decorators/current-user.decorator';
 import { JwtAuthGuard } from '../guards/jwt-auth.guard';
 import { SuperAdminGuard } from '../guards/superadmin.guard';
 import { SetSubscriptionDto } from './dto/set-subscription.dto';
+import { SetUserSubscriptionDto } from './dto/set-user-subscription.dto';
 import { AuthenticatedUser } from '../types/authenticated-user.types';
 import { AuditService } from '../services/audit.service';
 import { ALWAYS_AVAILABLE_ROUTES, MODULES } from './catalogue';
@@ -298,7 +299,7 @@ export class TenantEntitlementsController {
   ) {
     const result = await this.entitlements.setSubscription(
       tenantId,
-      { months: dto.months, endsAt: dto.endsAt },
+      { months: dto.months, endsAt: dto.endsAt, permanent: dto.permanent },
       user?.username,
     );
     this.audit.log(
@@ -420,6 +421,45 @@ export class TenantEntitlementsController {
         targetId: userId,
         targetTenantId: tenantId,
         metadata: { page: dto.key, enabled: dto.enabled },
+      },
+      req,
+    );
+    return result;
+  }
+
+  @Get(':tenantId/users/:userId/subscription')
+  @ApiOperation({ summary: "One admin's own subscription window (super admin)" })
+  userSubscription(
+    @Param('tenantId', ParseUUIDPipe) tenantId: string,
+    @Param('userId', ParseUUIDPipe) userId: string,
+  ) {
+    return this.entitlements.getUserSubscription(userId, tenantId);
+  }
+
+  @Put(':tenantId/users/:userId/subscription')
+  @ApiOperation({ summary: 'Start/extend one admin subscription (super admin)' })
+  async setUserSubscription(
+    @Param('tenantId', ParseUUIDPipe) tenantId: string,
+    @Param('userId', ParseUUIDPipe) userId: string,
+    @Body() dto: SetUserSubscriptionDto,
+    @CurrentUser() user: AuthenticatedUser,
+    @Req() req: Request,
+  ) {
+    const result = await this.entitlements.setUserSubscription(
+      tenantId,
+      userId,
+      { months: dto.months, endsAt: dto.endsAt, permanent: dto.permanent },
+      user?.username,
+    );
+    this.audit.log(
+      {
+        action: 'subscription.user.set',
+        actorId: user?.userId,
+        actorUsername: user?.username,
+        targetType: 'user',
+        targetId: userId,
+        targetTenantId: tenantId,
+        metadata: { plan: result.plan, endsAt: result.endsAt },
       },
       req,
     );

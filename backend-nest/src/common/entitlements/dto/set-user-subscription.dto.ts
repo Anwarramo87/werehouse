@@ -1,6 +1,6 @@
 import { IsBoolean, IsDateString, IsInt, IsOptional, Max, Min } from 'class-validator';
 
-export class SetSubscriptionDto {
+export class SetUserSubscriptionDto {
   /** Whole months from now, e.g. 1 = شهر, 12 = سنة. Restarts the window now. */
   @IsOptional()
   @IsInt()

@@ -150,7 +150,7 @@ model UserEntitlement {
  * Time-boxed subscription of one factory: plan + window.
  *
  * Enforcement lives in EntitlementsService.effectiveFactoryPages: while a row
- * exists and now is past endsAt, the factory holds NOTHING — sidebar modules
+ * exists and now is past endsAt, the factory holds NOTHING â€” sidebar modules
  * vanish and the API 403s, leaving only the always-available routes. A
  * factory with NO row keeps the legacy behaviour (fully entitled), so this
  * migration takes nothing away from existing factories: nothing changes until
@@ -190,8 +190,8 @@ model Role {
 
 model User {
   id                   String                @id @default(uuid()) @db.Uuid
-  tenantId  String?  @db.Uuid
-  tenant    Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tenantId             String?               @db.Uuid
+  tenant               Tenant?               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   username             String                @unique
   email                String?               @unique
   passwordHash         String
@@ -201,12 +201,14 @@ model User {
   failedLoginAttempts  Int                   @default(0)
   lockoutUntil         DateTime?
   lastLogin            DateTime?
-  photo                String? // صورة المستخدم (data URL أو رابط)
+  photo                String?
   createdAt            DateTime              @default(now())
   updatedAt            DateTime              @updatedAt
   employee             Employee?
   biometricCredentials BiometricCredential[]
   entitlement          UserEntitlement? // per-admin pages this account may use
+  subscription         UserSubscription? // per-admin time window (this account alone)
+
 
   // Referenced by tenant-composite foreign keys: Postgres requires the
 
@@ -281,7 +283,7 @@ model Employee {
   gracePeriodMinutes        Int                   @default(5)
   insuranceAmount           Decimal?              @db.Decimal(14, 2)
   transportAllowanceOverride Decimal?             @db.Decimal(14, 2)
-  photo                     String? // صورة الموظف (data URL أو رابط)
+  photo                     String? // ØµÙˆØ±Ø© Ø§Ù„Ù…ÙˆØ¸Ù (data URL Ø£Ùˆ Ø±Ø§Ø¨Ø·)
   attendanceRecords         AttendanceRecord[]
   dailyAttendanceLogs       DailyAttendanceLog[]  @relation("DailyAttendanceLogs")
   advances                  EmployeeAdvance[]
@@ -361,10 +363,10 @@ model LeaveRequest {
   isPaid     Boolean            @default(false)
   startDate  DateTime           @db.Date
   endDate    DateTime           @db.Date
-  // حقول الإجازة الساعية
+  // Ø­Ù‚ÙˆÙ„ Ø§Ù„Ø¥Ø¬Ø§Ø²Ø© Ø§Ù„Ø³Ø§Ø¹ÙŠØ©
   isHourly   Boolean            @default(false)
-  startTime  String? // HH:mm — وقت بداية الإجازة الساعية
-  endTime    String? // HH:mm — وقت نهاية الإجازة الساعية
+  startTime  String? // HH:mm â€” ÙˆÙ‚Øª Ø¨Ø¯Ø§ÙŠØ© Ø§Ù„Ø¥Ø¬Ø§Ø²Ø© Ø§Ù„Ø³Ø§Ø¹ÙŠØ©
+  endTime    String? // HH:mm â€” ÙˆÙ‚Øª Ù†Ù‡Ø§ÙŠØ© Ø§Ù„Ø¥Ø¬Ø§Ø²Ø© Ø§Ù„Ø³Ø§Ø¹ÙŠØ©
   reason     String?
   notes      String?
   createdAt  DateTime           @default(now())
@@ -436,18 +438,18 @@ model AttendanceRecord {
 }
 
 // ---------------------------------------------------------------------------
-// Daily Attendance Logs — Event-based logging for audit trail & biometric integration
+// Daily Attendance Logs â€” Event-based logging for audit trail & biometric integration
 // ---------------------------------------------------------------------------
 enum DailyRecordType {
-  ABSENCE // غياب
-  DELAY_MINUTES // تأخير بالدقائق
-  OVERTIME_MINUTES // إضافي بالدقائق
-  PAID_LEAVE // إجازة مدفوعة
-  UNPAID_LEAVE // إجازة غير مدفوعة
-  SICK_LEAVE // إجازة مرضية
-  ADMIN_LEAVE // إجازة إدارية
-  DEATH_LEAVE // إجازة وفاة
-  EARLY_LEAVE_MINUTES // خروج مبكر بالدقائق
+  ABSENCE // ØºÙŠØ§Ø¨
+  DELAY_MINUTES // ØªØ£Ø®ÙŠØ± Ø¨Ø§Ù„Ø¯Ù‚Ø§Ø¦Ù‚
+  OVERTIME_MINUTES // Ø¥Ø¶Ø§ÙÙŠ Ø¨Ø§Ù„Ø¯Ù‚Ø§Ø¦Ù‚
+  PAID_LEAVE // Ø¥Ø¬Ø§Ø²Ø© Ù…Ø¯ÙÙˆØ¹Ø©
+  UNPAID_LEAVE // Ø¥Ø¬Ø§Ø²Ø© ØºÙŠØ± Ù…Ø¯ÙÙˆØ¹Ø©
+  SICK_LEAVE // Ø¥Ø¬Ø§Ø²Ø© Ù…Ø±Ø¶ÙŠØ©
+  ADMIN_LEAVE // Ø¥Ø¬Ø§Ø²Ø© Ø¥Ø¯Ø§Ø±ÙŠØ©
+  DEATH_LEAVE // Ø¥Ø¬Ø§Ø²Ø© ÙˆÙØ§Ø©
+  EARLY_LEAVE_MINUTES // Ø®Ø±ÙˆØ¬ Ù…Ø¨ÙƒØ± Ø¨Ø§Ù„Ø¯Ù‚Ø§Ø¦Ù‚
 }
 
 model DailyAttendanceLog {
@@ -487,25 +489,25 @@ model Product {
   costPrice    Decimal  @db.Decimal(12, 2)
   reorderLevel Int      @default(10)
   status       String   @default("active")
-  unit         String   @default("قطعة")
-  photo        String? // صورة المنتج (data URL أو رابط)
+  unit         String   @default("Ù‚Ø·Ø¹Ø©")
+  photo        String? // ØµÙˆØ±Ø© Ø§Ù„Ù…Ù†ØªØ¬ (data URL Ø£Ùˆ Ø±Ø§Ø¨Ø·)
 
-  /// باركود المنتج (EAN13 / Code128) — يُمسح بالجهاز المحمول
+  /// Ø¨Ø§Ø±ÙƒÙˆØ¯ Ø§Ù„Ù…Ù†ØªØ¬ (EAN13 / Code128) â€” ÙŠÙÙ…Ø³Ø­ Ø¨Ø§Ù„Ø¬Ù‡Ø§Ø² Ø§Ù„Ù…Ø­Ù…ÙˆÙ„
   barcode String?
 
-  /// هل يُتتبَّع هذا المنتج بالدفعات وتواريخ الصلاحية؟
-  /// حين يكون true تصبح بيانات الدفعة إلزامية عند كل إدخال، ويُطبَّق FEFO عند الإخراج.
+  /// Ù‡Ù„ ÙŠÙØªØªØ¨ÙŽÙ‘Ø¹ Ù‡Ø°Ø§ Ø§Ù„Ù…Ù†ØªØ¬ Ø¨Ø§Ù„Ø¯ÙØ¹Ø§Øª ÙˆØªÙˆØ§Ø±ÙŠØ® Ø§Ù„ØµÙ„Ø§Ø­ÙŠØ©ØŸ
+  /// Ø­ÙŠÙ† ÙŠÙƒÙˆÙ† true ØªØµØ¨Ø­ Ø¨ÙŠØ§Ù†Ø§Øª Ø§Ù„Ø¯ÙØ¹Ø© Ø¥Ù„Ø²Ø§Ù…ÙŠØ© Ø¹Ù†Ø¯ ÙƒÙ„ Ø¥Ø¯Ø®Ø§Ù„ØŒ ÙˆÙŠÙØ·Ø¨ÙŽÙ‘Ù‚ FEFO Ø¹Ù†Ø¯ Ø§Ù„Ø¥Ø®Ø±Ø§Ø¬.
   batchTracked Boolean @default(false)
-  /// العمر الافتراضي بالأيام — يُشتق منه تاريخ الصلاحية إن لم يُدخَل يدوياً
+  /// Ø§Ù„Ø¹Ù…Ø± Ø§Ù„Ø§ÙØªØ±Ø§Ø¶ÙŠ Ø¨Ø§Ù„Ø£ÙŠØ§Ù… â€” ÙŠÙØ´ØªÙ‚ Ù…Ù†Ù‡ ØªØ§Ø±ÙŠØ® Ø§Ù„ØµÙ„Ø§Ø­ÙŠØ© Ø¥Ù† Ù„Ù… ÙŠÙØ¯Ø®ÙŽÙ„ ÙŠØ¯ÙˆÙŠØ§Ù‹
   shelfLifeDays Int?
 
-  /// أبعاد ووزن الوحدة — يستخدمها محرّك اقتراح التخزين وحساب أوزان الطرود
+  /// Ø£Ø¨Ø¹Ø§Ø¯ ÙˆÙˆØ²Ù† Ø§Ù„ÙˆØ­Ø¯Ø© â€” ÙŠØ³ØªØ®Ø¯Ù…Ù‡Ø§ Ù…Ø­Ø±Ù‘Ùƒ Ø§Ù‚ØªØ±Ø§Ø­ Ø§Ù„ØªØ®Ø²ÙŠÙ† ÙˆØ­Ø³Ø§Ø¨ Ø£ÙˆØ²Ø§Ù† Ø§Ù„Ø·Ø±ÙˆØ¯
   weightKg Decimal? @db.Decimal(10, 3)
   volumeM3 Decimal? @db.Decimal(10, 4)
 
-  /// الخانة الافتراضية للتخزين (Fixed slotting)
+  /// Ø§Ù„Ø®Ø§Ù†Ø© Ø§Ù„Ø§ÙØªØ±Ø§Ø¶ÙŠØ© Ù„Ù„ØªØ®Ø²ÙŠÙ† (Fixed slotting)
   defaultBinCode String?
-  /// تصنيف ABC حسب معدل الدوران — يقود أولوية الجرد الدوري وقرب الخانة من الشحن
+  /// ØªØµÙ†ÙŠÙ ABC Ø­Ø³Ø¨ Ù…Ø¹Ø¯Ù„ Ø§Ù„Ø¯ÙˆØ±Ø§Ù† â€” ÙŠÙ‚ÙˆØ¯ Ø£ÙˆÙ„ÙˆÙŠØ© Ø§Ù„Ø¬Ø±Ø¯ Ø§Ù„Ø¯ÙˆØ±ÙŠ ÙˆÙ‚Ø±Ø¨ Ø§Ù„Ø®Ø§Ù†Ø© Ù…Ù† Ø§Ù„Ø´Ø­Ù†
   abcClass String?
 
   costingMethod CostingMethod @default(WEIGHTED_AVERAGE)
@@ -671,7 +673,7 @@ model PurchaseOrderItem {
   unitCost         Decimal           @db.Decimal(12, 2)
   receivedQuantity Int               @default(0)
 
-  /// خصم وضريبة على مستوى البند — تُرحَّل إلى فاتورة الشراء عند إنشائها من الأمر
+  /// Ø®ØµÙ… ÙˆØ¶Ø±ÙŠØ¨Ø© Ø¹Ù„Ù‰ Ù…Ø³ØªÙˆÙ‰ Ø§Ù„Ø¨Ù†Ø¯ â€” ØªÙØ±Ø­ÙŽÙ‘Ù„ Ø¥Ù„Ù‰ ÙØ§ØªÙˆØ±Ø© Ø§Ù„Ø´Ø±Ø§Ø¡ Ø¹Ù†Ø¯ Ø¥Ù†Ø´Ø§Ø¦Ù‡Ø§ Ù…Ù† Ø§Ù„Ø£Ù…Ø±
   discountPercent Decimal @default(0) @db.Decimal(6, 3)
   taxRate         Decimal @default(0) @db.Decimal(6, 3)
   createdAt        DateTime          @default(now())
@@ -730,13 +732,13 @@ model GoodsReceiptItem {
   location            String
   unitCost            Decimal           @db.Decimal(12, 2)
 
-  /// بيانات الدفعة الملتقطة عند الاستلام — تُنشئ ProductBatch مباشرة
+  /// Ø¨ÙŠØ§Ù†Ø§Øª Ø§Ù„Ø¯ÙØ¹Ø© Ø§Ù„Ù…Ù„ØªÙ‚Ø·Ø© Ø¹Ù†Ø¯ Ø§Ù„Ø§Ø³ØªÙ„Ø§Ù… â€” ØªÙÙ†Ø´Ø¦ ProductBatch Ù…Ø¨Ø§Ø´Ø±Ø©
   batchId        String?   @db.Uuid
   batchNumber    String?
   productionDate DateTime? @db.Date
   expiryDate     DateTime? @db.Date
 
-  /// فحص الجودة: البضاعة تدخل الحجر حتى تُعتمد حين يكون الفحص مطلوباً
+  /// ÙØ­Øµ Ø§Ù„Ø¬ÙˆØ¯Ø©: Ø§Ù„Ø¨Ø¶Ø§Ø¹Ø© ØªØ¯Ø®Ù„ Ø§Ù„Ø­Ø¬Ø± Ø­ØªÙ‰ ØªÙØ¹ØªÙ…Ø¯ Ø­ÙŠÙ† ÙŠÙƒÙˆÙ† Ø§Ù„ÙØ­Øµ Ù…Ø·Ù„ÙˆØ¨Ø§Ù‹
   qcStatus  QcStatus  @default(PASSED)
   qcNotes   String?
   qcBy      String?   @db.Uuid
@@ -766,11 +768,11 @@ model Customer {
   taxNumber String?
   status    String   @default("active") // active | inactive
 
-  /// فئة التسعير المطبَّقة على هذا العميل (جملة / مفرق / خاص)
+  /// ÙØ¦Ø© Ø§Ù„ØªØ³Ø¹ÙŠØ± Ø§Ù„Ù…Ø·Ø¨ÙŽÙ‘Ù‚Ø© Ø¹Ù„Ù‰ Ù‡Ø°Ø§ Ø§Ù„Ø¹Ù…ÙŠÙ„ (Ø¬Ù…Ù„Ø© / Ù…ÙØ±Ù‚ / Ø®Ø§Øµ)
   priceTierId String?    @db.Uuid
   priceTier   PriceTier? @relation(fields: [priceTierId], references: [id], onDelete: SetNull)
 
-  /// سقف الائتمان — يمنع ترحيل فاتورة تتجاوزه
+  /// Ø³Ù‚Ù Ø§Ù„Ø§Ø¦ØªÙ…Ø§Ù† â€” ÙŠÙ…Ù†Ø¹ ØªØ±Ø­ÙŠÙ„ ÙØ§ØªÙˆØ±Ø© ØªØªØ¬Ø§ÙˆØ²Ù‡
   creditLimit Decimal @default(0) @db.Decimal(14, 2)
 
   createdAt DateTime @default(now())
@@ -833,14 +835,14 @@ model SalesOrderItem {
   quantity      Int
   unitPrice     Decimal    @db.Decimal(12, 2)
 
-  /// خصم وضريبة على مستوى البند — يحسبهما محرّك التسعير من فئة العميل
+  /// Ø®ØµÙ… ÙˆØ¶Ø±ÙŠØ¨Ø© Ø¹Ù„Ù‰ Ù…Ø³ØªÙˆÙ‰ Ø§Ù„Ø¨Ù†Ø¯ â€” ÙŠØ­Ø³Ø¨Ù‡Ù…Ø§ Ù…Ø­Ø±Ù‘Ùƒ Ø§Ù„ØªØ³Ø¹ÙŠØ± Ù…Ù† ÙØ¦Ø© Ø§Ù„Ø¹Ù…ÙŠÙ„
   discountPercent Decimal @default(0) @db.Decimal(6, 3)
   discountAmount  Decimal @default(0) @db.Decimal(14, 2)
   taxRate         Decimal @default(0) @db.Decimal(6, 3)
   taxAmount       Decimal @default(0) @db.Decimal(14, 2)
   lineTotal       Decimal @default(0) @db.Decimal(14, 2)
 
-  /// الدفعة المحجوزة لهذا البند — يقترحها FEFO عند تأكيد الطلب
+  /// Ø§Ù„Ø¯ÙØ¹Ø© Ø§Ù„Ù…Ø­Ø¬ÙˆØ²Ø© Ù„Ù‡Ø°Ø§ Ø§Ù„Ø¨Ù†Ø¯ â€” ÙŠÙ‚ØªØ±Ø­Ù‡Ø§ FEFO Ø¹Ù†Ø¯ ØªØ£ÙƒÙŠØ¯ Ø§Ù„Ø·Ù„Ø¨
   batchId String? @db.Uuid
 
   location      String     @default("WH-A")
@@ -913,12 +915,12 @@ model JournalEntry {
   entryDate   DateTime            @db.Date
   description String
 
-  /// من أين جاء القيد: purchase_invoice | sales_invoice | cycle_count | manual
+  /// Ù…Ù† Ø£ÙŠÙ† Ø¬Ø§Ø¡ Ø§Ù„Ù‚ÙŠØ¯: purchase_invoice | sales_invoice | cycle_count | manual
   sourceType  String?
   sourceId    String?             @db.Uuid
-  /// مفتاح فريد يمنع ترحيل نفس الحدث مرتين: مثل purchase_invoice:post:<id>
+  /// Ù…ÙØªØ§Ø­ ÙØ±ÙŠØ¯ ÙŠÙ…Ù†Ø¹ ØªØ±Ø­ÙŠÙ„ Ù†ÙØ³ Ø§Ù„Ø­Ø¯Ø« Ù…Ø±ØªÙŠÙ†: Ù…Ø«Ù„ purchase_invoice:post:<id>
   sourceRef   String?
-  /// true إن أنشأه النظام تلقائياً لا مستخدم يدوياً
+  /// true Ø¥Ù† Ø£Ù†Ø´Ø£Ù‡ Ø§Ù„Ù†Ø¸Ø§Ù… ØªÙ„Ù‚Ø§Ø¦ÙŠØ§Ù‹ Ù„Ø§ Ù…Ø³ØªØ®Ø¯Ù… ÙŠØ¯ÙˆÙŠØ§Ù‹
   isAutomatic Boolean             @default(false)
 
   createdBy   String              @db.Uuid
@@ -1044,7 +1046,7 @@ model PayrollItem {
   netPayWithAdvance     Decimal  @default(0) @db.Decimal(14, 2)
   earlyLeaveMinutes     Int      @default(0)
   earlyLeaveDeduction   Decimal  @default(0) @db.Decimal(14, 2)
-  /** خصم اشتراك الباص — منفصل عن باقي الخصومات لعرضه بالأزرق */
+  /** Ø®ØµÙ… Ø§Ø´ØªØ±Ø§Ùƒ Ø§Ù„Ø¨Ø§Øµ â€” Ù…Ù†ÙØµÙ„ Ø¹Ù† Ø¨Ø§Ù‚ÙŠ Ø§Ù„Ø®ØµÙˆÙ…Ø§Øª Ù„Ø¹Ø±Ø¶Ù‡ Ø¨Ø§Ù„Ø£Ø²Ø±Ù‚ */
   busDeduction          Decimal  @default(0) @db.Decimal(14, 2)
   anomalies             String[] @default([])
   createdAt             DateTime @default(now())
@@ -1083,7 +1085,7 @@ model PayrollReceipt {
 }
 
 // ---------------------------------------------------------------------------
-// Payroll Inputs — per-employee values used in payroll formula
+// Payroll Inputs â€” per-employee values used in payroll formula
 // ---------------------------------------------------------------------------
 model PayrollInput {
   id                         String   @id @default(uuid()) @db.Uuid
@@ -1121,7 +1123,7 @@ model PayrollInput {
 }
 
 // ---------------------------------------------------------------------------
-// Salary & Occupation — base salary, allowances, incentives per employee
+// Salary & Occupation â€” base salary, allowances, incentives per employee
 // ---------------------------------------------------------------------------
 model EmployeeSalary {
   id         String   @id @default(uuid()) @db.Uuid
@@ -1132,13 +1134,13 @@ model EmployeeSalary {
 
   profession              String?
   baseSalary              Decimal  @db.Decimal(14, 2)
-  lumpSumSalary           Decimal  @default(0) @db.Decimal(14, 2) // الراتب المقطوع
-  livingAllowance         Decimal  @default(0) @db.Decimal(14, 2) // بدل غلاء معيشة
-  // البدلات المحسوبة تلقائياً من الفرق
-  responsibilityAllowance Decimal  @default(0) @db.Decimal(14, 2) // 50% من الفرق
-  extraEffortAllowance    Decimal  @default(0) @db.Decimal(14, 2) // 30% من الفرق
-  productionIncentive     Decimal  @default(0) @db.Decimal(14, 2) // 20% من الفرق
-  // التأمينات (تُدخل يدوياً)
+  lumpSumSalary           Decimal  @default(0) @db.Decimal(14, 2) // Ø§Ù„Ø±Ø§ØªØ¨ Ø§Ù„Ù…Ù‚Ø·ÙˆØ¹
+  livingAllowance         Decimal  @default(0) @db.Decimal(14, 2) // Ø¨Ø¯Ù„ ØºÙ„Ø§Ø¡ Ù…Ø¹ÙŠØ´Ø©
+  // Ø§Ù„Ø¨Ø¯Ù„Ø§Øª Ø§Ù„Ù…Ø­Ø³ÙˆØ¨Ø© ØªÙ„Ù‚Ø§Ø¦ÙŠØ§Ù‹ Ù…Ù† Ø§Ù„ÙØ±Ù‚
+  responsibilityAllowance Decimal  @default(0) @db.Decimal(14, 2) // 50% Ù…Ù† Ø§Ù„ÙØ±Ù‚
+  extraEffortAllowance    Decimal  @default(0) @db.Decimal(14, 2) // 30% Ù…Ù† Ø§Ù„ÙØ±Ù‚
+  productionIncentive     Decimal  @default(0) @db.Decimal(14, 2) // 20% Ù…Ù† Ø§Ù„ÙØ±Ù‚
+  // Ø§Ù„ØªØ£Ù…ÙŠÙ†Ø§Øª (ØªÙØ¯Ø®Ù„ ÙŠØ¯ÙˆÙŠØ§Ù‹)
   insuranceAmount         Decimal  @default(0) @db.Decimal(14, 2)
   transportAllowance      Decimal  @default(0) @db.Decimal(14, 2)
   createdAt               DateTime @default(now())
@@ -1151,7 +1153,7 @@ model EmployeeSalary {
 }
 
 // ---------------------------------------------------------------------------
-// Advances (سلف) — employee advance/loan records
+// Advances (Ø³Ù„Ù) â€” employee advance/loan records
 // ---------------------------------------------------------------------------
 model EmployeeAdvance {
   id                String   @id @default(uuid()) @db.Uuid
@@ -1165,7 +1167,7 @@ model EmployeeAdvance {
   remainingAmount   Decimal  @db.Decimal(14, 2)
   notes             String?
   issueDate         DateTime @default(now())
-  period            String? // "YYYY-MM" — auto-filled from issueDate
+  period            String? // "YYYY-MM" â€” auto-filled from issueDate
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
 
@@ -1198,7 +1200,7 @@ model DeletedRecordHistory {
 }
 
 // ---------------------------------------------------------------------------
-// Insurance (تامينات) — social insurance details per employee
+// Insurance (ØªØ§Ù…ÙŠÙ†Ø§Øª) â€” social insurance details per employee
 // ---------------------------------------------------------------------------
 model EmployeeInsurance {
   id                   String    @id @default(uuid()) @db.Uuid
@@ -1218,7 +1220,7 @@ model EmployeeInsurance {
 }
 
 // ---------------------------------------------------------------------------
-// Bonuses & Assistance — per-period bonus and assistance amounts
+// Bonuses & Assistance â€” per-period bonus and assistance amounts
 // ---------------------------------------------------------------------------
 model EmployeeBonus {
   id         String @id @default(uuid()) @db.Uuid
@@ -1242,7 +1244,7 @@ model EmployeeBonus {
 }
 
 // ---------------------------------------------------------------------------
-// Penalties & Deductions — restaurant/clothing/administrative penalties
+// Penalties & Deductions â€” restaurant/clothing/administrative penalties
 // ---------------------------------------------------------------------------
 model EmployeePenalty {
   id         String   @id @default(uuid()) @db.Uuid
@@ -1253,7 +1255,7 @@ model EmployeePenalty {
   amount     Decimal  @db.Decimal(14, 2)
   reason     String?
   issueDate  DateTime @default(now())
-  period     String? // "YYYY-MM" — auto-filled from issueDate
+  period     String? // "YYYY-MM" â€” auto-filled from issueDate
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
   employee   Employee? @relation(fields: [tenantId, employeeId], references: [tenantId, employeeId], onDelete: Cascade)
@@ -1343,21 +1345,21 @@ model RehireRecord {
 }
 
 // ---------------------------------------------------------------------------
-// Transportation — إدارة الباصات والنقل
+// Transportation â€” Ø¥Ø¯Ø§Ø±Ø© Ø§Ù„Ø¨Ø§ØµØ§Øª ÙˆØ§Ù„Ù†Ù‚Ù„
 // ---------------------------------------------------------------------------
 model Bus {
   id                   String         @id @default(uuid()) @db.Uuid
   tenantId  String?  @db.Uuid
   tenant    Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  busId                String // كود الباص
-  route                String // الخط / مسار الرحلة
-  plateNumber          String // رقم اللوحة
-  driverName           String // اسم السائق
-  driverPhone          String // رقم السائق (10 أرقام سورية)
-  totalCost            Decimal        @db.Decimal(14, 2) // التكلفة الإجمالية (ل.س)
-  companyDeductionPct  Decimal        @db.Decimal(5, 2) // حسم الشركة بالنسبة المئوية
-  capacity             Int // سعة الركاب
-  // نسبة خصم أجرة النقل التي تُحسم من راتب الموظف (نسبة 0-100)
+  busId                String // ÙƒÙˆØ¯ Ø§Ù„Ø¨Ø§Øµ
+  route                String // Ø§Ù„Ø®Ø· / Ù…Ø³Ø§Ø± Ø§Ù„Ø±Ø­Ù„Ø©
+  plateNumber          String // Ø±Ù‚Ù… Ø§Ù„Ù„ÙˆØ­Ø©
+  driverName           String // Ø§Ø³Ù… Ø§Ù„Ø³Ø§Ø¦Ù‚
+  driverPhone          String // Ø±Ù‚Ù… Ø§Ù„Ø³Ø§Ø¦Ù‚ (10 Ø£Ø±Ù‚Ø§Ù… Ø³ÙˆØ±ÙŠØ©)
+  totalCost            Decimal        @db.Decimal(14, 2) // Ø§Ù„ØªÙƒÙ„ÙØ© Ø§Ù„Ø¥Ø¬Ù…Ø§Ù„ÙŠØ© (Ù„.Ø³)
+  companyDeductionPct  Decimal        @db.Decimal(5, 2) // Ø­Ø³Ù… Ø§Ù„Ø´Ø±ÙƒØ© Ø¨Ø§Ù„Ù†Ø³Ø¨Ø© Ø§Ù„Ù…Ø¦ÙˆÙŠØ©
+  capacity             Int // Ø³Ø¹Ø© Ø§Ù„Ø±ÙƒØ§Ø¨
+  // Ù†Ø³Ø¨Ø© Ø®ØµÙ… Ø£Ø¬Ø±Ø© Ø§Ù„Ù†Ù‚Ù„ Ø§Ù„ØªÙŠ ØªÙØ­Ø³Ù… Ù…Ù† Ø±Ø§ØªØ¨ Ø§Ù„Ù…ÙˆØ¸Ù (Ù†Ø³Ø¨Ø© 0-100)
   employeeDeductionPct Decimal        @default(0) @db.Decimal(5, 2)
   status               String         @default("active") // active | inactive
   passengers           BusPassenger[]
@@ -1388,7 +1390,7 @@ model BusPassenger {
   employee         Employee?  @relation(fields: [tenantId, employeeId], references: [tenantId, employeeId], onDelete: Cascade)
   name             String? // optional passenger name for display
   subscriptionDate DateTime  @default(now()) @db.Date
-  terminationDate  DateTime? @db.Date // تاريخ انتهاء الاشتراك (عند الاستقالة/الإيقاف)
+  terminationDate  DateTime? @db.Date // ØªØ§Ø±ÙŠØ® Ø§Ù†ØªÙ‡Ø§Ø¡ Ø§Ù„Ø§Ø´ØªØ±Ø§Ùƒ (Ø¹Ù†Ø¯ Ø§Ù„Ø§Ø³ØªÙ‚Ø§Ù„Ø©/Ø§Ù„Ø¥ÙŠÙ‚Ø§Ù)
   status           String    @default("active") // active | inactive
   createdAt        DateTime  @default(now())
   updatedAt        DateTime  @updatedAt
@@ -1401,40 +1403,40 @@ model BusPassenger {
 }
 
 // =============================================================================
-// Audit Log — سجل التدقيق الكامل لكل العمليات الحساسة
+// Audit Log â€” Ø³Ø¬Ù„ Ø§Ù„ØªØ¯Ù‚ÙŠÙ‚ Ø§Ù„ÙƒØ§Ù…Ù„ Ù„ÙƒÙ„ Ø§Ù„Ø¹Ù…Ù„ÙŠØ§Øª Ø§Ù„Ø­Ø³Ø§Ø³Ø©
 // =============================================================================
 model AuditLog {
   id String @id @default(cuid())
   tenantId  String?  @db.Uuid
   tenant    Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
-  /// من نفّذ العملية (userId)
+  /// Ù…Ù† Ù†ÙÙ‘Ø° Ø§Ù„Ø¹Ù…Ù„ÙŠØ© (userId)
   actorId String?
 
-  /// اسم المستخدم المنفِّذ
+  /// Ø§Ø³Ù… Ø§Ù„Ù…Ø³ØªØ®Ø¯Ù… Ø§Ù„Ù…Ù†ÙÙÙ‘Ø°
   actorUsername String?
 
-  /// نوع العملية: user.create | employee.update | payroll.run | auth.login ...
+  /// Ù†ÙˆØ¹ Ø§Ù„Ø¹Ù…Ù„ÙŠØ©: user.create | employee.update | payroll.run | auth.login ...
   action String
 
-  /// نوع الكيان المتأثر: employee | user | payroll | attendance ...
+  /// Ù†ÙˆØ¹ Ø§Ù„ÙƒÙŠØ§Ù† Ø§Ù„Ù…ØªØ£Ø«Ø±: employee | user | payroll | attendance ...
   targetType String?
 
-  /// معرّف الكيان المتأثر
+  /// Ù…Ø¹Ø±Ù‘Ù Ø§Ù„ÙƒÙŠØ§Ù† Ø§Ù„Ù…ØªØ£Ø«Ø±
   targetId String?
 
-  /// عنوان الـ IP
+  /// Ø¹Ù†ÙˆØ§Ù† Ø§Ù„Ù€ IP
   ipAddress String?
 
-  /// User Agent (المتصفح أو التطبيق)
+  /// User Agent (Ø§Ù„Ù…ØªØµÙØ­ Ø£Ùˆ Ø§Ù„ØªØ·Ø¨ÙŠÙ‚)
   userAgent String?
 
-  /// بيانات إضافية (JSON حر)
+  /// Ø¨ÙŠØ§Ù†Ø§Øª Ø¥Ø¶Ø§ÙÙŠØ© (JSON Ø­Ø±)
   metadata Json?
 
   createdAt DateTime @default(now())
 
-  /// فهرس للبحث بالمستخدم والتاريخ
+  /// ÙÙ‡Ø±Ø³ Ù„Ù„Ø¨Ø­Ø« Ø¨Ø§Ù„Ù…Ø³ØªØ®Ø¯Ù… ÙˆØ§Ù„ØªØ§Ø±ÙŠØ®
   @@index([actorId, createdAt])
   @@index([targetType, createdAt])
   @@index([targetId])
@@ -1454,7 +1456,7 @@ enum NotificationType {
   RESIGNATION
   LATE
   ABSENT
-  // --- المخزون واللوجستيات ---
+  // --- Ø§Ù„Ù…Ø®Ø²ÙˆÙ† ÙˆØ§Ù„Ù„ÙˆØ¬Ø³ØªÙŠØ§Øª ---
   STOCK_LOW
   STOCK_OUT
   EXPIRY_WARNING
@@ -1485,30 +1487,30 @@ model Notification {
   type         NotificationType
   severity     NotificationSeverity @default(INFO)
 
-  /// عنوان الإشعار (بالعربية)
+  /// Ø¹Ù†ÙˆØ§Ù† Ø§Ù„Ø¥Ø´Ø¹Ø§Ø± (Ø¨Ø§Ù„Ø¹Ø±Ø¨ÙŠØ©)
   title        String
-  /// نص الإشعار (بالعربية)
+  /// Ù†Øµ Ø§Ù„Ø¥Ø´Ø¹Ø§Ø± (Ø¨Ø§Ù„Ø¹Ø±Ø¨ÙŠØ©)
   message      String
 
-  /// الموظف المرتبط بالحدث (إن وجد)
+  /// Ø§Ù„Ù…ÙˆØ¸Ù Ø§Ù„Ù…Ø±ØªØ¨Ø· Ø¨Ø§Ù„Ø­Ø¯Ø« (Ø¥Ù† ÙˆØ¬Ø¯)
   employeeId   String?
   employeeName String?
 
-  /// نوع الكيان المصدر: bonus | penalty | advance | leave | attendance | employee
+  /// Ù†ÙˆØ¹ Ø§Ù„ÙƒÙŠØ§Ù† Ø§Ù„Ù…ØµØ¯Ø±: bonus | penalty | advance | leave | attendance | employee
   entityType   String?
-  /// معرّف السجل المصدر
+  /// Ù…Ø¹Ø±Ù‘Ù Ø§Ù„Ø³Ø¬Ù„ Ø§Ù„Ù…ØµØ¯Ø±
   entityId     String?
 
-  /// بيانات إضافية حرة (JSON)
+  /// Ø¨ÙŠØ§Ù†Ø§Øª Ø¥Ø¶Ø§ÙÙŠØ© Ø­Ø±Ø© (JSON)
   metadata     Json?
 
-  /// مفتاح إلغاء التكرار (يستخدمه تنبيه الغياب لمنع التكرار في نفس اليوم)
+  /// Ù…ÙØªØ§Ø­ Ø¥Ù„ØºØ§Ø¡ Ø§Ù„ØªÙƒØ±Ø§Ø± (ÙŠØ³ØªØ®Ø¯Ù…Ù‡ ØªÙ†Ø¨ÙŠÙ‡ Ø§Ù„ØºÙŠØ§Ø¨ Ù„Ù…Ù†Ø¹ Ø§Ù„ØªÙƒØ±Ø§Ø± ÙÙŠ Ù†ÙØ³ Ø§Ù„ÙŠÙˆÙ…)
   dedupeKey    String?
 
   isRead       Boolean              @default(false)
   readAt       DateTime?
 
-  /// تجاهل نهائي (زر "تجاهل" لتنبيهات الغياب/التأخير)
+  /// ØªØ¬Ø§Ù‡Ù„ Ù†Ù‡Ø§Ø¦ÙŠ (Ø²Ø± "ØªØ¬Ø§Ù‡Ù„" Ù„ØªÙ†Ø¨ÙŠÙ‡Ø§Øª Ø§Ù„ØºÙŠØ§Ø¨/Ø§Ù„ØªØ£Ø®ÙŠØ±)
   isDismissed  Boolean              @default(false)
   dismissedAt  DateTime?
   dismissedBy  String?
@@ -1526,12 +1528,12 @@ model Notification {
 }
 
 // ===========================================================================
-// WMS EXTENSION — الدفعات، الصلاحية، الفواتير، التسعير، الجرد، التجهيز، الشحن
+// WMS EXTENSION â€” Ø§Ù„Ø¯ÙØ¹Ø§ØªØŒ Ø§Ù„ØµÙ„Ø§Ø­ÙŠØ©ØŒ Ø§Ù„ÙÙˆØ§ØªÙŠØ±ØŒ Ø§Ù„ØªØ³Ø¹ÙŠØ±ØŒ Ø§Ù„Ø¬Ø±Ø¯ØŒ Ø§Ù„ØªØ¬Ù‡ÙŠØ²ØŒ Ø§Ù„Ø´Ø­Ù†
 // ---------------------------------------------------------------------------
-// ملاحظة معمارية: الجداول الجديدة تستخدم مفاتيح أجنبية بسيطة على `id` (UUID
-// فريد عالمياً) بدل المفاتيح المركّبة (tenantId, id) المستخدمة في الجداول
-// القديمة. عزل المستأجرين محفوظ عبر tenant-extension الذي يحقن tenantId في
-// كل استعلام، و @@unique([tenantId, ...]) على المفاتيح التجارية.
+// Ù…Ù„Ø§Ø­Ø¸Ø© Ù…Ø¹Ù…Ø§Ø±ÙŠØ©: Ø§Ù„Ø¬Ø¯Ø§ÙˆÙ„ Ø§Ù„Ø¬Ø¯ÙŠØ¯Ø© ØªØ³ØªØ®Ø¯Ù… Ù…ÙØ§ØªÙŠØ­ Ø£Ø¬Ù†Ø¨ÙŠØ© Ø¨Ø³ÙŠØ·Ø© Ø¹Ù„Ù‰ `id` (UUID
+// ÙØ±ÙŠØ¯ Ø¹Ø§Ù„Ù…ÙŠØ§Ù‹) Ø¨Ø¯Ù„ Ø§Ù„Ù…ÙØ§ØªÙŠØ­ Ø§Ù„Ù…Ø±ÙƒÙ‘Ø¨Ø© (tenantId, id) Ø§Ù„Ù…Ø³ØªØ®Ø¯Ù…Ø© ÙÙŠ Ø§Ù„Ø¬Ø¯Ø§ÙˆÙ„
+// Ø§Ù„Ù‚Ø¯ÙŠÙ…Ø©. Ø¹Ø²Ù„ Ø§Ù„Ù…Ø³ØªØ£Ø¬Ø±ÙŠÙ† Ù…Ø­ÙÙˆØ¸ Ø¹Ø¨Ø± tenant-extension Ø§Ù„Ø°ÙŠ ÙŠØ­Ù‚Ù† tenantId ÙÙŠ
+// ÙƒÙ„ Ø§Ø³ØªØ¹Ù„Ø§Ù…ØŒ Ùˆ @@unique([tenantId, ...]) Ø¹Ù„Ù‰ Ø§Ù„Ù…ÙØ§ØªÙŠØ­ Ø§Ù„ØªØ¬Ø§Ø±ÙŠØ©.
 // ===========================================================================
 
 enum BatchStatus {
@@ -1652,10 +1654,10 @@ enum ZoneType {
   RETURNS
 }
 
-// --------------------------------------------------------------- 1. الدفعات
+// --------------------------------------------------------------- 1. Ø§Ù„Ø¯ÙØ¹Ø§Øª
 
-/// دفعة إنتاج (Batch / Lot) لمنتج، مع تاريخي الإنتاج والصلاحية.
-/// هذا هو الكيان الذي يجعل FIFO / FEFO والتنبيهات المبكرة ممكنة.
+/// Ø¯ÙØ¹Ø© Ø¥Ù†ØªØ§Ø¬ (Batch / Lot) Ù„Ù…Ù†ØªØ¬ØŒ Ù…Ø¹ ØªØ§Ø±ÙŠØ®ÙŠ Ø§Ù„Ø¥Ù†ØªØ§Ø¬ ÙˆØ§Ù„ØµÙ„Ø§Ø­ÙŠØ©.
+/// Ù‡Ø°Ø§ Ù‡Ùˆ Ø§Ù„ÙƒÙŠØ§Ù† Ø§Ù„Ø°ÙŠ ÙŠØ¬Ø¹Ù„ FIFO / FEFO ÙˆØ§Ù„ØªÙ†Ø¨ÙŠÙ‡Ø§Øª Ø§Ù„Ù…Ø¨ÙƒØ±Ø© Ù…Ù…ÙƒÙ†Ø©.
 model ProductBatch {
   id       String  @id @default(uuid()) @db.Uuid
   tenantId String? @db.Uuid
@@ -1664,23 +1666,23 @@ model ProductBatch {
   sku         String
   batchNumber String
 
-  /// تاريخ الإنتاج — إلزامي عند الاستلام للمنتجات المتتبَّعة بالدفعات
+  /// ØªØ§Ø±ÙŠØ® Ø§Ù„Ø¥Ù†ØªØ§Ø¬ â€” Ø¥Ù„Ø²Ø§Ù…ÙŠ Ø¹Ù†Ø¯ Ø§Ù„Ø§Ø³ØªÙ„Ø§Ù… Ù„Ù„Ù…Ù†ØªØ¬Ø§Øª Ø§Ù„Ù…ØªØªØ¨ÙŽÙ‘Ø¹Ø© Ø¨Ø§Ù„Ø¯ÙØ¹Ø§Øª
   productionDate DateTime? @db.Date
-  /// تاريخ انتهاء الصلاحية — عليه يقوم كامل منطق FEFO والتنبيهات
+  /// ØªØ§Ø±ÙŠØ® Ø§Ù†ØªÙ‡Ø§Ø¡ Ø§Ù„ØµÙ„Ø§Ø­ÙŠØ© â€” Ø¹Ù„ÙŠÙ‡ ÙŠÙ‚ÙˆÙ… ÙƒØ§Ù…Ù„ Ù…Ù†Ø·Ù‚ FEFO ÙˆØ§Ù„ØªÙ†Ø¨ÙŠÙ‡Ø§Øª
   expiryDate     DateTime? @db.Date
 
   status BatchStatus @default(AVAILABLE)
 
-  /// الكمية الأصلية عند الإدخال (لا تتغير — مرجع للتقارير)
+  /// Ø§Ù„ÙƒÙ…ÙŠØ© Ø§Ù„Ø£ØµÙ„ÙŠØ© Ø¹Ù†Ø¯ Ø§Ù„Ø¥Ø¯Ø®Ø§Ù„ (Ù„Ø§ ØªØªØºÙŠØ± â€” Ù…Ø±Ø¬Ø¹ Ù„Ù„ØªÙ‚Ø§Ø±ÙŠØ±)
   initialQuantity Int @default(0)
-  /// الكمية الحالية على اليد عبر كل المواقع
+  /// Ø§Ù„ÙƒÙ…ÙŠØ© Ø§Ù„Ø­Ø§Ù„ÙŠØ© Ø¹Ù„Ù‰ Ø§Ù„ÙŠØ¯ Ø¹Ø¨Ø± ÙƒÙ„ Ø§Ù„Ù…ÙˆØ§Ù‚Ø¹
   quantity        Int @default(0)
   reserved        Int @default(0)
 
-  /// تكلفة الوحدة لهذه الدفعة تحديداً (تشمل حصتها من المصاريف الملحقة)
+  /// ØªÙƒÙ„ÙØ© Ø§Ù„ÙˆØ­Ø¯Ø© Ù„Ù‡Ø°Ù‡ Ø§Ù„Ø¯ÙØ¹Ø© ØªØ­Ø¯ÙŠØ¯Ø§Ù‹ (ØªØ´Ù…Ù„ Ø­ØµØªÙ‡Ø§ Ù…Ù† Ø§Ù„Ù…ØµØ§Ø±ÙŠÙ Ø§Ù„Ù…Ù„Ø­Ù‚Ø©)
   unitCost Decimal @default(0) @db.Decimal(12, 4)
 
-  /// باركود الدفعة — يُطبع على الملصق ويُمسح بالجهاز المحمول
+  /// Ø¨Ø§Ø±ÙƒÙˆØ¯ Ø§Ù„Ø¯ÙØ¹Ø© â€” ÙŠÙØ·Ø¨Ø¹ Ø¹Ù„Ù‰ Ø§Ù„Ù…Ù„ØµÙ‚ ÙˆÙŠÙÙ…Ø³Ø­ Ø¨Ø§Ù„Ø¬Ù‡Ø§Ø² Ø§Ù„Ù…Ø­Ù…ÙˆÙ„
   barcode String?
 
   supplierId         String? @db.Uuid
@@ -1708,8 +1710,8 @@ model ProductBatch {
   @@map("product_batches")
 }
 
-/// رصيد دفعة معينة في موقع معيّن — دفتر فرعي تحت stock_levels.
-/// كل حركة هنا تُطبَّق أيضاً على الرصيد الإجمالي في نفس المعاملة.
+/// Ø±ØµÙŠØ¯ Ø¯ÙØ¹Ø© Ù…Ø¹ÙŠÙ†Ø© ÙÙŠ Ù…ÙˆÙ‚Ø¹ Ù…Ø¹ÙŠÙ‘Ù† â€” Ø¯ÙØªØ± ÙØ±Ø¹ÙŠ ØªØ­Øª stock_levels.
+/// ÙƒÙ„ Ø­Ø±ÙƒØ© Ù‡Ù†Ø§ ØªÙØ·Ø¨ÙŽÙ‘Ù‚ Ø£ÙŠØ¶Ø§Ù‹ Ø¹Ù„Ù‰ Ø§Ù„Ø±ØµÙŠØ¯ Ø§Ù„Ø¥Ø¬Ù…Ø§Ù„ÙŠ ÙÙŠ Ù†ÙØ³ Ø§Ù„Ù…Ø¹Ø§Ù…Ù„Ø©.
 model BatchStockLevel {
   id       String  @id @default(uuid()) @db.Uuid
   tenantId String? @db.Uuid
@@ -1733,8 +1735,8 @@ model BatchStockLevel {
   @@map("batch_stock_levels")
 }
 
-/// قاعدة تنبيه صلاحية قابلة للضبط لكل فئة/منتج.
-/// مثال: طبي → تحذير 90 يوم، حرج 30 يوم، حجر تلقائي 7 أيام.
+/// Ù‚Ø§Ø¹Ø¯Ø© ØªÙ†Ø¨ÙŠÙ‡ ØµÙ„Ø§Ø­ÙŠØ© Ù‚Ø§Ø¨Ù„Ø© Ù„Ù„Ø¶Ø¨Ø· Ù„ÙƒÙ„ ÙØ¦Ø©/Ù…Ù†ØªØ¬.
+/// Ù…Ø«Ø§Ù„: Ø·Ø¨ÙŠ â†’ ØªØ­Ø°ÙŠØ± 90 ÙŠÙˆÙ…ØŒ Ø­Ø±Ø¬ 30 ÙŠÙˆÙ…ØŒ Ø­Ø¬Ø± ØªÙ„Ù‚Ø§Ø¦ÙŠ 7 Ø£ÙŠØ§Ù….
 model ExpiryAlertRule {
   id       String  @id @default(uuid()) @db.Uuid
   tenantId String? @db.Uuid
@@ -1742,20 +1744,20 @@ model ExpiryAlertRule {
 
   name String
 
-  /// نطاق التطبيق — الأخص يفوز: sku ثم category ثم القاعدة العامة
+  /// Ù†Ø·Ø§Ù‚ Ø§Ù„ØªØ·Ø¨ÙŠÙ‚ â€” Ø§Ù„Ø£Ø®Øµ ÙŠÙÙˆØ²: sku Ø«Ù… category Ø«Ù… Ø§Ù„Ù‚Ø§Ø¹Ø¯Ø© Ø§Ù„Ø¹Ø§Ù…Ø©
   category String?
   sku      String?
 
-  /// عدد الأيام قبل الانتهاء لإطلاق تحذير (أصفر)
+  /// Ø¹Ø¯Ø¯ Ø§Ù„Ø£ÙŠØ§Ù… Ù‚Ø¨Ù„ Ø§Ù„Ø§Ù†ØªÙ‡Ø§Ø¡ Ù„Ø¥Ø·Ù„Ø§Ù‚ ØªØ­Ø°ÙŠØ± (Ø£ØµÙØ±)
   warnDays     Int @default(60)
-  /// عدد الأيام قبل الانتهاء لإطلاق إنذار حرج (أحمر)
+  /// Ø¹Ø¯Ø¯ Ø§Ù„Ø£ÙŠØ§Ù… Ù‚Ø¨Ù„ Ø§Ù„Ø§Ù†ØªÙ‡Ø§Ø¡ Ù„Ø¥Ø·Ù„Ø§Ù‚ Ø¥Ù†Ø°Ø§Ø± Ø­Ø±Ø¬ (Ø£Ø­Ù…Ø±)
   criticalDays Int @default(30)
-  /// عدد الأيام قبل الانتهاء للحجر التلقائي ومنع البيع — 0 = معطّل
+  /// Ø¹Ø¯Ø¯ Ø§Ù„Ø£ÙŠØ§Ù… Ù‚Ø¨Ù„ Ø§Ù„Ø§Ù†ØªÙ‡Ø§Ø¡ Ù„Ù„Ø­Ø¬Ø± Ø§Ù„ØªÙ„Ù‚Ø§Ø¦ÙŠ ÙˆÙ…Ù†Ø¹ Ø§Ù„Ø¨ÙŠØ¹ â€” 0 = Ù…Ø¹Ø·Ù‘Ù„
   blockDays    Int @default(0)
 
-  /// بريد إضافي يُخطَر عند إطلاق التنبيه
+  /// Ø¨Ø±ÙŠØ¯ Ø¥Ø¶Ø§ÙÙŠ ÙŠÙØ®Ø·ÙŽØ± Ø¹Ù†Ø¯ Ø¥Ø·Ù„Ø§Ù‚ Ø§Ù„ØªÙ†Ø¨ÙŠÙ‡
   notifyEmails String[] @default([])
-  /// إخطار فريق المبيعات لتصريف البضاعة بعروض
+  /// Ø¥Ø®Ø·Ø§Ø± ÙØ±ÙŠÙ‚ Ø§Ù„Ù…Ø¨ÙŠØ¹Ø§Øª Ù„ØªØµØ±ÙŠÙ Ø§Ù„Ø¨Ø¶Ø§Ø¹Ø© Ø¨Ø¹Ø±ÙˆØ¶
   notifySales  Boolean  @default(true)
 
   isActive  Boolean  @default(true)
@@ -1767,9 +1769,9 @@ model ExpiryAlertRule {
   @@map("expiry_alert_rules")
 }
 
-// ------------------------------------------------- 2. هيكلة المواقع (Slotting)
+// ------------------------------------------------- 2. Ù‡ÙŠÙƒÙ„Ø© Ø§Ù„Ù…ÙˆØ§Ù‚Ø¹ (Slotting)
 
-/// منطقة داخل المخزن (استلام، التقاط، تخزين كثيف، حجر صحي، تغليف، شحن).
+/// Ù…Ù†Ø·Ù‚Ø© Ø¯Ø§Ø®Ù„ Ø§Ù„Ù…Ø®Ø²Ù† (Ø§Ø³ØªÙ„Ø§Ù…ØŒ Ø§Ù„ØªÙ‚Ø§Ø·ØŒ ØªØ®Ø²ÙŠÙ† ÙƒØ«ÙŠÙØŒ Ø­Ø¬Ø± ØµØ­ÙŠØŒ ØªØºÙ„ÙŠÙØŒ Ø´Ø­Ù†).
 model WarehouseZone {
   id       String  @id @default(uuid()) @db.Uuid
   tenantId String? @db.Uuid
@@ -1782,7 +1784,7 @@ model WarehouseZone {
   name String
   type ZoneType @default(PICKING)
 
-  /// أولوية الالتقاط — الأقل رقماً يُزار أولاً في مسار الجولة
+  /// Ø£ÙˆÙ„ÙˆÙŠØ© Ø§Ù„Ø§Ù„ØªÙ‚Ø§Ø· â€” Ø§Ù„Ø£Ù‚Ù„ Ø±Ù‚Ù…Ø§Ù‹ ÙŠÙØ²Ø§Ø± Ø£ÙˆÙ„Ø§Ù‹ ÙÙŠ Ù…Ø³Ø§Ø± Ø§Ù„Ø¬ÙˆÙ„Ø©
   pickSequence Int     @default(100)
   isActive     Boolean @default(true)
 
@@ -1797,8 +1799,8 @@ model WarehouseZone {
   @@map("warehouse_zones")
 }
 
-/// موقع تخزين ذرّي (ممر/رف/طابق/خانة). قيمة code هي نفسها المستخدمة
-/// في stock_levels.location — بهذا تندمج الهيكلة مع البيانات القائمة.
+/// Ù…ÙˆÙ‚Ø¹ ØªØ®Ø²ÙŠÙ† Ø°Ø±Ù‘ÙŠ (Ù…Ù…Ø±/Ø±Ù/Ø·Ø§Ø¨Ù‚/Ø®Ø§Ù†Ø©). Ù‚ÙŠÙ…Ø© code Ù‡ÙŠ Ù†ÙØ³Ù‡Ø§ Ø§Ù„Ù…Ø³ØªØ®Ø¯Ù…Ø©
+/// ÙÙŠ stock_levels.location â€” Ø¨Ù‡Ø°Ø§ ØªÙ†Ø¯Ù…Ø¬ Ø§Ù„Ù‡ÙŠÙƒÙ„Ø© Ù…Ø¹ Ø§Ù„Ø¨ÙŠØ§Ù†Ø§Øª Ø§Ù„Ù‚Ø§Ø¦Ù…Ø©.
 model StorageBin {
   id       String  @id @default(uuid()) @db.Uuid
   tenantId String? @db.Uuid
@@ -1815,15 +1817,15 @@ model StorageBin {
   level    String?
   position String?
 
-  /// حدود السعة — يستخدمها محرّك اقتراح التخزين (Putaway)
+  /// Ø­Ø¯ÙˆØ¯ Ø§Ù„Ø³Ø¹Ø© â€” ÙŠØ³ØªØ®Ø¯Ù…Ù‡Ø§ Ù…Ø­Ø±Ù‘Ùƒ Ø§Ù‚ØªØ±Ø§Ø­ Ø§Ù„ØªØ®Ø²ÙŠÙ† (Putaway)
   maxWeightKg   Decimal? @db.Decimal(10, 3)
   maxVolumeM3   Decimal? @db.Decimal(10, 4)
   capacityUnits Int?
   currentUnits  Int      @default(0)
 
-  /// ترتيب المرور داخل المنطقة — يبني مسار الالتقاط الأقصر
+  /// ØªØ±ØªÙŠØ¨ Ø§Ù„Ù…Ø±ÙˆØ± Ø¯Ø§Ø®Ù„ Ø§Ù„Ù…Ù†Ø·Ù‚Ø© â€” ÙŠØ¨Ù†ÙŠ Ù…Ø³Ø§Ø± Ø§Ù„Ø§Ù„ØªÙ‚Ø§Ø· Ø§Ù„Ø£Ù‚ØµØ±
   pickPriority Int     @default(100)
-  /// تخصيص الخانة لمنتج واحد (Fixed slotting)
+  /// ØªØ®ØµÙŠØµ Ø§Ù„Ø®Ø§Ù†Ø© Ù„Ù…Ù†ØªØ¬ ÙˆØ§Ø­Ø¯ (Fixed slotting)
   dedicatedSku String?
   isActive     Boolean @default(true)
   status       String  @default("free")
@@ -1837,7 +1839,7 @@ model StorageBin {
   @@map("storage_bins")
 }
 
-/// مهمة تخزين: أين تُنقل البضاعة بعد الاستلام، مع الخانة المقترحة آلياً.
+/// Ù…Ù‡Ù…Ø© ØªØ®Ø²ÙŠÙ†: Ø£ÙŠÙ† ØªÙÙ†Ù‚Ù„ Ø§Ù„Ø¨Ø¶Ø§Ø¹Ø© Ø¨Ø¹Ø¯ Ø§Ù„Ø§Ø³ØªÙ„Ø§Ù…ØŒ Ù…Ø¹ Ø§Ù„Ø®Ø§Ù†Ø© Ø§Ù„Ù…Ù‚ØªØ±Ø­Ø© Ø¢Ù„ÙŠØ§Ù‹.
 model PutawayTask {
   id       String  @id @default(uuid()) @db.Uuid
   tenantId String? @db.Uuid
@@ -1853,11 +1855,11 @@ model PutawayTask {
   quantity     Int
   fromLocation String
 
-  /// الخانة التي اقترحها المحرك + سبب الاقتراح (للشفافية والتدقيق)
+  /// Ø§Ù„Ø®Ø§Ù†Ø© Ø§Ù„ØªÙŠ Ø§Ù‚ØªØ±Ø­Ù‡Ø§ Ø§Ù„Ù…Ø­Ø±Ùƒ + Ø³Ø¨Ø¨ Ø§Ù„Ø§Ù‚ØªØ±Ø§Ø­ (Ù„Ù„Ø´ÙØ§ÙÙŠØ© ÙˆØ§Ù„ØªØ¯Ù‚ÙŠÙ‚)
   suggestedBin    String?
   suggestionScore Decimal? @db.Decimal(6, 2)
   suggestionRule  String?
-  /// الخانة التي استخدمها الموظف فعلاً
+  /// Ø§Ù„Ø®Ø§Ù†Ø© Ø§Ù„ØªÙŠ Ø§Ø³ØªØ®Ø¯Ù…Ù‡Ø§ Ø§Ù„Ù…ÙˆØ¸Ù ÙØ¹Ù„Ø§Ù‹
   actualBin       String?
 
   status     PutawayStatus @default(PENDING)
@@ -1873,7 +1875,7 @@ model PutawayTask {
   @@map("putaway_tasks")
 }
 
-// ------------------------------------------------------- 3. الضرائب والتسعير
+// ------------------------------------------------------- 3. Ø§Ù„Ø¶Ø±Ø§Ø¦Ø¨ ÙˆØ§Ù„ØªØ³Ø¹ÙŠØ±
 
 model TaxRate {
   id       String  @id @default(uuid()) @db.Uuid
@@ -1882,7 +1884,7 @@ model TaxRate {
 
   code String
   name String
-  /// النسبة المئوية — 15.00 تعني 15%
+  /// Ø§Ù„Ù†Ø³Ø¨Ø© Ø§Ù„Ù…Ø¦ÙˆÙŠØ© â€” 15.00 ØªØ¹Ù†ÙŠ 15%
   rate Decimal @db.Decimal(6, 3)
 
   isDefault Boolean @default(false)
@@ -1898,7 +1900,7 @@ model TaxRate {
   @@map("tax_rates")
 }
 
-/// فئة تسعير (جملة / مفرق / عميل مميز) — تُربط بالعميل وتُطبَّق تلقائياً.
+/// ÙØ¦Ø© ØªØ³Ø¹ÙŠØ± (Ø¬Ù…Ù„Ø© / Ù…ÙØ±Ù‚ / Ø¹Ù…ÙŠÙ„ Ù…Ù…ÙŠØ²) â€” ØªÙØ±Ø¨Ø· Ø¨Ø§Ù„Ø¹Ù…ÙŠÙ„ ÙˆØªÙØ·Ø¨ÙŽÙ‘Ù‚ ØªÙ„Ù‚Ø§Ø¦ÙŠØ§Ù‹.
 model PriceTier {
   id       String  @id @default(uuid()) @db.Uuid
   tenantId String? @db.Uuid
@@ -1907,7 +1909,7 @@ model PriceTier {
   code String
   name String
 
-  /// خصم افتراضي على سعر القائمة حين لا يوجد سعر صريح للمنتج في هذه الفئة
+  /// Ø®ØµÙ… Ø§ÙØªØ±Ø§Ø¶ÙŠ Ø¹Ù„Ù‰ Ø³Ø¹Ø± Ø§Ù„Ù‚Ø§Ø¦Ù…Ø© Ø­ÙŠÙ† Ù„Ø§ ÙŠÙˆØ¬Ø¯ Ø³Ø¹Ø± ØµØ±ÙŠØ­ Ù„Ù„Ù…Ù†ØªØ¬ ÙÙŠ Ù‡Ø°Ù‡ Ø§Ù„ÙØ¦Ø©
   discountPercent Decimal @default(0) @db.Decimal(6, 3)
 
   isDefault Boolean @default(false)
@@ -1925,7 +1927,7 @@ model PriceTier {
   @@map("price_tiers")
 }
 
-/// سعر منتج ضمن فئة تسعير، مع دعم سعر الكمية والصلاحية الزمنية.
+/// Ø³Ø¹Ø± Ù…Ù†ØªØ¬ Ø¶Ù…Ù† ÙØ¦Ø© ØªØ³Ø¹ÙŠØ±ØŒ Ù…Ø¹ Ø¯Ø¹Ù… Ø³Ø¹Ø± Ø§Ù„ÙƒÙ…ÙŠØ© ÙˆØ§Ù„ØµÙ„Ø§Ø­ÙŠØ© Ø§Ù„Ø²Ù…Ù†ÙŠØ©.
 model ProductPrice {
   id       String  @id @default(uuid()) @db.Uuid
   tenantId String? @db.Uuid
@@ -1950,16 +1952,16 @@ model ProductPrice {
   @@map("product_prices")
 }
 
-// ------------------------------------------------- 4. فواتير الشراء والتكلفة
+// ------------------------------------------------- 4. ÙÙˆØ§ØªÙŠØ± Ø§Ù„Ø´Ø±Ø§Ø¡ ÙˆØ§Ù„ØªÙƒÙ„ÙØ©
 
 model PurchaseInvoice {
   id       String  @id @default(uuid()) @db.Uuid
   tenantId String? @db.Uuid
   tenant   Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
-  /// الرقم الداخلي في النظام
+  /// Ø§Ù„Ø±Ù‚Ù… Ø§Ù„Ø¯Ø§Ø®Ù„ÙŠ ÙÙŠ Ø§Ù„Ù†Ø¸Ø§Ù…
   invoiceNumber         String
-  /// رقم الفاتورة الأصلية عند المورد
+  /// Ø±Ù‚Ù… Ø§Ù„ÙØ§ØªÙˆØ±Ø© Ø§Ù„Ø£ØµÙ„ÙŠØ© Ø¹Ù†Ø¯ Ø§Ù„Ù…ÙˆØ±Ø¯
   supplierInvoiceNumber String?
 
   supplierId String   @db.Uuid
@@ -2014,7 +2016,7 @@ model PurchaseInvoiceItem {
   purchaseOrderItemId String? @db.Uuid
   sku                 String
 
-  /// بيانات الدفعة تُلتقط هنا وتُنشئ ProductBatch عند الترحيل
+  /// Ø¨ÙŠØ§Ù†Ø§Øª Ø§Ù„Ø¯ÙØ¹Ø© ØªÙÙ„ØªÙ‚Ø· Ù‡Ù†Ø§ ÙˆØªÙÙ†Ø´Ø¦ ProductBatch Ø¹Ù†Ø¯ Ø§Ù„ØªØ±Ø­ÙŠÙ„
   batchNumber    String?
   productionDate DateTime? @db.Date
   expiryDate     DateTime? @db.Date
@@ -2028,9 +2030,9 @@ model PurchaseInvoiceItem {
   taxAmount       Decimal @default(0) @db.Decimal(14, 2)
   lineTotal       Decimal @default(0) @db.Decimal(14, 2)
 
-  /// حصة هذا البند من المصاريف الملحقة بعد التوزيع
+  /// Ø­ØµØ© Ù‡Ø°Ø§ Ø§Ù„Ø¨Ù†Ø¯ Ù…Ù† Ø§Ù„Ù…ØµØ§Ø±ÙŠÙ Ø§Ù„Ù…Ù„Ø­Ù‚Ø© Ø¨Ø¹Ø¯ Ø§Ù„ØªÙˆØ²ÙŠØ¹
   allocatedLandedCost Decimal @default(0) @db.Decimal(14, 4)
-  /// التكلفة النهائية للوحدة = unitCost + حصة المصاريف
+  /// Ø§Ù„ØªÙƒÙ„ÙØ© Ø§Ù„Ù†Ù‡Ø§Ø¦ÙŠØ© Ù„Ù„ÙˆØ­Ø¯Ø© = unitCost + Ø­ØµØ© Ø§Ù„Ù…ØµØ§Ø±ÙŠÙ
   finalUnitCost       Decimal @default(0) @db.Decimal(12, 4)
 
   location String @default("WH-A")
@@ -2044,7 +2046,7 @@ model PurchaseInvoiceItem {
   @@map("purchase_invoice_items")
 }
 
-/// مصروف لوجستي ملحق (شحن، جمارك، تأمين، مناولة) يُوزَّع على بنود الفاتورة.
+/// Ù…ØµØ±ÙˆÙ Ù„ÙˆØ¬Ø³ØªÙŠ Ù…Ù„Ø­Ù‚ (Ø´Ø­Ù†ØŒ Ø¬Ù…Ø§Ø±ÙƒØŒ ØªØ£Ù…ÙŠÙ†ØŒ Ù…Ù†Ø§ÙˆÙ„Ø©) ÙŠÙÙˆØ²ÙŽÙ‘Ø¹ Ø¹Ù„Ù‰ Ø¨Ù†ÙˆØ¯ Ø§Ù„ÙØ§ØªÙˆØ±Ø©.
 model LandedCost {
   id       String  @id @default(uuid()) @db.Uuid
   tenantId String? @db.Uuid
@@ -2088,7 +2090,7 @@ model PurchasePayment {
   @@map("purchase_payments")
 }
 
-/// سجل تغيّر تكلفة المنتج — كل إعادة حساب لمتوسط التكلفة تُترك أثراً هنا.
+/// Ø³Ø¬Ù„ ØªØºÙŠÙ‘Ø± ØªÙƒÙ„ÙØ© Ø§Ù„Ù…Ù†ØªØ¬ â€” ÙƒÙ„ Ø¥Ø¹Ø§Ø¯Ø© Ø­Ø³Ø§Ø¨ Ù„Ù…ØªÙˆØ³Ø· Ø§Ù„ØªÙƒÙ„ÙØ© ØªÙØªØ±Ùƒ Ø£Ø«Ø±Ø§Ù‹ Ù‡Ù†Ø§.
 model CostHistory {
   id       String  @id @default(uuid()) @db.Uuid
   tenantId String? @db.Uuid
@@ -2114,7 +2116,7 @@ model CostHistory {
   @@map("cost_history")
 }
 
-// -------------------------------------------------------- 5. فواتير البيع
+// -------------------------------------------------------- 5. ÙÙˆØ§ØªÙŠØ± Ø§Ù„Ø¨ÙŠØ¹
 
 model SalesInvoice {
   id       String  @id @default(uuid()) @db.Uuid
@@ -2142,7 +2144,7 @@ model SalesInvoice {
   taxAmount      Decimal @default(0) @db.Decimal(14, 2)
   totalAmount    Decimal @default(0) @db.Decimal(14, 2)
   paidAmount     Decimal @default(0) @db.Decimal(14, 2)
-  /// تكلفة البضاعة المباعة — لقطة وقت الترحيل لحساب هامش الربح
+  /// ØªÙƒÙ„ÙØ© Ø§Ù„Ø¨Ø¶Ø§Ø¹Ø© Ø§Ù„Ù…Ø¨Ø§Ø¹Ø© â€” Ù„Ù‚Ø·Ø© ÙˆÙ‚Øª Ø§Ù„ØªØ±Ø­ÙŠÙ„ Ù„Ø­Ø³Ø§Ø¨ Ù‡Ø§Ù…Ø´ Ø§Ù„Ø±Ø¨Ø­
   cogsAmount     Decimal @default(0) @db.Decimal(14, 2)
 
   currency String  @default("SYP")
@@ -2178,7 +2180,7 @@ model SalesInvoiceItem {
   salesOrderItemId String? @db.Uuid
   sku              String
 
-  /// الدفعة المسحوب منها — يقترحها النظام تلقائياً وفق FEFO
+  /// Ø§Ù„Ø¯ÙØ¹Ø© Ø§Ù„Ù…Ø³Ø­ÙˆØ¨ Ù…Ù†Ù‡Ø§ â€” ÙŠÙ‚ØªØ±Ø­Ù‡Ø§ Ø§Ù„Ù†Ø¸Ø§Ù… ØªÙ„Ù‚Ø§Ø¦ÙŠØ§Ù‹ ÙˆÙÙ‚ FEFO
   batchId     String?       @db.Uuid
   batch       ProductBatch? @relation(fields: [batchId], references: [id], onDelete: SetNull)
   batchNumber String?
@@ -2193,7 +2195,7 @@ model SalesInvoiceItem {
   taxAmount       Decimal @default(0) @db.Decimal(14, 2)
   lineTotal       Decimal @default(0) @db.Decimal(14, 2)
 
-  /// تكلفة الوحدة وقت البيع — لا تتأثر بتغيّر التكلفة لاحقاً
+  /// ØªÙƒÙ„ÙØ© Ø§Ù„ÙˆØ­Ø¯Ø© ÙˆÙ‚Øª Ø§Ù„Ø¨ÙŠØ¹ â€” Ù„Ø§ ØªØªØ£Ø«Ø± Ø¨ØªØºÙŠÙ‘Ø± Ø§Ù„ØªÙƒÙ„ÙØ© Ù„Ø§Ø­Ù‚Ø§Ù‹
   unitCost Decimal @default(0) @db.Decimal(12, 4)
 
   location String @default("WH-A")
@@ -2207,7 +2209,7 @@ model SalesInvoiceItem {
   @@map("sales_invoice_items")
 }
 
-/// إذن خروج / سند تسليم — الوثيقة التي تنقل البضاعة فعلياً خارج المخزن.
+/// Ø¥Ø°Ù† Ø®Ø±ÙˆØ¬ / Ø³Ù†Ø¯ ØªØ³Ù„ÙŠÙ… â€” Ø§Ù„ÙˆØ«ÙŠÙ‚Ø© Ø§Ù„ØªÙŠ ØªÙ†Ù‚Ù„ Ø§Ù„Ø¨Ø¶Ø§Ø¹Ø© ÙØ¹Ù„ÙŠØ§Ù‹ Ø®Ø§Ø±Ø¬ Ø§Ù„Ù…Ø®Ø²Ù†.
 model DeliveryNote {
   id       String  @id @default(uuid()) @db.Uuid
   tenantId String? @db.Uuid
@@ -2260,7 +2262,7 @@ model DeliveryNoteItem {
   @@map("delivery_note_items")
 }
 
-// ---------------------------------------------------- 6. الجرد الدوري والتدقيق
+// ---------------------------------------------------- 6. Ø§Ù„Ø¬Ø±Ø¯ Ø§Ù„Ø¯ÙˆØ±ÙŠ ÙˆØ§Ù„ØªØ¯Ù‚ÙŠÙ‚
 
 model CycleCount {
   id       String  @id @default(uuid()) @db.Uuid
@@ -2270,7 +2272,7 @@ model CycleCount {
   countNumber String
   type        String @default("cycle")
 
-  /// نطاق الجرد: zone | bin | category | sku | abc | all
+  /// Ù†Ø·Ø§Ù‚ Ø§Ù„Ø¬Ø±Ø¯: zone | bin | category | sku | abc | all
   scope      String  @default("all")
   scopeValue String?
 
@@ -2283,12 +2285,12 @@ model CycleCount {
   countedBy  String? @db.Uuid
   approvedBy String? @db.Uuid
 
-  /// لقطة إجمالية للفروقات — تُحسب عند الإقفال
+  /// Ù„Ù‚Ø·Ø© Ø¥Ø¬Ù…Ø§Ù„ÙŠØ© Ù„Ù„ÙØ±ÙˆÙ‚Ø§Øª â€” ØªÙØ­Ø³Ø¨ Ø¹Ù†Ø¯ Ø§Ù„Ø¥Ù‚ÙØ§Ù„
   totalLines    Int     @default(0)
   countedLines  Int     @default(0)
   varianceLines Int     @default(0)
   varianceValue Decimal @default(0) @db.Decimal(14, 2)
-  /// هل طُبِّقت التسويات على المخزون فعلاً
+  /// Ù‡Ù„ Ø·ÙØ¨ÙÙ‘Ù‚Øª Ø§Ù„ØªØ³ÙˆÙŠØ§Øª Ø¹Ù„Ù‰ Ø§Ù„Ù…Ø®Ø²ÙˆÙ† ÙØ¹Ù„Ø§Ù‹
   adjustmentsPosted Boolean @default(false)
 
   notes String?
@@ -2318,7 +2320,7 @@ model CycleCountItem {
   batch    ProductBatch? @relation(fields: [batchId], references: [id], onDelete: SetNull)
   location String
 
-  /// الرصيد الدفتري لحظة تجميد القائمة — المقارنة تتم ضده لا ضد الرصيد الحالي
+  /// Ø§Ù„Ø±ØµÙŠØ¯ Ø§Ù„Ø¯ÙØªØ±ÙŠ Ù„Ø­Ø¸Ø© ØªØ¬Ù…ÙŠØ¯ Ø§Ù„Ù‚Ø§Ø¦Ù…Ø© â€” Ø§Ù„Ù…Ù‚Ø§Ø±Ù†Ø© ØªØªÙ… Ø¶Ø¯Ù‡ Ù„Ø§ Ø¶Ø¯ Ø§Ù„Ø±ØµÙŠØ¯ Ø§Ù„Ø­Ø§Ù„ÙŠ
   systemQuantity  Int
   countedQuantity Int?
   variance        Int     @default(0)
@@ -2340,7 +2342,7 @@ model CycleCountItem {
   @@map("cycle_count_items")
 }
 
-// ------------------------------------------------ 7. فحص الجودة عند الاستلام
+// ------------------------------------------------ 7. ÙØ­Øµ Ø§Ù„Ø¬ÙˆØ¯Ø© Ø¹Ù†Ø¯ Ø§Ù„Ø§Ø³ØªÙ„Ø§Ù…
 
 model QualityInspection {
   id       String  @id @default(uuid()) @db.Uuid
@@ -2360,7 +2362,7 @@ model QualityInspection {
 
   status QcStatus @default(PENDING)
 
-  /// معايير الفحص ونتائجها: [{criterion, expected, actual, passed}]
+  /// Ù…Ø¹Ø§ÙŠÙŠØ± Ø§Ù„ÙØ­Øµ ÙˆÙ†ØªØ§Ø¦Ø¬Ù‡Ø§: [{criterion, expected, actual, passed}]
   checklist Json?
 
   failureReason String?
@@ -2378,7 +2380,7 @@ model QualityInspection {
   @@map("quality_inspections")
 }
 
-// ------------------------------------------- 8. التجهيز والتغليف والشحن
+// ------------------------------------------- 8. Ø§Ù„ØªØ¬Ù‡ÙŠØ² ÙˆØ§Ù„ØªØºÙ„ÙŠÙ ÙˆØ§Ù„Ø´Ø­Ù†
 
 model PickList {
   id       String  @id @default(uuid()) @db.Uuid
@@ -2389,7 +2391,7 @@ model PickList {
   strategy   PickStrategy @default(SINGLE)
   status     PickStatus   @default(PENDING)
 
-  /// طلبات البيع المشمولة — أكثر من واحد في Batch Picking
+  /// Ø·Ù„Ø¨Ø§Øª Ø§Ù„Ø¨ÙŠØ¹ Ø§Ù„Ù…Ø´Ù…ÙˆÙ„Ø© â€” Ø£ÙƒØ«Ø± Ù…Ù† ÙˆØ§Ø­Ø¯ ÙÙŠ Batch Picking
   salesOrderIds String[] @default([])
   zoneCode      String?
 
@@ -2397,7 +2399,7 @@ model PickList {
 
   totalLines     Int @default(0)
   completedLines Int @default(0)
-  /// مسافة المسار المقدّرة بالأمتار — مخرج خوارزمية ترتيب المسار
+  /// Ù…Ø³Ø§ÙØ© Ø§Ù„Ù…Ø³Ø§Ø± Ø§Ù„Ù…Ù‚Ø¯Ù‘Ø±Ø© Ø¨Ø§Ù„Ø£Ù…ØªØ§Ø± â€” Ù…Ø®Ø±Ø¬ Ø®ÙˆØ§Ø±Ø²Ù…ÙŠØ© ØªØ±ØªÙŠØ¨ Ø§Ù„Ù…Ø³Ø§Ø±
   estimatedDistanceM Int @default(0)
 
   startedAt   DateTime?
@@ -2436,7 +2438,7 @@ model PickListItem {
   quantityRequested Int
   quantityPicked    Int @default(0)
 
-  /// ترتيب الزيارة داخل الجولة — يبنيه محرّك المسار من pickPriority للخانات
+  /// ØªØ±ØªÙŠØ¨ Ø§Ù„Ø²ÙŠØ§Ø±Ø© Ø¯Ø§Ø®Ù„ Ø§Ù„Ø¬ÙˆÙ„Ø© â€” ÙŠØ¨Ù†ÙŠÙ‡ Ù…Ø­Ø±Ù‘Ùƒ Ø§Ù„Ù…Ø³Ø§Ø± Ù…Ù† pickPriority Ù„Ù„Ø®Ø§Ù†Ø§Øª
   sequence Int @default(0)
 
   status PickStatus @default(PENDING)
@@ -2462,7 +2464,7 @@ model Carrier {
   name String
 
   contactPhone String?
-  /// قالب رابط التتبع، مثال: https://carrier.com/track/{tracking}
+  /// Ù‚Ø§Ù„Ø¨ Ø±Ø§Ø¨Ø· Ø§Ù„ØªØªØ¨Ø¹ØŒ Ù…Ø«Ø§Ù„: https://carrier.com/track/{tracking}
   trackingUrlTemplate String?
 
   isActive Boolean @default(true)
@@ -2498,7 +2500,7 @@ model Shipment {
   packageCount  Int     @default(0)
   shippingCost  Decimal @default(0) @db.Decimal(12, 2)
 
-  /// حمولة ملصق الشحن (نص الباركود/QR) — تُولَّد عند الطباعة
+  /// Ø­Ù…ÙˆÙ„Ø© Ù…Ù„ØµÙ‚ Ø§Ù„Ø´Ø­Ù† (Ù†Øµ Ø§Ù„Ø¨Ø§Ø±ÙƒÙˆØ¯/QR) â€” ØªÙÙˆÙ„ÙŽÙ‘Ø¯ Ø¹Ù†Ø¯ Ø§Ù„Ø·Ø¨Ø§Ø¹Ø©
   labelPayload String?
   labelFormat  String?
 
@@ -2575,7 +2577,7 @@ model PackageItem {
   @@map("package_items")
 }
 
-// -------------------------------------------------------- 9. الربط والتكامل
+// -------------------------------------------------------- 9. Ø§Ù„Ø±Ø¨Ø· ÙˆØ§Ù„ØªÙƒØ§Ù…Ù„
 
 model IntegrationConnection {
   id       String  @id @default(uuid()) @db.Uuid
@@ -2586,14 +2588,14 @@ model IntegrationConnection {
   name     String
 
   baseUrl String?
-  /// مفاتيح الوصول — مخزَّنة مشفّرة، ولا تُعاد أبداً في أي رد
+  /// Ù…ÙØ§ØªÙŠØ­ Ø§Ù„ÙˆØµÙˆÙ„ â€” Ù…Ø®Ø²ÙŽÙ‘Ù†Ø© Ù…Ø´ÙÙ‘Ø±Ø©ØŒ ÙˆÙ„Ø§ ØªÙØ¹Ø§Ø¯ Ø£Ø¨Ø¯Ø§Ù‹ ÙÙŠ Ø£ÙŠ Ø±Ø¯
   apiKeyEncrypted    String?
   apiSecretEncrypted String?
 
-  /// إعدادات خاصة بالمزوّد (اسم المتجر، معرّف الشركة، خرائط الحقول...)
+  /// Ø¥Ø¹Ø¯Ø§Ø¯Ø§Øª Ø®Ø§ØµØ© Ø¨Ø§Ù„Ù…Ø²ÙˆÙ‘Ø¯ (Ø§Ø³Ù… Ø§Ù„Ù…ØªØ¬Ø±ØŒ Ù…Ø¹Ø±Ù‘Ù Ø§Ù„Ø´Ø±ÙƒØ©ØŒ Ø®Ø±Ø§Ø¦Ø· Ø§Ù„Ø­Ù‚ÙˆÙ„...)
   config Json?
 
-  /// ما الكيانات التي تُزامَن: products, stock, orders, customers
+  /// Ù…Ø§ Ø§Ù„ÙƒÙŠØ§Ù†Ø§Øª Ø§Ù„ØªÙŠ ØªÙØ²Ø§Ù…ÙŽÙ†: products, stock, orders, customers
   syncEntities String[] @default([])
   syncInterval Int      @default(15)
 
@@ -2639,7 +2641,7 @@ model IntegrationSyncLog {
   @@map("integration_sync_logs")
 }
 
-/// نقطة webhook صادرة — يُخطَر بها المتجر الإلكتروني عند تغيّر المخزون.
+/// Ù†Ù‚Ø·Ø© webhook ØµØ§Ø¯Ø±Ø© â€” ÙŠÙØ®Ø·ÙŽØ± Ø¨Ù‡Ø§ Ø§Ù„Ù…ØªØ¬Ø± Ø§Ù„Ø¥Ù„ÙƒØªØ±ÙˆÙ†ÙŠ Ø¹Ù†Ø¯ ØªØºÙŠÙ‘Ø± Ø§Ù„Ù…Ø®Ø²ÙˆÙ†.
 model WebhookEndpoint {
   id       String  @id @default(uuid()) @db.Uuid
   tenantId String? @db.Uuid
@@ -2663,19 +2665,19 @@ model WebhookEndpoint {
 }
 
 // ===========================================================================
-// ربط المحاسبة بحركة المخزن — القيود الآلية
+// Ø±Ø¨Ø· Ø§Ù„Ù…Ø­Ø§Ø³Ø¨Ø© Ø¨Ø­Ø±ÙƒØ© Ø§Ù„Ù…Ø®Ø²Ù† â€” Ø§Ù„Ù‚ÙŠÙˆØ¯ Ø§Ù„Ø¢Ù„ÙŠØ©
 // ===========================================================================
 
-/// أي حساب يقابل أي دور محاسبي في هذه المنشأة.
+/// Ø£ÙŠ Ø­Ø³Ø§Ø¨ ÙŠÙ‚Ø§Ø¨Ù„ Ø£ÙŠ Ø¯ÙˆØ± Ù…Ø­Ø§Ø³Ø¨ÙŠ ÙÙŠ Ù‡Ø°Ù‡ Ø§Ù„Ù…Ù†Ø´Ø£Ø©.
 ///
-/// شجرة الحسابات تختلف من منشأة لأخرى، فلا يمكن تثبيت أكواد في الكود. هذا
-/// الجدول هو الترجمة: الدور (`inventory`) ← الحساب الفعلي عند العميل.
+/// Ø´Ø¬Ø±Ø© Ø§Ù„Ø­Ø³Ø§Ø¨Ø§Øª ØªØ®ØªÙ„Ù Ù…Ù† Ù…Ù†Ø´Ø£Ø© Ù„Ø£Ø®Ø±Ù‰ØŒ ÙÙ„Ø§ ÙŠÙ…ÙƒÙ† ØªØ«Ø¨ÙŠØª Ø£ÙƒÙˆØ§Ø¯ ÙÙŠ Ø§Ù„ÙƒÙˆØ¯. Ù‡Ø°Ø§
+/// Ø§Ù„Ø¬Ø¯ÙˆÙ„ Ù‡Ùˆ Ø§Ù„ØªØ±Ø¬Ù…Ø©: Ø§Ù„Ø¯ÙˆØ± (`inventory`) â† Ø§Ù„Ø­Ø³Ø§Ø¨ Ø§Ù„ÙØ¹Ù„ÙŠ Ø¹Ù†Ø¯ Ø§Ù„Ø¹Ù…ÙŠÙ„.
 model AccountMapping {
   id       String  @id @default(uuid()) @db.Uuid
   tenantId String? @db.Uuid
   tenant   Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
-  /// الدور المحاسبي — إحدى قيم LEDGER_ROLES في الكود
+  /// Ø§Ù„Ø¯ÙˆØ± Ø§Ù„Ù…Ø­Ø§Ø³Ø¨ÙŠ â€” Ø¥Ø­Ø¯Ù‰ Ù‚ÙŠÙ… LEDGER_ROLES ÙÙŠ Ø§Ù„ÙƒÙˆØ¯
   role String
 
   accountId String  @db.Uuid
@@ -2690,3 +2692,21 @@ model AccountMapping {
   @@index([tenantId])
   @@map("account_mappings")
 }
+
+
+model UserSubscription {
+  id        String  @id @default(uuid()) @db.Uuid
+  userId    String  @unique @db.Uuid
+  user      User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  plan       String // lifetime | monthly | yearly | custom
+  startsAt   DateTime
+  endsAt     DateTime
+  updatedBy  String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([endsAt])
+  @@map("user_subscriptions")
+}
+
