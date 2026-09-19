@@ -800,11 +800,26 @@ export class EntitlementsService {
    * Whether ONE admin's own time window is still open. No row anywhere (neither
    * a user row nor a factory row) reads as open — "nothing configured" stays
    * open exactly as it always has been; only a real, past endsAt locks out.
+   * SuperAdmin accounts are always open regardless of any subscription row.
    */
   private async subscriptionWindowActiveForUser(
     userId: string,
     tenantId: string,
   ): Promise<boolean> {
+    // SuperAdmin is never gated by subscriptions — always open
+    try {
+      const user = await runUnscoped('user-role-check', () =>
+        this.prisma.user.findUnique({
+          where: { id: userId },
+          select: { role: { select: { name: true } } },
+        }),
+      );
+      const roleName = (user?.role?.name ?? '').toLowerCase().replace(/[\s_]/g, '');
+      if (roleName === 'superadmin') return true;
+    } catch {
+      // fall through to subscription check
+    }
+
     const view = await this.getUserSubscription(userId, tenantId);
     if (view === null) return true;
     return view.status === 'active';
@@ -822,7 +837,7 @@ export class EntitlementsService {
   async setUserSubscription(
     tenantId: string,
     userId: string,
-    input: { months?: number; endsAt?: string; permanent?: boolean },
+    input: { months?: number; days?: number; endsAt?: string; permanent?: boolean },
     actor?: string,
   ): Promise<SubscriptionView> {
     const now = new Date();
@@ -833,6 +848,13 @@ export class EntitlementsService {
     if (input.permanent) {
       endsAt = new Date(LIFETIME_ENDS_AT);
       plan = LIFETIME_PLAN;
+    } else if (input.days !== undefined) {
+      if (!Number.isInteger(input.days) || input.days < 1 || input.days > 3650) {
+        throw new BadRequestException('days must be an integer between 1 and 3650');
+      }
+      endsAt = new Date(now);
+      endsAt.setDate(endsAt.getDate() + input.days);
+      plan = 'custom';
     } else if (input.months !== undefined) {
       if (!Number.isInteger(input.months) || input.months < 1 || input.months > 60) {
         throw new BadRequestException('months must be an integer between 1 and 60');

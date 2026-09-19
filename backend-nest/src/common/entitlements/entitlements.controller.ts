@@ -448,7 +448,7 @@ export class TenantEntitlementsController {
     const result = await this.entitlements.setUserSubscription(
       tenantId,
       userId,
-      { months: dto.months, endsAt: dto.endsAt, permanent: dto.permanent },
+      { months: dto.months, days: dto.days, endsAt: dto.endsAt, permanent: dto.permanent },
       user?.username,
     );
     this.audit.log(
