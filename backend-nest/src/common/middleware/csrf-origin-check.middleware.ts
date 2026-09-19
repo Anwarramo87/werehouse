@@ -19,13 +19,22 @@ export class CsrfOriginCheckMiddleware implements NestMiddleware {
     this.protectionEnabled = this.config.get<boolean>('CSRF_PROTECTION_ENABLED', isProduction);
 
     const corsOrigins = this.config.get<string>('CORS_ORIGIN', '');
-    this.configuredAllowedOrigins = new Set(
-      corsOrigins
-        .split(',')
-        .map((origin) => this.normalizeOrigin(origin))
-        .filter(Boolean),
-    );
+    // "*" means allow-all (dev convenience). Previously the wildcard string was
+    // stored literally in the set, so NO real origin ever matched it and every
+    // cookie-authenticated mutating request (login/refresh/logout) died with
+    // 403 "CSRF validation failed" — the exact storm seen on localhost:3000.
+    this.allowAllOrigins = corsOrigins.trim() === '*';
+    this.configuredAllowedOrigins = this.allowAllOrigins
+      ? new Set<string>()
+      : new Set(
+          corsOrigins
+            .split(',')
+            .map((origin) => this.normalizeOrigin(origin))
+            .filter(Boolean),
+        );
   }
+
+  private readonly allowAllOrigins: boolean;
 
   use(req: Request, _res: Response, next: NextFunction) {
     if (!this.protectionEnabled) {
@@ -61,7 +70,7 @@ export class CsrfOriginCheckMiddleware implements NestMiddleware {
     const refererOrigin = this.normalizeRefererOrigin(this.pickHeader(req.headers.referer));
     const sourceOrigin = originHeader || refererOrigin;
 
-    if (!sourceOrigin || !allowedOrigins.has(sourceOrigin)) {
+    if (!sourceOrigin || (!this.allowAllOrigins && !allowedOrigins.has(sourceOrigin))) {
       this.logger.warn(
         JSON.stringify({
           message: 'CSRF origin validation blocked request',
