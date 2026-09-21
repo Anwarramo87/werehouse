@@ -1,4 +1,5 @@
-import { IsDateString, IsInt, IsNumber, IsOptional, IsString } from 'class-validator';
+import { Type } from 'class-transformer';
+import { IsDateString, IsInt, IsNumber, IsOptional, IsString, Max, Min } from 'class-validator';
 
 export class UpsertPayrollInputDto {
   @IsString()
@@ -91,4 +92,20 @@ export class PayrollInputsQueryDto {
   @IsOptional()
   @IsDateString()
   periodEnd?: string;
+
+  // الفرونت يطلب تعديلات الشهر كاملةً (limit=500) — بدونها كان الباك
+  // يرجع 50 فقط ويُسقط تعديلات بصمت. البايب العام forbidNonWhitelisted
+  // يرفض أي بارامتر غير مصرّح به هنا (400)، لذا التوثيق إلزامي.
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  page?: number;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(1000)
+  limit?: number;
 }

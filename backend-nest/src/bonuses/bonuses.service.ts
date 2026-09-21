@@ -35,7 +35,12 @@ export class BonusesService {
     }
 
     if (query.period) {
-      where.period = query.period;
+      // الشهر يشمل أيضاً السجلات المؤرخة بيوم محدد (period = "YYYY-MM-DD"):
+      // نطابق بالبادئة حتى تظهر مكافآت اليوم المحدد داخل عرض الشهر.
+      where.period =
+        query.period.length === 7
+          ? { startsWith: query.period }
+          : { equals: query.period };
     }
 
     // فلترة بالتاريخ
