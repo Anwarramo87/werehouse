@@ -1811,6 +1811,14 @@ export class PayrollService {
         where: {
           employeeId: { in: employeeIds },
           remainingAmount: { gt: new Prisma.Decimal(0) },
+          // السلفة تُخصم في شهر إصدارها فقط — مثل العقوبات تماماً.
+          // بدون هذا القيد كانت سلف الأشهر السابقة تُخصم كاملةً في كل
+          // دورة لاحقة (remaining لا يتناقص أبداً) فتتكرر الخصومات شهراً
+          // بعد شهر (مثال: سلف أيار ظهرت في run أيلول كاملةً).
+          issueDate: {
+            gte: new Date(`${periodStart}T00:00:00.000Z`),
+            lte: new Date(`${periodEnd}T23:59:59.999Z`),
+          },
         },
       }),
       this.prisma.employeePenalty.findMany({
