@@ -47,21 +47,49 @@ export class TransportationService {
     const buses = await this.prisma.bus.findMany({
       orderBy: { createdAt: 'desc' },
       include: {
-        _count: { select: { passengers: { where: { status: 'active' } } } },
+        passengers: {
+          // يشمل النشطين + من انسحب هذا الشهر فقط (مطابق لمنطق الرواتب)
+          where: {
+            OR: [{ status: 'active' }],
+          },
+          select: { employeeId: true },
+        },
       },
     });
 
-    return buses.map((bus) => ({
-      ...bus,
-      activePassengers: bus._count.passengers,
-      // حساب حسم الشركة كمبلغ
-      companyDeductionAmount: Number(
-        new Prisma.Decimal(bus.totalCost.toString())
-          .times(new Prisma.Decimal(bus.companyDeductionPct.toString()))
-          .div(100)
-          .toFixed(2),
-      ),
-    }));
+    // التحقق من حالة الموظف نفسه: الموظف المستقيل الذي ما زال سجل اشتراكه
+    // 'active' لا يُعد مشتركاً فعلياً — حتى تتطابق الواجهة مع حسابات الرواتب.
+    const passengerEmployeeIds = [
+      ...new Set(buses.flatMap((bus) => bus.passengers.map((p) => p.employeeId))),
+    ];
+    const employees = passengerEmployeeIds.length
+      ? await this.prisma.employee.findMany({
+          where: { employeeId: { in: passengerEmployeeIds } },
+          select: { employeeId: true, status: true },
+        })
+      : [];
+    const activeEmployeeIds = new Set(
+      employees.filter((e) => e.status === 'active').map((e) => e.employeeId),
+    );
+
+    return buses.map((bus) => {
+      const activePassengers = bus.passengers.filter((p) =>
+        activeEmployeeIds.has(p.employeeId),
+      ).length;
+
+      return {
+        ...bus,
+        passengers: undefined,
+        activePassengers,
+        // حساب حسم الشركة كمبلغ
+        companyDeductionAmount: Number(
+          new Prisma.Decimal(bus.totalCost.toString())
+            .times(new Prisma.Decimal(bus.companyDeductionPct.toString()))
+            .div(100)
+            .toFixed(2),
+        ),
+      };
+    });
   }
 
   async getBus(busId: string) {
@@ -71,7 +99,7 @@ export class TransportationService {
         passengers: {
           where: { status: 'active' },
           orderBy: { subscriptionDate: 'asc' },
-          include: { employee: { select: { name: true } } },
+          include: { employee: { select: { name: true, status: true } } },
         },
       },
     });
@@ -80,10 +108,14 @@ export class TransportationService {
 
     return {
       ...bus,
-      passengers: bus.passengers.map(p => ({
-        ...p,
-        name: p.employee?.name || p.name,
-      })),
+      // عرض المشتركين الفعليين فقط: الموظف المستقيل بسجل اشتراك قديم لا يُعرض
+      // كمشترك — حتى تتطابق أرقام النافذة مع الواجهة الرئيسية وحسابات الرواتب.
+      passengers: bus.passengers
+        .filter((p) => p.employee?.status === 'active')
+        .map((p) => ({
+          ...p,
+          name: p.employee?.name || p.name,
+        })),
       companyDeductionAmount: Number(
         new Prisma.Decimal(bus.totalCost.toString())
           .times(new Prisma.Decimal(bus.companyDeductionPct.toString()))
@@ -172,22 +204,36 @@ export class TransportationService {
 
   // ─── Passengers ───────────────────────────────────────────────────────────
 
-  /** Returns a map of employeeId → bus route for all active bus subscriptions */
+  /** Returns a map of employeeId → bus route for actually-active bus subscriptions.
+   * Employees who resigned/terminated (with a stale 'active' subscription
+   * record) are excluded so the profile page never shows a phantom subscription. */
   async getActiveSubscribers() {
     const activePassengers = await this.prisma.busPassenger.findMany({
       where: { status: 'active' },
       select: {
         employeeId: true,
-        bus: { select: { route: true, plateNumber: true } },
+        bus: { select: { route: true, plateNumber: true, status: true } },
       },
     });
+
+    // Employee-level validation: only employees who are still active count.
+    const employeeIds = [...new Set(activePassengers.map((p) => p.employeeId))];
+    const employees = employeeIds.length
+      ? await this.prisma.employee.findMany({
+          where: { employeeId: { in: employeeIds } },
+          select: { employeeId: true, status: true },
+        })
+      : [];
+    const activeEmployeeIds = new Set(
+      employees.filter((e) => e.status === 'active').map((e) => e.employeeId),
+    );
 
     // Build a map: employeeId → { route, plateNumber }
     const map = new Map<string, { route: string; plateNumber: string }>();
     for (const p of activePassengers) {
-      // `bus` is typed optional only because the composite key (tenantId, busId)
-      // carries a nullable tenantId; busId itself is NOT NULL and was included.
-      map.set(p.employeeId, { route: p.bus!.route, plateNumber: p.bus!.plateNumber });
+      if (!activeEmployeeIds.has(p.employeeId)) continue;
+      if (!p.bus || p.bus.status !== 'active') continue;
+      map.set(p.employeeId, { route: p.bus.route, plateNumber: p.bus.plateNumber });
     }
     return Object.fromEntries(map);
   }
@@ -395,6 +441,101 @@ export class TransportationService {
 
   // ─── Payroll Calculation Logic ────────────────────────────────────────────
 
+  /**
+   * Eligible bus subscriptions for a payroll month — the single source of truth
+   * for both the per-employee share denominator and who actually gets charged.
+   *
+   * A passenger qualifies only when ALL of the following hold:
+   *  1. The bus itself is `active` (a cancelled bus's passengers pay nothing).
+   *  2. The subscription is `active`, or ended during the target month (the
+   *     departing employee pays a prorated share for the days they rode).
+   *  3. The employee is still `active`, OR resigned/terminated during the
+   *     target month. A resigned employee with a stale `active` subscription
+   *     record is excluded ENTIRELY — never counted in the per-employee share
+   *     and never charged a deduction.
+   *
+   * Only the latest subscription per employee is kept.
+   */
+  private async getEligibleSubscriptions(targetMonth: Date) {
+    const year = targetMonth.getFullYear();
+    const monthIdx = targetMonth.getMonth();
+    const monthStart = new Date(Date.UTC(year, monthIdx, 1));
+    const monthEnd = new Date(Date.UTC(year, monthIdx + 1, 0));
+
+    const candidates = await this.prisma.busPassenger.findMany({
+      where: {
+        OR: [
+          { status: 'active' },
+          { status: 'inactive', terminationDate: { gte: monthStart, lte: monthEnd } },
+        ],
+      },
+      include: { bus: { select: { status: true } } },
+    });
+
+    // 1. Active buses only.
+    const onActiveBuses = candidates.filter((p) => p.bus?.status === 'active');
+
+    // Latest subscription per employee.
+    const latest = new Map<string, (typeof candidates)[number]>();
+    for (const p of [...onActiveBuses].sort(
+      (a, b) => b.subscriptionDate.getTime() - a.subscriptionDate.getTime(),
+    )) {
+      if (!latest.has(p.employeeId)) latest.set(p.employeeId, p);
+    }
+
+    // 3. Employee-level validation (resigned/terminated employees are out).
+    const employeeIds = [...latest.keys()];
+    const employees = employeeIds.length
+      ? await this.prisma.employee.findMany({
+          where: { employeeId: { in: employeeIds } },
+          select: { employeeId: true, status: true, terminationDate: true },
+        })
+      : [];
+    const byEmployeeId = new Map(employees.map((e) => [e.employeeId, e]));
+
+    const subscribers = new Map<
+      string,
+      { passenger: (typeof candidates)[number]; employeeTerminationDate: Date | null }
+    >();
+    for (const [empId, passenger] of latest) {
+      const employee = byEmployeeId.get(empId);
+      // No matching employee row (orphaned subscription) → never charged.
+      if (!employee) continue;
+
+      const employeeIsActive = employee.status === 'active';
+      const passengerLeftThisMonth =
+        passenger.terminationDate != null &&
+        passenger.terminationDate >= monthStart &&
+        passenger.terminationDate <= monthEnd;
+      const employeeLeftThisMonth =
+        employee.terminationDate != null &&
+        employee.terminationDate >= monthStart &&
+        employee.terminationDate <= monthEnd;
+
+      if (employeeIsActive || passengerLeftThisMonth || employeeLeftThisMonth) {
+        subscribers.set(empId, { passenger, employeeTerminationDate: employee.terminationDate });
+      }
+    }
+
+    return { subscribers };
+  }
+
+  /** Fleet-wide net cost (after company deduction) across active buses. */
+  private async getActiveFleetNetCost(): Promise<number> {
+    const activeBuses = await this.prisma.bus.findMany({
+      where: { status: 'active' },
+      select: { totalCost: true, companyDeductionPct: true },
+    });
+
+    let netCost = 0;
+    for (const bus of activeBuses) {
+      const cost = Number(bus.totalCost);
+      const pct = Number(bus.companyDeductionPct);
+      netCost += cost * (1 - pct / 100);
+    }
+    return netCost;
+  }
+
   private getActiveWorkingDays(subscriptionDate: Date, targetMonth: Date, terminationDate?: Date | null): number {
     const subYear = subscriptionDate.getFullYear();
     const subMonth = subscriptionDate.getMonth();
@@ -445,86 +586,35 @@ export class TransportationService {
   }
 
   async calculateProratedBusDeduction(employeeId: string, targetMonth: Date) {
-    // 1. Get all active buses
-    const activeBuses = await this.prisma.bus.findMany({
-      where: { status: 'active' },
-    });
+    const netCost = await this.getActiveFleetNetCost();
 
-    if (activeBuses.length === 0) {
-      return 0;
-    }
-
-    // 2. Calculate Total_Fleet_Cost and Total_Company_Deduction
-    let totalFleetCost = 0;
-    let totalCompanyDeduction = 0;
-
-    for (const bus of activeBuses) {
-      const cost = Number(bus.totalCost);
-      const pct = Number(bus.companyDeductionPct);
-      totalFleetCost += cost;
-      totalCompanyDeduction += cost * (pct / 100);
-    }
-
-    const companyPercentage = totalFleetCost > 0 ? (totalCompanyDeduction / totalFleetCost) * 100 : 0;
-
-    // 3. Get Total_Subscribed_Employees (active + those who left this month)
-    const targetYear = targetMonth.getFullYear();
-    const targetMonthIdx = targetMonth.getMonth();
-    const monthStart = new Date(Date.UTC(targetYear, targetMonthIdx, 1));
-    const monthEnd = new Date(Date.UTC(targetYear, targetMonthIdx + 1, 0));
-
-    const totalSubscribedEmployees = await this.prisma.busPassenger.count({
-      where: {
-        OR: [
-          { status: 'active' },
-          {
-            status: 'inactive',
-            terminationDate: { gte: monthStart, lte: monthEnd },
-          },
-        ],
-      },
-    });
-
-    // 4. Handle Division by Zero
+    const { subscribers } = await this.getEligibleSubscriptions(targetMonth);
+    const totalSubscribedEmployees = subscribers.size;
     if (totalSubscribedEmployees === 0) {
       return 0;
     }
 
-    // 5. Calculate Net_Cost
-    const netCost = totalFleetCost * (1 - (companyPercentage / 100));
-
-    // 6. Calculate Base_Share
+    // المعادلة الموحدة: (صافي تكلفة الخطوط بعد حسم الشركة / عدد المشتركين الفعليين النشطين)
     const baseShare = netCost / totalSubscribedEmployees;
 
-    // 7. Get employee's subscription (active OR recently deactivated this month)
-    const passenger = await this.prisma.busPassenger.findFirst({
-      where: {
-        employeeId,
-        OR: [
-          { status: 'active' },
-          {
-            status: 'inactive',
-            terminationDate: { gte: monthStart, lte: monthEnd },
-          },
-        ],
-      },
-      orderBy: { subscriptionDate: 'desc' },
-    });
-
-    if (!passenger) {
+    const entry = subscribers.get(employeeId);
+    if (!entry) {
       return 0;
     }
 
-    // 8. Calculate Active_Working_Days (uses terminationDate if departed this month)
+    const { passenger, employeeTerminationDate } = entry;
+    // End date for proration: subscription termination, or the employee's own
+    // termination when they resigned this month but the subscription record
+    // was left active.
+    const effectiveTerminationDate = passenger.terminationDate ?? employeeTerminationDate;
+
     const activeWorkingDays = this.getActiveWorkingDays(
       passenger.subscriptionDate,
       targetMonth,
-      passenger.terminationDate,
+      effectiveTerminationDate,
     );
 
-    // 9. Calculate Final_Deduction
     const finalDeduction = (baseShare / 26) * activeWorkingDays;
-
     return Math.round(finalDeduction * 100) / 100;
   }
 
@@ -570,76 +660,28 @@ export class TransportationService {
     const result = new Map<string, number>();
     if (employeeIds.length === 0) return result;
 
-    // 1. Get all active buses
-    const activeBuses = await this.prisma.bus.findMany({ where: { status: 'active' } });
-    if (activeBuses.length === 0) return result;
-
-    // 2. Calculate fleet-wide company percentage
-    let totalFleetCost = 0;
-    let totalCompanyDeduction = 0;
-    for (const bus of activeBuses) {
-      const cost = Number(bus.totalCost);
-      const pct = Number(bus.companyDeductionPct);
-      totalFleetCost += cost;
-      totalCompanyDeduction += cost * (pct / 100);
-    }
-    const companyPercentage = totalFleetCost > 0 ? (totalCompanyDeduction / totalFleetCost) * 100 : 0;
-
-    // 3. Total subscribed employees (active + those who left this month)
-    const targetYear = targetMonth.getFullYear();
-    const targetMonthIdx = targetMonth.getMonth();
-    const monthStart = new Date(Date.UTC(targetYear, targetMonthIdx, 1));
-    const monthEnd = new Date(Date.UTC(targetYear, targetMonthIdx + 1, 0));
-
-    const totalSubscribedEmployees = await this.prisma.busPassenger.count({
-      where: {
-        OR: [
-          { status: 'active' },
-          {
-            status: 'inactive',
-            terminationDate: { gte: monthStart, lte: monthEnd },
-          },
-        ],
-      },
-    });
+    // المعادلة الموحدة: (صافي تكلفة الخطوط بعد حسم الشركة / عدد المشتركين
+    // الفعليين النشطين). المستقيلون والمنسحبون بسجل اشتراك قديم لا يُحسبون
+    // في المقام ولا يُخصم عليهم شيء.
+    const netCost = await this.getActiveFleetNetCost();
+    const { subscribers } = await this.getEligibleSubscriptions(targetMonth);
+    const totalSubscribedEmployees = subscribers.size;
     if (totalSubscribedEmployees === 0) return result;
 
-    // 4. Net cost and base share
-    const netCost = totalFleetCost * (1 - companyPercentage / 100);
     const baseShare = netCost / totalSubscribedEmployees;
+    const requestedSet = new Set(employeeIds);
 
-    // 5. Get all subscriptions for the given employees (active + recently deactivated)
-    const passengers = await this.prisma.busPassenger.findMany({
-      where: {
-        employeeId: { in: employeeIds },
-        OR: [
-          { status: 'active' },
-          {
-            status: 'inactive',
-            terminationDate: { gte: monthStart, lte: monthEnd },
-          },
-        ],
-      },
-      orderBy: { subscriptionDate: 'desc' },
-    });
+    for (const [empId, entry] of subscribers) {
+      if (!requestedSet.has(empId)) continue;
 
-    // Keep only the latest subscription per employee
-    const latestByEmployee = new Map<string, typeof passengers[0]>();
-    for (const p of passengers) {
-      if (!latestByEmployee.has(p.employeeId)) {
-        latestByEmployee.set(p.employeeId, p);
-      }
-    }
-
-    // 6. Calculate prorated deduction per employee
-    for (const [empId, passenger] of latestByEmployee) {
+      const { passenger, employeeTerminationDate } = entry;
       // During a provisional settlement (termination preview) the passenger is
       // still active with terminationDate=null, so we must use the preview's
       // terminationDate to prorate correctly for the employee's last work day.
       const effectiveTerminationDate =
         options?.isProvisional && options?.terminationDate
           ? options.terminationDate
-          : passenger.terminationDate;
+          : (passenger.terminationDate ?? employeeTerminationDate);
 
       const activeWorkingDays = this.getActiveWorkingDays(
         passenger.subscriptionDate,
@@ -702,10 +744,10 @@ export class TransportationService {
     const breakdowns: any[] = [];
     let totalTransportationDeduction = 0;
 
-    // تجميع التكاليف حسب الموظف
-    const employeeIds = Array.from(new Set(passengers.map(p => p.employeeId)));
+    // تجميع التكاليف حسب الموظف — فقط المشتركين الفعليين النشطين
+    const { subscribers } = await this.getEligibleSubscriptions(targetMonth);
 
-    for (const empId of employeeIds) {
+    for (const empId of subscribers.keys()) {
       const cost = await this.calculateProratedBusDeduction(empId, targetMonth);
       if (cost > 0) {
         const passenger = passengers.find((p) => p.employeeId === empId);
@@ -713,7 +755,7 @@ export class TransportationService {
           breakdowns.push({
             employeeId: empId,
             busId: passenger.busId,
-            busRoute: passenger.bus!.route,
+            busRoute: passenger.bus?.route ?? 'غير معروف',
             transportCost: cost,
             month: targetMonth.toISOString().slice(0, 7),
             calculatedDate: new Date().toISOString(),

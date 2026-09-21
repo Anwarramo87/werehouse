@@ -2149,6 +2149,7 @@ export class PayrollService {
       const items: Prisma.PayrollItemCreateManyInput[] = [];
 
       for (const employee of employeesBatch) {
+        try {
         const salaryRecord = salaryByEmployee.get(employee.employeeId);
         const input = payrollInputByEmployee.get(employee.employeeId);
 
@@ -2425,6 +2426,15 @@ export class PayrollService {
           busDeduction: busDeductionAmount,
           anomalies,
         });
+        } catch (empError) {
+          // موظف واحد فاسد (بيانات ناقصة/متعارضة) لا يجب أن يُسقط دورة الرواتب
+          // كاملة — يُسجل الخطأ ويُتخطى الموظف وتستمر العملية للبقية.
+          this.logger.error(
+            `[PAYROLL] Failed to process employee ${employee.employeeId} (${employee.name}): ${
+              empError instanceof Error ? empError.message : String(empError)
+            }`,
+          );
+        }
       }
 
       if (items.length > 0) {
