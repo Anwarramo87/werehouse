@@ -82,6 +82,21 @@ export class LeavesService {
     if (!employee) {
       throw new BadRequestException(`Employee not found: ${employeeId}`);
     }
+    return employee;
+  }
+
+  /**
+   * Resolves the employee's primary key for a nested `connect`.
+   *
+   * Employee's business key `employeeId` is only unique *within* a factory
+   * (compound `tenantId_employeeId`), so a connect shaped
+   * `{ employeeId, tenantId }` is not a valid unique input and Prisma rejects
+   * the whole create with a validation error. Connecting by the primary `id`
+   * (resolved here through the tenant-scoped findFirst) is always valid.
+   */
+  private async resolveEmployeePkId(employeeId: string): Promise<string> {
+    const employee = await this.assertEmployeeExists(employeeId);
+    return employee.id;
   }
 
   private parseDate(value: string, fieldName: string) {
@@ -105,7 +120,7 @@ export class LeavesService {
   /**
    * تحضير بيانات Prisma لإنشاء طلب إجازة بعد تطبيق التحقق من صحة البيانات.
    */
-  private buildCreateData(dto: CreateLeaveRequestDto): Prisma.LeaveRequestCreateInput {
+  private buildCreateData(dto: CreateLeaveRequestDto, employeePkId: string): Prisma.LeaveRequestCreateInput {
     const startDate = this.parseDate(dto.startDate, 'startDate');
     const endDate = this.parseDate(dto.endDate, 'endDate');
 
@@ -123,7 +138,10 @@ export class LeavesService {
     }
 
     return {
-      employee: { connect: tenantKey<Prisma.EmployeeWhereUniqueInput>({ employeeId: dto.employeeId }) },
+      // Connect by primary key: `employeeId` is only unique within a factory
+      // (compound tenantId_employeeId), so a business-key connect is rejected
+      // by Prisma's unique-input validation.
+      employee: { connect: { id: employeePkId } },
       leaveType: dto.leaveType as LeaveRequestType,
       status: dto.status ? (dto.status as LeaveRequestStatus) : LeaveRequestStatus.APPROVED,
       isPaid: dto.isPaid ?? false,
@@ -412,8 +430,8 @@ export class LeavesService {
   // ── Mutations ──────────────────────────────────────────────────────────────
 
   async create(dto: CreateLeaveRequestDto) {
-    await this.assertEmployeeExists(dto.employeeId);
-    const data = this.buildCreateData(dto);
+    const employeePkId = await this.resolveEmployeePkId(dto.employeeId);
+    const data = this.buildCreateData(dto, employeePkId);
 
     // ── Check attendance conflict BEFORE any DB write ──
     const warning = await checkAttendanceConflictForLeave(
@@ -479,14 +497,14 @@ export class LeavesService {
       throw new BadRequestException('items must not be empty');
     }
 
-    // 1) التحقق من وجود كل الموظفين بـ findMany واحد
+    // 1) التحقق من وجود كل الموظفين بـ findMany واحد + جلب المفتاح الأساسي للربط
     const employeeIds = Array.from(new Set(dto.items.map((i) => i.employeeId)));
     const employees = await this.prisma.employee.findMany({
       where: { employeeId: { in: employeeIds } },
-      select: { employeeId: true },
+      select: { employeeId: true, id: true },
     });
-    const knownIds = new Set(employees.map((e) => e.employeeId));
-    const missing = employeeIds.filter((id) => !knownIds.has(id));
+    const pkIdByEmployeeId = new Map(employees.map((e) => [e.employeeId, e.id]));
+    const missing = employeeIds.filter((id) => !pkIdByEmployeeId.has(id));
     if (missing.length) {
       throw new BadRequestException(`Employee(s) not found: ${missing.join(', ')}`);
     }
@@ -494,7 +512,7 @@ export class LeavesService {
     // 2) بناء بيانات Prisma مع تحقق DTO-level (يفشل بسرعة إن كانت أي بيانات غير صحيحة)
     const buildItems = dto.items.map((item) => ({
       input: item,
-      data: this.buildCreateData(item),
+      data: this.buildCreateData(item, pkIdByEmployeeId.get(item.employeeId)!),
     }));
 
     // 3) تنفيذ كل العمليات داخل transaction واحد لضمان atomicity + sync مع PayrollInput
@@ -555,8 +573,8 @@ export class LeavesService {
     const data: Prisma.LeaveRequestUpdateInput = {};
 
     if (dto.employeeId !== undefined) {
-      await this.assertEmployeeExists(dto.employeeId);
-      data.employee = { connect: tenantKey<Prisma.EmployeeWhereUniqueInput>({ employeeId: dto.employeeId }) };
+      const employeePkId = await this.resolveEmployeePkId(dto.employeeId);
+      data.employee = { connect: { id: employeePkId } };
     }
     if (dto.leaveType !== undefined) data.leaveType = dto.leaveType as LeaveRequestType;
     if (dto.status !== undefined) data.status = dto.status as LeaveRequestStatus;
