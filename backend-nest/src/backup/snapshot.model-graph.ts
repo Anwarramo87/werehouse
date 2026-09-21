@@ -127,6 +127,12 @@ export const MODEL_DEPENDENCIES: Record<string, readonly string[]> = {
   // factory itself, and belongs in a snapshot: restoring a factory without its
   // entitlements would hand it either everything or nothing.
   tenantEntitlement: ['tenant'],
+  // Per-admin page grants. Points at the admin account as well as the factory,
+  // so it restores after both exist; without this edge a snapshot would export
+  // the rows and then silently drop them on restore.
+  userEntitlement: ['tenant', 'user'],
+  // The factory's time-boxed subscription. Restores with the factory itself.
+  tenantSubscription: ['tenant'],
 };
 
 /**

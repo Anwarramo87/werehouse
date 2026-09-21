@@ -46,6 +46,11 @@ describe('EntitlementsService — before its migration runs', () => {
             ];
           }),
         },
+        // listTenants reads subscriptions in a second query; no row here means
+        // "nothing configured", which stays fully entitled.
+        tenantSubscription: {
+          findMany: jest.fn(async () => []),
+        },
       } as never;
 
       const rows = await new EntitlementsService(prisma, cacheStub()).listTenants();
@@ -85,6 +90,11 @@ describe('EntitlementsService — before its migration runs', () => {
           findUnique: jest.fn(async () => {
             throw error;
           }),
+        },
+        // enabledPagesFor also consults the subscription table; a quiet "no
+        // row" here keeps these tests about the entitlement table only.
+        tenantSubscription: {
+          findUnique: jest.fn(async () => null),
         },
       }) as never;
 

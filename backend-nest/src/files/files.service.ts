@@ -88,10 +88,25 @@ export function resolveUploadRoot(env: NodeJS.ProcessEnv = process.env): string 
   const fallback = resolve(process.cwd(), 'tmp', 'uploads');
 
   if (!configured) {
+    if (isProduction) {
+      throw new Error(
+        'UPLOAD_ROOT must be set in production so uploads land on a mounted volume, not in the container image.',
+      );
+    }
     return fallback;
   }
 
   const root = resolve(configured);
+
+  if (isProduction) {
+    const appDir = resolve(process.cwd());
+    if (root === appDir || root.startsWith(appDir + sep)) {
+      throw new Error(
+        'UPLOAD_ROOT must not be inside the application directory in production: ' +
+          'the container image is recreated empty on every redeploy and every uploaded file would be lost.',
+      );
+    }
+  }
 
   return root;
 }

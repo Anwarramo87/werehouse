@@ -6,51 +6,61 @@ const { Pool } = require('pg');
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 const prisma = new PrismaClient({ adapter: new PrismaPg(pool) });
 
+/**
+ * Full admin permission set. MUST mirror ADMIN_PERMISSIONS in
+ * src/auth/auth.service.ts (the backend reconciles the admin role against
+ * that list on every boot). A shorter list here would silently STRIP
+ * permissions (manage_salary, manage_trash, view_purchasing, view_sales, …)
+ * from the admin role on any re-run, breaking salaries, trash and WMS pages.
+ */
+const FULL_ADMIN_PERMISSIONS = [
+  'view_employees',
+  'edit_employees',
+  'delete_employees',
+  'view_devices',
+  'manage_devices',
+  'manage_users',
+  'view_attendance',
+  'edit_attendance',
+  'view_payroll',
+  'run_payroll',
+  'approve_payroll',
+  'delete_payroll',
+  'view_inventory',
+  'edit_inventory',
+  'view_imports',
+  'run_imports',
+  'manage_salary',
+  'manage_advances',
+  'manage_insurance',
+  'manage_bonuses',
+  'manage_penalties',
+  'manage_trash',
+  'manage_backups',
+  'view_purchasing',
+  'edit_purchasing',
+  'view_sales',
+  'edit_sales',
+  'view_accounting',
+  'edit_accounting',
+  'notifications.view',
+  'view_batches',
+  'edit_batches',
+  'view_fulfillment',
+  'edit_fulfillment',
+];
+
 async function main() {
   const adminRole = await prisma.role.upsert({
     where: { name: 'admin' },
     update: {
       description: 'System administrator',
-      permissions: [
-        'view_employees',
-        'edit_employees',
-        'delete_employees',
-        'view_devices',
-        'manage_devices',
-        'manage_users',
-        'manage_roles',
-        'view_attendance',
-        'edit_attendance',
-        'view_payroll',
-        'run_payroll',
-        'approve_payroll',
-        'view_inventory',
-        'edit_inventory',
-        'view_imports',
-        'run_imports',
-      ],
+      permissions: FULL_ADMIN_PERMISSIONS,
     },
     create: {
       name: 'admin',
       description: 'System administrator',
-      permissions: [
-        'view_employees',
-        'edit_employees',
-        'delete_employees',
-        'view_devices',
-        'manage_devices',
-        'manage_users',
-        'manage_roles',
-        'view_attendance',
-        'edit_attendance',
-        'view_payroll',
-        'run_payroll',
-        'approve_payroll',
-        'view_inventory',
-        'edit_inventory',
-        'view_imports',
-        'run_imports',
-      ],
+      permissions: FULL_ADMIN_PERMISSIONS,
     },
   });
 

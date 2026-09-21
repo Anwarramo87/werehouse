@@ -50,11 +50,25 @@ describe('FilesService', () => {
     });
 
     it('accepts generic octet-stream MIME type for any allowed extension', async () => {
-      // octet-stream is in GENERIC_MIME_TYPES so validation passes — upload succeeds
+      // octet-stream is in GENERIC_MIME_TYPES so validation passes — upload succeeds.
+      // Uploads are tenant-scoped, so a factory actor is required (superadmin
+      // uploads land in the shared segment instead).
       const result = await service.uploadGeneralFile(
         makeFile({ originalname: 'doc.pdf', mimetype: 'application/octet-stream' }),
+        undefined,
+        { tenantId: 'aaaaaaa1-0000-4000-8000-00000000000a' },
       );
       expect(result.file.mimeType).toBe('application/octet-stream');
+    });
+
+    it('throws BadRequestException when no factory context is given', async () => {
+      // Tenant isolation: without an actor the upload has no owning segment,
+      // so it is refused rather than written somewhere cross-factory.
+      await expect(
+        service.uploadGeneralFile(
+          makeFile({ originalname: 'doc.pdf', mimetype: 'application/octet-stream' }),
+        ),
+      ).rejects.toBeInstanceOf(BadRequestException);
     });
   });
 

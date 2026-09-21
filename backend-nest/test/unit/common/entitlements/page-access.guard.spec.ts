@@ -16,7 +16,11 @@ const reflectorReturning = (pageKey: string | undefined) =>
 
 const entitlementsWith = (enabled: string[]) =>
   ({
-    isPageEnabled: jest.fn(async (_tenantId: string, key: string) => enabled.includes(key)),
+    // The guard checks the per-admin grant (which falls back to the factory
+    // grant when the admin has no row), not the factory grant directly.
+    isPageEnabledForUser: jest.fn(async (_userId: string, _tenantId: string, key: string) =>
+      enabled.includes(key),
+    ),
   }) as never;
 
 /*
@@ -25,7 +29,12 @@ const entitlementsWith = (enabled: string[]) =>
  * system still cannot reach a module their factory does not have.
  */
 describe('PageAccessGuard', () => {
-  const admin = { tenantId: ACME, roles: ['admin'], permissions: ['view_inventory'] };
+  const admin = {
+    userId: 'bbbbbbb2-0000-4000-8000-00000000000b',
+    tenantId: ACME,
+    roles: ['admin'],
+    permissions: ['view_inventory'],
+  };
 
   it('admits a factory that holds the page', async () => {
     const guard = new PageAccessGuard(
@@ -65,8 +74,9 @@ describe('PageAccessGuard', () => {
     ).resolves.toBe(true);
 
     // It never asked: the super admin is not buying anything.
-    expect((entitlements as unknown as { isPageEnabled: jest.Mock }).isPageEnabled)
-      .not.toHaveBeenCalled();
+    expect(
+      (entitlements as unknown as { isPageEnabledForUser: jest.Mock }).isPageEnabledForUser,
+    ).not.toHaveBeenCalled();
   });
 
   it('recognises the overseer from a singular role too', async () => {
@@ -121,6 +131,11 @@ describe('EntitlementsService.enabledPagesFor — before its migration runs', ()
         findUnique: jest.fn(async () => {
           throw error;
         }),
+      },
+      // enabledPagesFor also consults the subscription table; a quiet "no
+      // row" here keeps these tests about the entitlement table only.
+      tenantSubscription: {
+        findUnique: jest.fn(async () => null),
       },
     }) as never;
 
