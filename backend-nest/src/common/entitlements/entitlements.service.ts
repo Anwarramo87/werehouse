@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, Logger } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { ShortCacheService } from '../cache/short-cache.service';
 import { runUnscoped, runWithTenant } from '../tenant/tenant-context';
@@ -157,13 +157,28 @@ export class EntitlementsService {
   /**
    * Prisma's "table does not exist" (P2021), plus the raw Postgres 42P01 it
    * wraps, since the adapter does not always translate it.
+   *
+   * Deliberately NOT a match for "column does not exist" (P2022): a missing
+   * optional column must fall through to a narrower select, not pretend the
+   * whole relation is gone and then re-select the same missing column.
    */
   private isMissingTable(error: unknown): boolean {
     const code = (error as { code?: string })?.code;
     if (code === 'P2021' || code === '42P01') return true;
+    if (code === 'P2022') return false;
 
     const message = error instanceof Error ? error.message : String(error);
+    if (/column .* does not exist/i.test(message)) return false;
     return /does not exist in the current database|relation .* does not exist/i.test(message);
+  }
+
+  /** Prisma's "column does not exist" (P2022) / raw 42703. */
+  private isMissingColumn(error: unknown): boolean {
+    const code = (error as { code?: string })?.code;
+    if (code === 'P2022' || code === '42703') return true;
+
+    const message = error instanceof Error ? error.message : String(error);
+    return /column .* does not exist/i.test(message);
   }
 
   async isPageEnabled(tenantId: string, pageKey: string): Promise<boolean> {
@@ -178,7 +193,7 @@ export class EntitlementsService {
    * gated by SuperAdminGuard.
    */
   async listTenants() {
-    const baseSelect = {
+    const coreSelect = {
       id: true,
       name: true,
       code: true,
@@ -192,6 +207,7 @@ export class EntitlementsService {
       name: string;
       code: string;
       status: string;
+      description?: string | null;
       createdAt: Date;
       _count: { users: number; employees: number };
       entitlement?: {
@@ -201,32 +217,47 @@ export class EntitlementsService {
       } | null;
     };
 
-    // Joining `entitlement` fails outright when the table has not been created
-    // yet, which took the whole factories screen down with a 500 rather than
-    // showing the factories and saying entitlements were unconfigured. Retry
-    // without the relation instead; same rule as enabledPagesFor.
+    // Schema drift on a live database used to 500 the whole factories screen:
+    // a missing entitlement table OR a missing optional column (e.g.
+    // tenants.description before `migrate deploy`) failed the wide select, the
+    // "missing table" fallback re-selected the same missing column, and the
+    // second error escaped. Walk a fixed ladder of selects instead — core →
+    // +description → +entitlement — and stop at the widest row that works.
     const tenants = await runUnscoped('tenant-overview', async (): Promise<TenantRow[]> => {
-      try {
-        return (await this.prisma.tenant.findMany({
-          orderBy: { name: 'asc' },
-          select: {
-            ...baseSelect,
-            entitlement: { select: { enabledPages: true, updatedAt: true, updatedBy: true } },
-          },
-        })) as TenantRow[];
-      } catch (error) {
-        if (!this.isMissingTable(error)) throw error;
+      const attempts: Array<() => Promise<TenantRow[]>> = [
+        () =>
+          this.prisma.tenant.findMany({
+            orderBy: { name: 'asc' },
+            select: {
+              ...coreSelect,
+              description: true,
+              entitlement: { select: { enabledPages: true, updatedAt: true, updatedBy: true } },
+            },
+          }) as Promise<TenantRow[]>,
+        () =>
+          this.prisma.tenant.findMany({
+            orderBy: { name: 'asc' },
+            select: { ...coreSelect, description: true },
+          }) as Promise<TenantRow[]>,
+        () => this.prisma.tenant.findMany({ orderBy: { name: 'asc' }, select: coreSelect }) as Promise<TenantRow[]>,
+      ];
 
-        this.logger.warn(
-          'tenant_entitlements is missing — run `prisma migrate deploy`. ' +
-            'Listing factories as fully entitled until it exists.',
-        );
-
-        return (await this.prisma.tenant.findMany({
-          orderBy: { name: 'asc' },
-          select: baseSelect,
-        })) as TenantRow[];
+      let lastError: unknown;
+      for (let i = 0; i < attempts.length; i++) {
+        try {
+          return await attempts[i]();
+        } catch (error) {
+          lastError = error;
+          const recoverable = this.isMissingTable(error) || this.isMissingColumn(error);
+          if (!recoverable) throw error;
+          if (i === attempts.length - 1) break;
+          this.logger.warn(
+            `tenant overview select #${i} hit schema drift (${(error as Error)?.message}); ` +
+              'falling back to a narrower select. Run `prisma migrate deploy` / `db push`.',
+          );
+        }
       }
+      throw lastError;
     });
 
     // Subscriptions in one query (own try/catch: the table may not exist yet
@@ -261,6 +292,7 @@ export class EntitlementsService {
         name: tenant.name,
         code: tenant.code,
         status: tenant.status,
+        description: tenant.description ?? null,
         createdAt: tenant.createdAt,
         users: tenant._count.users,
         employees: tenant._count.employees,
@@ -276,6 +308,109 @@ export class EntitlementsService {
         subscription,
       };
     });
+  }
+
+  /**
+   * Creates a Zero-State factory: one Tenant row and nothing else — no
+   * departments, employees, users, or seed data. Access defaults match an
+   * unconfigured factory (fully entitled, no subscription row → legacy open),
+   * so the overseer can create it and the factory admin can bootstrap from
+   * the detail page.
+   */
+  async createTenant(input: {
+    name: string;
+    code?: string;
+    description?: string;
+  }) {
+    const name = input.name.trim();
+    if (!name) throw new BadRequestException('Factory name is required');
+
+    // Explicit code provided by the caller → validate uniqueness.
+    // No code → auto-derive the next sequential factoryNNN to guarantee
+    // no 409 unique-constraint collisions.
+    let code = input.code?.trim();
+    const explicitCode = !!code;
+    if (!explicitCode) {
+      code = await this.getNextFactoryCode();
+    }
+    if (!code) throw new BadRequestException('Factory code could not be derived');
+    code = code.slice(0, 64);
+
+    const taken = await runUnscoped('tenant-code-check', () =>
+      this.prisma.tenant.findUnique({ where: { code }, select: { id: true } }),
+    );
+    if (taken && explicitCode) {
+      throw new ConflictException(`Factory code "${code}" already exists`);
+    }
+
+    // If a caller-supplied code collided (race condition), fall back to
+    // the next available sequential code instead of failing with 409.
+    if (taken && !explicitCode) {
+      code = await this.getNextFactoryCode();
+    }
+
+    const tenant = await runUnscoped('tenant-create', () =>
+      this.prisma.tenant.create({
+        data: {
+          name,
+          code,
+          status: 'active',
+          description: input.description?.trim() || null,
+        },
+      }),
+    );
+
+    // Same shape as listTenants rows so the UI can append without reshaping.
+    return {
+      id: tenant.id,
+      name: tenant.name,
+      code: tenant.code,
+      status: tenant.status,
+      description: tenant.description ?? null,
+      createdAt: tenant.createdAt,
+      users: 0,
+      employees: 0,
+      enabledPageCount: ALL_PAGE_KEYS.length,
+      totalPageCount: ALL_PAGE_KEYS.length,
+      modules: MODULES.map((module) => ({
+        key: module.key,
+        label: module.label,
+        state: moduleState(module.key, new Set(ALL_PAGE_KEYS)),
+      })),
+      entitlementsUpdatedAt: null,
+      entitlementsUpdatedBy: null,
+      subscription: null,
+    };
+  }
+
+  /** URL-safe code from a (possibly Arabic) name; falls back to a short suffix. */
+  private slugifyCode(name: string): string {
+    const base = name
+      .toLowerCase()
+      .replace(/[^\p{L}\p{N}]+/gu, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 40);
+    if (base) return base;
+    return `factory-${Date.now().toString(36)}`;
+  }
+
+  /**
+   * Next sequential factory code: factory000, factory001, ...
+   * Scans all existing codes matching factory\d+, takes the max, increments.
+   */
+  async getNextFactoryCode(): Promise<string> {
+    const rows = await runUnscoped('next-factory-code', () =>
+      this.prisma.tenant.findMany({
+        select: { code: true },
+      }),
+    );
+    const nums = rows
+      .map((r) => (r.code ?? '').match(/^factory(\d+)$/))
+      .filter((m): m is RegExpMatchArray => m !== null)
+      .map((m) => parseInt(m[1], 10))
+      .filter((n) => !Number.isNaN(n));
+    const next = nums.length > 0 ? Math.max(...nums) + 1 : 0;
+    return `factory${String(next).padStart(3, '0')}`;
   }
 
   /**
@@ -786,14 +921,19 @@ export class EntitlementsService {
     if (cached) return cached;
 
     const row = await this.userSubscriptionRowFor(userId);
-    const view = row
-      ? this.subscriptionViewFor(row)
-      : await this.getSubscription(tenantId);
-
-    if (view) {
-      await this.cache.setJson(this.userSubscriptionCacheKey(userId), view, CACHE_TTL_SECONDS);
+    if (row) {
+      const view = this.subscriptionViewFor(row);
+      if (view) {
+        await this.cache.setJson(this.userSubscriptionCacheKey(userId), view, CACHE_TTL_SECONDS);
+      }
+      return view;
     }
-    return view;
+
+    // No per-admin row: inherit the factory window via its own cache key so
+    // setSubscription's cache.del takes effect immediately. Caching the
+    // inherited view under the user key would pin a stale expired status for
+    // CACHE_TTL_SECONDS after the Super Admin renews the factory.
+    return this.getSubscription(tenantId);
   }
 
   /**
@@ -801,7 +941,17 @@ export class EntitlementsService {
    * a user row nor a factory row) reads as open — "nothing configured" stays
    * open exactly as it always has been; only a real, past endsAt locks out.
    * SuperAdmin accounts are always open regardless of any subscription row.
+   *
+   * Public so SubscriptionGuard can enforce the same window the page catalogue
+   * already applies, without duplicating the fail-open / lifetime rules.
    */
+  async isSubscriptionActiveForUser(
+    userId: string,
+    tenantId: string,
+  ): Promise<boolean> {
+    return this.subscriptionWindowActiveForUser(userId, tenantId);
+  }
+
   private async subscriptionWindowActiveForUser(
     userId: string,
     tenantId: string,

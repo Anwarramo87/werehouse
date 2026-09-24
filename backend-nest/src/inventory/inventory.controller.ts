@@ -6,6 +6,7 @@ import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { PermissionsGuard } from '../common/guards/permissions.guard';
 import { RequiresPage } from '../common/entitlements/requires-page.decorator';
 import { PageAccessGuard } from '../common/entitlements/page-access.guard';
+import { SubscriptionGuard } from '../common/entitlements/subscription.guard';
 import { Permissions } from '../common/decorators/permissions.decorator';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { AuthenticatedUser } from '../common/types/authenticated-user.types';
@@ -21,7 +22,7 @@ import { UpdateWarehouseDto } from './dto/update-warehouse.dto';
 @ApiTags('inventory')
 @ApiCookieAuth()
 @Controller('inventory')
-@UseGuards(JwtAuthGuard, PermissionsGuard, PageAccessGuard)
+@UseGuards(JwtAuthGuard, SubscriptionGuard, PermissionsGuard, PageAccessGuard)
 @RequiresPage('inventory.products')
 export class InventoryController {
   constructor(private readonly inventoryService: InventoryService) {}

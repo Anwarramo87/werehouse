@@ -16,6 +16,7 @@ import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { PermissionsGuard } from '../common/guards/permissions.guard';
 import { RequiresPage } from '../common/entitlements/requires-page.decorator';
 import { PageAccessGuard } from '../common/entitlements/page-access.guard';
+import { SubscriptionGuard } from '../common/entitlements/subscription.guard';
 import { Permissions } from '../common/decorators/permissions.decorator';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { AuthenticatedUser } from '../common/types/authenticated-user.types';
@@ -30,7 +31,7 @@ import { CompletePutawayDto } from './dto/complete-putaway.dto';
 @ApiTags('locations')
 @ApiCookieAuth()
 @Controller('locations')
-@UseGuards(JwtAuthGuard, PermissionsGuard, PageAccessGuard)
+@UseGuards(JwtAuthGuard, SubscriptionGuard, PermissionsGuard, PageAccessGuard)
 @RequiresPage('inventory.locations')
 export class LocationsController {
   constructor(private readonly locations: LocationsService) {}

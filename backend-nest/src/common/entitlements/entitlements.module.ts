@@ -9,16 +9,18 @@ import {
 } from './entitlements.controller';
 import { EntitlementsService } from './entitlements.service';
 import { PageAccessGuard } from './page-access.guard';
+import { SubscriptionGuard } from './subscription.guard';
 
 /**
- * Global because PageAccessGuard is applied by feature controllers all over the
- * tree, and a guard cannot be injected without its provider being reachable.
+ * Global because PageAccessGuard and SubscriptionGuard are applied by feature
+ * controllers all over the tree, and a guard cannot be injected without its
+ * provider being reachable.
  */
 @Global()
 @Module({
   imports: [ShortCacheModule, PrismaModule, BackupModule],
   controllers: [EntitlementsController, TenantEntitlementsController],
-  providers: [EntitlementsService, PageAccessGuard, AuditService],
-  exports: [EntitlementsService, PageAccessGuard],
+  providers: [EntitlementsService, PageAccessGuard, SubscriptionGuard, AuditService],
+  exports: [EntitlementsService, PageAccessGuard, SubscriptionGuard],
 })
 export class EntitlementsModule {}

@@ -100,7 +100,7 @@ describe('Backup snapshot → restore round trip (e2e, real PostgreSQL)', () => 
     // ---- Factory A: representative data spanning the relationship graph ----
     await asA(async () => {
       const department = await prisma.department.create({
-        data: { name: 'الإنتاج', manager: null },
+        data: { name: 'الإنتاج', manager: null, tenantId: tenantA },
       });
 
       const user = await prisma.user.create({

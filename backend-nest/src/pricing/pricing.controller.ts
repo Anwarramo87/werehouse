@@ -5,6 +5,7 @@ import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { PermissionsGuard } from '../common/guards/permissions.guard';
 import { RequiresPage } from '../common/entitlements/requires-page.decorator';
 import { PageAccessGuard } from '../common/entitlements/page-access.guard';
+import { SubscriptionGuard } from '../common/entitlements/subscription.guard';
 import { Permissions } from '../common/decorators/permissions.decorator';
 import { CreateTaxRateDto } from './dto/create-tax-rate.dto';
 import { UpdateTaxRateDto } from './dto/update-tax-rate.dto';
@@ -16,7 +17,7 @@ import { QuoteDto } from './dto/quote.dto';
 @ApiTags('pricing')
 @ApiCookieAuth()
 @Controller('pricing')
-@UseGuards(JwtAuthGuard, PermissionsGuard, PageAccessGuard)
+@UseGuards(JwtAuthGuard, SubscriptionGuard, PermissionsGuard, PageAccessGuard)
 @RequiresPage('sales.pricing')
 export class PricingController {
   constructor(private readonly pricing: PricingService) {}

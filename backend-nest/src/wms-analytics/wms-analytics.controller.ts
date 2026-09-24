@@ -5,6 +5,7 @@ import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { PermissionsGuard } from '../common/guards/permissions.guard';
 import { RequiresPage } from '../common/entitlements/requires-page.decorator';
 import { PageAccessGuard } from '../common/entitlements/page-access.guard';
+import { SubscriptionGuard } from '../common/entitlements/subscription.guard';
 import { Permissions } from '../common/decorators/permissions.decorator';
 
 const toInt = (value: string | undefined, fallback: number) => {
@@ -15,7 +16,7 @@ const toInt = (value: string | undefined, fallback: number) => {
 @ApiTags('wms-analytics')
 @ApiCookieAuth()
 @Controller('wms/analytics')
-@UseGuards(JwtAuthGuard, PermissionsGuard, PageAccessGuard)
+@UseGuards(JwtAuthGuard, SubscriptionGuard, PermissionsGuard, PageAccessGuard)
 @RequiresPage('inventory.analytics')
 export class WmsAnalyticsController {
   constructor(private readonly analytics: WmsAnalyticsService) {}

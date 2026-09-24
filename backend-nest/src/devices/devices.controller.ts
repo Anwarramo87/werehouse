@@ -14,6 +14,7 @@ import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { PermissionsGuard } from '../common/guards/permissions.guard';
 import { RequiresPage } from '../common/entitlements/requires-page.decorator';
 import { PageAccessGuard } from '../common/entitlements/page-access.guard';
+import { SubscriptionGuard } from '../common/entitlements/subscription.guard';
 import { Permissions } from '../common/decorators/permissions.decorator';
 import { CreateDeviceDto } from './dto/create-device.dto';
 import { UpdateDeviceDto } from './dto/update-device.dto';
@@ -22,7 +23,7 @@ import { DevicesListQueryDto } from './dto/devices-list-query.dto';
 @ApiTags('devices')
 @ApiCookieAuth()
 @Controller('devices')
-@UseGuards(JwtAuthGuard, PermissionsGuard, PageAccessGuard)
+@UseGuards(JwtAuthGuard, SubscriptionGuard, PermissionsGuard, PageAccessGuard)
 @RequiresPage('hr.biometric')
 export class DevicesController {
   constructor(private readonly devicesService: DevicesService) {}
