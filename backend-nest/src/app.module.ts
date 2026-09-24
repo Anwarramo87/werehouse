@@ -61,6 +61,10 @@ import { CycleCountsModule } from './cycle-counts/cycle-counts.module';
 import { FulfillmentModule } from './fulfillment/fulfillment.module';
 import { WmsAnalyticsModule } from './wms-analytics/wms-analytics.module';
 import { IntegrationsModule } from './integrations/integrations.module';
+import { ManufacturingModule } from './manufacturing/manufacturing.module';
+import { WmsSetupModule } from './wms-setup/wms-setup.module';
+import { SettingsModule } from './settings/settings.module';
+import { RepresentativesModule } from './representatives/representatives.module';
 
 function parseBooleanEnv(value: string | undefined): boolean | undefined {
   if (value === undefined) {
@@ -286,6 +290,10 @@ const queueInfraModules = queuesEnabled
     FulfillmentModule,
     WmsAnalyticsModule,
     IntegrationsModule,
+    ManufacturingModule,
+    WmsSetupModule,
+    SettingsModule,
+    RepresentativesModule,
     AssistantModule,
     AccountingModule,
     ImportsModule,

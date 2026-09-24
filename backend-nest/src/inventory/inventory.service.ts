@@ -129,6 +129,46 @@ export class InventoryService {
 
   // ------------------------------------------------------------------ products
 
+  /**
+   * Derives selling price and profit % on cost from user input.
+   * - profitPercent given  → price = cost × (1 + pct/100), profit stored as-is.
+   * - price given (cost unchanged) → profit = (price − cost) ÷ cost × 100.
+   * Storing the derived profit keeps the pricing panel consistent everywhere.
+   */
+  private resolvePricing(
+    cost: Prisma.Decimal,
+    price: Prisma.Decimal | undefined,
+    profitPercent: number | undefined,
+  ): { unitPrice: Prisma.Decimal; profitPercent: Prisma.Decimal | null } {
+    if (profitPercent != null && cost.gt(0)) {
+      const pct = new Prisma.Decimal(profitPercent);
+      const unitPrice = cost
+        .mul(new Prisma.Decimal(100).add(pct).div(100))
+        .toDP(2);
+      return { unitPrice, profitPercent: pct.toDP(3) };
+    }
+    const unitPrice = price ?? cost;
+    const derived = cost.gt(0)
+      ? unitPrice.minus(cost).div(cost).mul(100).toDP(3)
+      : new Prisma.Decimal(0);
+    return { unitPrice, profitPercent: derived };
+  }
+
+  private withMargin(product: {
+    costPrice: Prisma.Decimal;
+    unitPrice: Prisma.Decimal;
+    profitPercent: Prisma.Decimal | null;
+  }) {
+    const marginPercent = product.unitPrice.gt(0)
+      ? product.unitPrice.minus(product.costPrice).div(product.unitPrice).mul(100).toDP(1)
+      : new Prisma.Decimal(0);
+    return {
+      ...product,
+      profitPercent: product.profitPercent ?? new Prisma.Decimal(0),
+      marginPercent,
+    };
+  }
+
   async listProducts(query: InventoryProductsQueryDto) {
     return this.shortCache.getOrSetJson(this.productsCacheKey(query), 15, async () => {
       const { page, limit, skip } = resolvePagination(query, { defaultLimit: 50, maxLimit: 200 });
@@ -136,6 +176,7 @@ export class InventoryService {
       const where: Prisma.ProductWhereInput = {};
       if (query.category) where.category = query.category;
       if (query.status) where.status = query.status;
+      if (query.productType) where.productType = query.productType as 'RAW_MATERIAL' | 'SEMI_FINISHED' | 'FINISHED';
       if (query.search) {
         where.OR = [
           { sku: { contains: query.search, mode: 'insensitive' } },
@@ -162,7 +203,12 @@ export class InventoryService {
 
       const enriched = products.map((product) => {
         const stock = stockMap.get(product.sku) ?? { quantity: 0, reserved: 0, available: 0 };
-        return { ...product, totalQuantity: stock.quantity, totalReserved: stock.reserved, totalAvailable: stock.available };
+        return {
+          ...this.withMargin(product),
+          totalQuantity: stock.quantity,
+          totalReserved: stock.reserved,
+          totalAvailable: stock.available,
+        };
       });
 
       return paginatedResponse(enriched, page, limit, total);
@@ -183,7 +229,7 @@ export class InventoryService {
         }),
       ]);
 
-      return { product, stockLevels, recentMovements };
+      return { product: this.withMargin(product), stockLevels, recentMovements };
     });
   }
 
@@ -191,16 +237,26 @@ export class InventoryService {
     const existing = await this.prisma.product.findFirst({ where: { sku: dto.sku } });
     if (existing) throw new ConflictException('SKU already exists');
 
+    const costPrice = new Prisma.Decimal(dto.costPrice ?? 0);
+    const pricing = this.resolvePricing(
+      costPrice,
+      dto.unitPrice != null ? new Prisma.Decimal(dto.unitPrice) : undefined,
+      dto.profitPercent,
+    );
+
     const product = await this.prisma.product.create({
       data: {
         sku: dto.sku,
         name: dto.name,
         category: dto.category,
-        unitPrice: new Prisma.Decimal(dto.unitPrice),
-        costPrice: new Prisma.Decimal(dto.costPrice),
+        costPrice,
+        unitPrice: pricing.unitPrice,
+        profitPercent: pricing.profitPercent,
         reorderLevel: dto.reorderLevel ?? 10,
         unit: dto.unit,
         photo: dto.photo,
+        productType: dto.productType ?? 'FINISHED',
+        batchTracked: dto.batchTracked ?? false,
         status: 'active',
       },
     });
@@ -208,21 +264,28 @@ export class InventoryService {
     await this.invalidateInventoryCaches();
     this.audit('inventory.product.create', 'product', product.id, { sku: product.sku, name: product.name }, actor, req);
 
-    return { message: 'Product created successfully', product };
+    return { message: 'Product created successfully', product: this.withMargin(product) };
   }
 
   async updateProduct(productId: string, dto: UpdateProductDto, actor?: Actor, req?: Request) {
     const existing = await this.prisma.product.findUnique({ where: { id: productId } });
     if (!existing) throw new NotFoundException('Product not found');
 
-    const { sku: _ignoredSku, ...safeDto } = dto;
+    const { sku: _ignoredSku, profitPercent: dtoProfit, ...safeDto } = dto;
+
+    const costPrice =
+      dto.costPrice != null ? new Prisma.Decimal(dto.costPrice) : existing.costPrice;
+    const unitPrice =
+      dto.unitPrice != null ? new Prisma.Decimal(dto.unitPrice) : existing.unitPrice;
+    const pricing = this.resolvePricing(costPrice, unitPrice, dtoProfit);
 
     const product = await this.prisma.product.update({
       where: { id: productId },
       data: {
         ...safeDto,
-        unitPrice: safeDto.unitPrice !== undefined ? new Prisma.Decimal(safeDto.unitPrice) : undefined,
-        costPrice: safeDto.costPrice !== undefined ? new Prisma.Decimal(safeDto.costPrice) : undefined,
+        costPrice,
+        unitPrice: pricing.unitPrice,
+        profitPercent: pricing.profitPercent,
         reorderLevel: safeDto.reorderLevel,
         status: safeDto.status,
       },
@@ -231,7 +294,7 @@ export class InventoryService {
     await this.invalidateInventoryCaches();
     this.audit('inventory.product.update', 'product', product.id, { sku: product.sku }, actor, req);
 
-    return { message: 'Product updated successfully', product };
+    return { message: 'Product updated successfully', product: this.withMargin(product) };
   }
 
   async deleteProduct(productId: string, actor?: Actor, req?: Request) {
