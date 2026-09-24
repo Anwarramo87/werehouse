@@ -91,6 +91,10 @@ model Tenant {
   accountMappings                 AccountMapping[]
   entitlement                     TenantEntitlement?
   subscription                    TenantSubscription?
+  customization                   TenantCustomization?
+  customizationAuditEntries       TenantCustomizationAudit[]
+  customFieldDefinitions          CustomFieldDefinition[]
+  customFieldValues               CustomFieldValue[]
 
   // Manufacturing
   boms                            BOM[]
@@ -197,6 +201,95 @@ model TenantSubscription {
 
   @@index([endsAt])
   @@map("tenant_subscriptions")
+}
+
+model TenantCustomization {
+  id          String   @id @default(uuid()) @db.Uuid
+  tenantId    String   @unique @db.Uuid
+  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  status      String   @default("draft")
+  version     Int      @default(1)
+  lastEditedBy String?
+  publishedAt DateTime?
+
+  branding    Json     @default("{}")
+  theme       Json     @default("{}")
+  layout      Json     @default("{}")
+  navigation  Json     @default("{}")
+  dashboard   Json     @default("{}")
+  customFields Json    @default("[]")
+  terminology Json     @default("{}")
+  documents   Json     @default("{}")
+  settings    Json     @default("{}")
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@map("tenant_customizations")
+}
+
+model TenantCustomizationAudit {
+  id            String   @id @default(uuid()) @db.Uuid
+  tenantId      String   @db.Uuid
+  tenant        Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  actorId       String?
+  actorUsername String?
+  action        String
+  section       String?
+  oldValue      Json?
+  newValue      Json?
+
+  createdAt     DateTime @default(now())
+
+  @@index([tenantId, createdAt])
+  @@map("tenant_customization_audit")
+}
+
+model CustomFieldDefinition {
+  id               String   @id @default(uuid()) @db.Uuid
+  tenantId         String   @db.Uuid
+  tenant           Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  entity           String
+  key              String
+  label            String
+  fieldType        String   @default("text")
+  description      String?
+  placeholder      String?
+  required         Boolean  @default(false)
+  defaultValue     Json?
+  validation       Json?
+  ordering        Int      @default(0)
+  searchable       Boolean  @default(false)
+  filterable       Boolean  @default(false)
+  exportable       Boolean  @default(false)
+  visibleToRoles   String[] @default([])
+  visibleToModules String[] @default([])
+  status           String   @default("active")
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@unique([tenantId, entity, key])
+  @@index([tenantId, entity, ordering])
+  @@map("custom_field_definitions")
+}
+
+model CustomFieldValue {
+  id        String   @id @default(uuid()) @db.Uuid
+  tenantId  String   @db.Uuid
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  entity    String
+  recordId  String
+  fieldId   String?  @db.Uuid
+  fieldKey  String
+  value     Json?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([tenantId, entity, recordId, fieldKey])
+  @@index([tenantId, entity, recordId])
+  @@map("custom_field_values")
 }
 
 model Role {
