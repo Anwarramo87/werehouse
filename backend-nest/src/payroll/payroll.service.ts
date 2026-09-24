@@ -261,8 +261,11 @@ export class PayrollService {
   }
 
   async listInputs(query: PayrollInputsQueryDto) {
-    const page = Math.max(1, (query as any).page ?? 1);
-    const limit = Math.min(200, Math.max(1, (query as any).limit ?? 50));
+    const page = Math.max(1, query.page ?? 1);
+    // التعديلات اليدوية لشهر كامل تُجلب دفعة واحدة — حد 50 القديم كان
+    // يُسقط تعديلات بصمت (الأحدث أولاً)، فتظهر تقارير الرواتب بقيم قديمة
+    // للموظفين خارج أول 50 سجلاً. السقف 1000 يكفي أي مصنع.
+    const limit = Math.min(1000, Math.max(1, query.limit ?? 500));
     const skip = (page - 1) * limit;
     const where: Prisma.PayrollInputWhereInput = {};
     if (query.employeeId) where.employeeId = query.employeeId;
@@ -291,21 +294,34 @@ export class PayrollService {
     const periodStart = dto.periodStart.slice(0, 10);
     const periodEnd = dto.periodEnd.slice(0, 10);
 
-    const data = {
-      employeeId: dto.employeeId,
-      periodStart: this.toDateOnly(periodStart),
-      periodEnd: this.toDateOnly(periodEnd),
-      lateMinutes: Number(dto.lateMinutes ?? 0),
-      earlyLeaveMinutes: Number(dto.earlyLeaveMinutes ?? 0),
+    const manualOverrides = {
       absenceDays:
         dto.absenceDays === undefined || dto.absenceDays === null ? null : Number(dto.absenceDays),
       sickLeaveDays: Number(dto.sickLeaveDays ?? 0),
       adminLeaveDays: Number(dto.adminLeaveDays ?? 0),
       unpaidLeaveDays: Number(dto.unpaidLeaveDays ?? 0),
       deathLeaveDays: Number(dto.deathLeaveDays ?? 0),
-      unpaidHours: new Prisma.Decimal((dto.unpaidHours ?? 0).toString()),
+      lateMinutes: Number(dto.lateMinutes ?? 0),
+      earlyLeaveMinutes: Number(dto.earlyLeaveMinutes ?? 0),
       overtimeRegularMinutes: Number(dto.overtimeRegularMinutes ?? 0),
-      overtimeWeekendDays: new Prisma.Decimal((dto.overtimeWeekendDays ?? 0).toString()),
+      overtimeWeekendDays: Number(dto.overtimeWeekendDays ?? 0),
+      unpaidHours: Number(dto.unpaidHours ?? 0),
+    };
+
+    const data = {
+      employeeId: dto.employeeId,
+      periodStart: this.toDateOnly(periodStart),
+      periodEnd: this.toDateOnly(periodEnd),
+      lateMinutes: manualOverrides.lateMinutes,
+      earlyLeaveMinutes: manualOverrides.earlyLeaveMinutes,
+      absenceDays: manualOverrides.absenceDays,
+      sickLeaveDays: manualOverrides.sickLeaveDays,
+      adminLeaveDays: manualOverrides.adminLeaveDays,
+      unpaidLeaveDays: manualOverrides.unpaidLeaveDays,
+      deathLeaveDays: manualOverrides.deathLeaveDays,
+      unpaidHours: new Prisma.Decimal(manualOverrides.unpaidHours.toString()),
+      overtimeRegularMinutes: manualOverrides.overtimeRegularMinutes,
+      overtimeWeekendDays: new Prisma.Decimal(manualOverrides.overtimeWeekendDays.toString()),
       penaltyAmount:
         dto.penaltyAmount === undefined || dto.penaltyAmount === null
           ? null
@@ -521,6 +537,21 @@ export class PayrollService {
     }>;
     totalDelayMinutes: number;
     totalEarlyLeaveMinutes: number;
+    // ── Manual attendance overrides from the TimeTable "تعديل المجاميع" modal.
+    // When a manager edits a value, the edited number is the source of truth
+    // for the earned-salary computation — automatic punch/leave data is ignored
+    // for that dimension. `null` = no override → fall back to automatic data.
+    manualOverrides?: {
+      absenceDays: number | null;
+      unpaidLeaveDays: number | null;
+      sickLeaveDays: number | null;
+      paidLeaveDays: number | null;
+      overtimeMinutes: number | null;
+      weekendOvertimeMinutes: number | null;
+      lateMinutes: number | null;
+      earlyLeaveMinutes: number | null;
+      unpaidHours: number | null;
+    };
   }): Prisma.Decimal {
     const {
       employeeId,
@@ -552,21 +583,33 @@ export class PayrollService {
       scheduledEndMin,
     );
 
-    // أيام الإجازة الكاملة: مرضية (نصف أجر) / مدفوعة 100% (إدارية/وفاة/PAID)
+    const ov = params.manualOverrides;
+
+    // أيام الإجازة الكاملة: التعديل اليدوي (من زر تعديل المجاميع) يُقدَّم
+    // دائماً على الإجازات الآلية — زيادةً كانت أم إنقاصاً أم تصفيراً.
+    // - sickLeaveDays: تُدفع بنصف أجر
+    // - paidLeaveDays: إدارية/وفاة/PAID تُدفع 100%
     let sickLeaveDays = 0;
     let paidLeaveDays = 0;
-    for (const l of periodLeaves) {
-      const start = l.startDate > periodStart ? l.startDate : periodStart;
-      const end = l.endDate < endDate ? l.endDate : endDate;
-      const days = Math.floor((new Date(end).getTime() - new Date(start).getTime()) / 86_400_000) + 1;
-      if (l.leaveType === 'SICK') {
-        if (l.isHourly) continue; // تُعالَج عبر sickRemainderMinutes
-        sickLeaveDays += days;
-      } else if (l.leaveType === 'PAID' || l.leaveType === 'ADMIN' || l.leaveType === 'DEATH') {
-        paidLeaveDays += days;
+    if (ov?.sickLeaveDays != null) {
+      sickLeaveDays = Math.max(0, ov.sickLeaveDays);
+    }
+    if (ov?.paidLeaveDays != null) {
+      paidLeaveDays = Math.max(0, ov.paidLeaveDays);
+    }
+    if (ov?.sickLeaveDays == null || ov?.paidLeaveDays == null) {
+      for (const l of periodLeaves) {
+        const start = l.startDate > periodStart ? l.startDate : periodStart;
+        const end = l.endDate < endDate ? l.endDate : endDate;
+        const days = Math.floor((new Date(end).getTime() - new Date(start).getTime()) / 86_400_000) + 1;
+        if (l.leaveType === 'SICK') {
+          if (l.isHourly) continue; // تُعالَج عبر sickRemainderMinutes
+          if (ov?.sickLeaveDays == null) sickLeaveDays += days;
+        } else if (l.leaveType === 'PAID' || l.leaveType === 'ADMIN' || l.leaveType === 'DEATH') {
+          if (ov?.paidLeaveDays == null) paidLeaveDays += days;
+        }
       }
     }
-
     // ── g3 formula: baseSalary + livingAllowance + transportAllowance ──
     // المواصلات تدخل ضمن أساس الحساب (مثل الواجهة calcGross) فتُوزَّن على
     // دقائق العمل الفعلية بدلاً من أن تُضاف مبلغاً ثابتاً على الراتب.
@@ -606,7 +649,26 @@ export class PayrollService {
     const presentDays = Math.min(presentDaysRaw, workDays);
 
     // Contractual worked minutes (matching frontend calcEarnedSalaryHourly)
-    const contractualWorkedMinutes = presentDays * hoursPerDayEmp * 60;
+    // Manual overrides win here too: the "تعديل المجاميع" modal lets the
+    // manager set unpaid/absence/sick/paid days directly, so the paid days
+    // are derived from the manual day totals instead of punch data.
+    let contractualWorkedMinutes = presentDays * hoursPerDayEmp * 60;
+    const dayMinutes = hoursPerDayEmp * 60;
+    if (ov != null) {
+      const manualAbsenceDays = Math.max(0, ov.absenceDays ?? 0);
+      const manualUnpaidDays = Math.max(0, ov.unpaidLeaveDays ?? 0);
+      const manualSickDays = Math.max(0, ov.sickLeaveDays ?? 0);
+      const manualPaidDays = Math.max(0, ov.paidLeaveDays ?? 0);
+      const manualUnpaidMinutes = Math.max(0, ov.unpaidHours ?? 0) * 60;
+      const manualPresentDays = Math.max(
+        0,
+        workDays - manualAbsenceDays - manualUnpaidDays - manualSickDays - manualPaidDays,
+      );
+      contractualWorkedMinutes = Math.max(
+        0,
+        manualPresentDays * dayMinutes - manualUnpaidMinutes,
+      );
+    }
 
     // ── Compute overtime from OUT punches (matching calculate-deductions) ──
     // OT = max(0, lastOutLocalMinutes - scheduledEndMin) per weekday.
@@ -621,6 +683,12 @@ export class PayrollService {
     let weekdayOvertimeMinutes = 0;
     // weekendOvertimeMinutes = الدقائق الفعلية يوم الجمعة (من أول IN لآخر OUT)
     let weekendOvertimeMinutes = 0;
+    // Manual overrides replace automatic overtime/sick-remainder entirely —
+    // the modal values are the source of truth, not a floor or a ceiling.
+    const manualLateMinutes = ov?.lateMinutes;
+    const manualEarlyLeaveMinutes = ov?.earlyLeaveMinutes;
+    const manualOvertimeMinutes = ov?.overtimeMinutes;
+    const manualWeekendOvertimeMinutes = ov?.weekendOvertimeMinutes;
     // نحتاج أول IN لكل يوم جمعة
     const firstInByDate = new Map<string, Date>();
     for (const r of inRecords) {
@@ -716,6 +784,22 @@ export class PayrollService {
     // + sickRemainderPay, fullSickPay, paidLeavePay
     // + overtime (1.5×), weekend OT (1.5×)
     // − late deduction (1.5×), early-leave deduction (1.0×)
+    //
+    // Manual overrides (from زر تعديل المجاميع) replace the automatic
+    // aggregation for their dimension — so editing minutes/days in the modal
+    // always flows into the earned salary (and therefore the payroll run).
+    const effectiveWeekdayOvertime =
+      manualOvertimeMinutes != null ? Math.max(0, manualOvertimeMinutes) : weekdayOvertimeMinutes;
+    const effectiveWeekendOvertime =
+      manualWeekendOvertimeMinutes != null
+        ? Math.max(0, manualWeekendOvertimeMinutes)
+        : weekendOvertimeMinutes;
+    const effectiveDelayMinutes =
+      manualLateMinutes != null ? Math.max(0, manualLateMinutes) : totalDelayMinutes;
+    const effectiveEarlyLeaveMinutes =
+      manualEarlyLeaveMinutes != null
+        ? Math.max(0, manualEarlyLeaveMinutes)
+        : totalEarlyLeaveMinutes;
     const workedPay = minuteWage.times(new Prisma.Decimal(contractualWorkedMinutes));
     const sickRemainderPay = minuteWage
       .times(new Prisma.Decimal(sickRemainderMinutes))
@@ -728,16 +812,16 @@ export class PayrollService {
 
     const overtimePay = minuteWage
       .times(new Prisma.Decimal(1.5))
-      .times(this.toDecimal(weekdayOvertimeMinutes));
+      .times(this.toDecimal(effectiveWeekdayOvertime));
     // الجمعة: كل دقيقة فعلية × 1.5
     const weekendOvertimePay = minuteWage
       .times(new Prisma.Decimal(WEEKEND_MULTIPLIER))
-      .times(this.toDecimal(weekendOvertimeMinutes));
+      .times(this.toDecimal(effectiveWeekendOvertime));
 
     const lateDeduction = minuteWage
-      .times(this.toDecimal(totalDelayMinutes))
+      .times(this.toDecimal(effectiveDelayMinutes))
       .times(new Prisma.Decimal(1.5));
-    const earlyLeaveDeduction = minuteWage.times(this.toDecimal(totalEarlyLeaveMinutes));
+    const earlyLeaveDeduction = minuteWage.times(this.toDecimal(effectiveEarlyLeaveMinutes));
 
     const netEarned = new Prisma.Decimal(Math.max(0,
       earnedBase
@@ -751,8 +835,8 @@ export class PayrollService {
 
     this.logger.log(
       `[EARNED] ${employeeId} ${(typeof periodStart === 'string' ? periodStart : periodStart.toISOString()).slice(0, 10)}→${(typeof endDate === 'string' ? endDate : endDate.toISOString()).slice(0, 10)} ` +
-        `g3=${g3.toFixed(2)} presentDays=${presentDays} delay=${totalDelayMinutes}min early=${totalEarlyLeaveMinutes}min ` +
-        `otWeekday=${weekdayOvertimeMinutes}min otFridayMinutes=${weekendOvertimeMinutes} net=${netEarned.toFixed(2)}`,
+        `g3=${g3.toFixed(2)} presentDays=${presentDays} delay=${effectiveDelayMinutes}min early=${effectiveEarlyLeaveMinutes}min ` +
+        `otWeekday=${effectiveWeekdayOvertime}min otFridayMinutes=${effectiveWeekendOvertime} net=${netEarned.toFixed(2)}`,
     );
 
     return netEarned;
@@ -1727,6 +1811,14 @@ export class PayrollService {
         where: {
           employeeId: { in: employeeIds },
           remainingAmount: { gt: new Prisma.Decimal(0) },
+          // السلفة تُخصم في شهر إصدارها فقط — مثل العقوبات تماماً.
+          // بدون هذا القيد كانت سلف الأشهر السابقة تُخصم كاملةً في كل
+          // دورة لاحقة (remaining لا يتناقص أبداً) فتتكرر الخصومات شهراً
+          // بعد شهر (مثال: سلف أيار ظهرت في run أيلول كاملةً).
+          issueDate: {
+            gte: new Date(`${periodStart}T00:00:00.000Z`),
+            lte: new Date(`${periodEnd}T23:59:59.999Z`),
+          },
         },
       }),
       this.prisma.employeePenalty.findMany({
@@ -2265,6 +2357,9 @@ export class PayrollService {
         const unpaidLeaveDays = Number(input?.unpaidLeaveDays ?? 0);
         const deathLeaveDays = Number(input?.deathLeaveDays ?? 0);
         const unpaidHours = Number(input?.unpaidHours ?? 0);
+        // unpaidLeaveDays (أيام بدون أجر من زر تعديل المجاميع) تُدفع 0 — تُطرح
+        // أيامها من أيام العمل المدفوعة، فتنعكس أياً كان اتجاه التعديل.
+        const paidLeaveDays = adminLeaveDays + deathLeaveDays;
         // overtimeRegularMinutes
         const overtimeRegularMinutesComputed =
           overtimeMinutesByEmployee.get(employee.employeeId) || 0;
@@ -2326,6 +2421,21 @@ export class PayrollService {
           periodLeaves: empPeriodLeaves,
           totalDelayMinutes: lateMinutesByEmployee.get(employee.employeeId) || 0,
           totalEarlyLeaveMinutes: earlyLeaveMinutesByEmployee.get(employee.employeeId) || 0,
+          // تمرير تعديلات زر "تعديل المجاميع" اليدوية كـ source of truth
+          // للحساب — أي تعديل في المودال ينعكس فوراً في راتب دورة الرواتب.
+          manualOverrides: input
+            ? {
+                absenceDays: input.absenceDays ?? null,
+                unpaidLeaveDays: Number(input.unpaidLeaveDays ?? 0),
+                sickLeaveDays: Number(input.sickLeaveDays ?? 0),
+                paidLeaveDays: paidLeaveDays,
+                overtimeMinutes: Number(input.overtimeRegularMinutes ?? 0),
+                weekendOvertimeMinutes: Number(input.overtimeWeekendDays ?? 0),
+                lateMinutes: Number(input.lateMinutes ?? 0),
+                earlyLeaveMinutes: Number(input.earlyLeaveMinutes ?? 0),
+                unpaidHours: Number(input.unpaidHours ?? 0),
+              }
+            : undefined,
         });
 
         // Final Gross Pay — المواصلات مدمجة داخل attendanceCalculatedSalary (ضمن g3)
