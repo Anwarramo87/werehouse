@@ -154,11 +154,11 @@ export class InventoryService {
     return { unitPrice, profitPercent: derived };
   }
 
-  private withMargin(product: {
+  private withMargin<T extends {
     costPrice: Prisma.Decimal;
     unitPrice: Prisma.Decimal;
     profitPercent: Prisma.Decimal | null;
-  }) {
+  }>(product: T): T & { profitPercent: Prisma.Decimal; marginPercent: Prisma.Decimal } {
     const marginPercent = product.unitPrice.gt(0)
       ? product.unitPrice.minus(product.costPrice).div(product.unitPrice).mul(100).toDP(1)
       : new Prisma.Decimal(0);

@@ -629,6 +629,20 @@ export class AuthService {
       });
     } else {
       await this.rotateBootstrapPasswordIfRequested(existingAdmin, hash);
+
+      // The bootstrapped admin must hold the `admin` role. A downstream seed,
+      // an employee creation, or a stray script can re-point the account at
+      // the `employee` role, which leaves it logging in with
+      // view_attendance + view_payroll and every management endpoint
+      // answering 403. Repair the mapping here so the account is usable
+      // again on the next boot instead of in the database.
+      if (existingAdmin.roleId !== adminRole.id) {
+        await this.prisma.user.update({
+          where: { id: existingAdmin.id },
+          data: { roleId: adminRole.id },
+        });
+        await this.authCache.invalidateUser(existingAdmin.id);
+      }
     }
 
     if (existingAdmin && !existingAdmin.tenantId) {
