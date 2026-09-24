@@ -92,6 +92,29 @@ model Tenant {
   entitlement                     TenantEntitlement?
   subscription                    TenantSubscription?
 
+  // Manufacturing
+  boms                            BOM[]
+  bomItems                        BOMItem[]
+  productionOrders                ProductionOrder[]
+  materialConsumptions            MaterialConsumption[]
+
+  // Representatives
+  representatives                 Representative[]
+  repRoutes                       RepRoute[]
+  repCustomers                    RepCustomer[]
+  repProducts                     RepProduct[]
+  repStocks                       RepStock[]
+  repStockMovements               RepStockMovement[]
+  repSales                        RepSale[]
+  repSaleItems                    RepSaleItem[]
+  repCollections                  RepCollection[]
+  repReturns                      RepReturn[]
+  repSettlements                  RepSettlement[]
+
+  // Setup & Settings
+  wmsSetupState                   WmsSetupState?
+  systemSettings                  SystemSettings?
+
   @@index([status])
   @@map("tenants")
 }
@@ -209,6 +232,7 @@ model User {
   biometricCredentials BiometricCredential[]
   entitlement          UserEntitlement? // per-admin pages this account may use
   subscription         UserSubscription? // per-admin time window (this account alone)
+  representative       Representative?  // إذا كان المستخدم مندوباً
 
 
   // Referenced by tenant-composite foreign keys: Postgres requires the
@@ -488,6 +512,10 @@ model Product {
   category     String
   unitPrice    Decimal  @db.Decimal(12, 2)
   costPrice    Decimal  @db.Decimal(12, 2)
+
+  /// نسبة الربح % على التكلفة — مُشتقة تلقائيًا (سعر البيع − التكلفة) ÷ التكلفة × 100
+  profitPercent Decimal? @db.Decimal(8, 3)
+
   reorderLevel Int      @default(10)
   status       String   @default("active")
   unit         String   @default("Ù‚Ø·Ø¹Ø©")
@@ -513,16 +541,24 @@ model Product {
 
   costingMethod CostingMethod @default(WEIGHTED_AVERAGE)
 
+  /// نوع المنتج: مادة خام، منتج نهائي، أو نصف مصنّع
+  productType   ProductType @default(FINISHED)
+
+  /// وصف المنتج
+  description   String?
+
   taxRateId String?  @db.Uuid
   taxRate   TaxRate? @relation(fields: [taxRateId], references: [id], onDelete: SetNull)
 
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
-  stockLevels       StockLevel[]
+  stockLevels        StockLevel[]
   purchaseOrderItems PurchaseOrderItem[]
   goodsReceiptItems  GoodsReceiptItem[]
   salesOrderItems    SalesOrderItem[]
+  bomAsFinished      BOM[]              @relation("FinishedProductBOM")
+  bomItemsAsRaw      BOMItem[]          @relation("RawMaterialBOMItem")
 
   @@index([createdAt])
   @@index([status, createdAt])
@@ -2711,3 +2747,627 @@ model UserSubscription {
   @@map("user_subscriptions")
 }
 
+
+// ===========================================================================
+// MANUFACTURING EXTENSION — BOM + Production Orders + Cost Tracking
+// ===========================================================================
+
+/// نوع المنتج: مادة خام / نصف مصنّع / منتج نهائي
+enum ProductType {
+  RAW_MATERIAL
+  SEMI_FINISHED
+  FINISHED
+}
+
+/// حالة أمر الإنتاج
+enum ProductionStatus {
+  DRAFT
+  PLANNED
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+}
+
+// ---------------------------------------------------------------------------
+// قائمة المواد (Bill of Materials)
+// ---------------------------------------------------------------------------
+
+/// BOM — ربط المنتج النهائي بمواده الخام مع الكميات المطلوبة لكل وحدة
+model BOM {
+  id       String  @id @default(uuid()) @db.Uuid
+  tenantId String? @db.Uuid
+  tenant   Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  /// SKU المنتج النهائي
+  productSku String
+
+  /// الإصدار — يرتفع عند التعديل الجوهري
+  version  Int     @default(1)
+  isActive Boolean @default(true)
+  notes    String?
+
+  createdBy String?  @db.Uuid
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  product          Product?          @relation("FinishedProductBOM", fields: [tenantId, productSku], references: [tenantId, sku], onDelete: Restrict)
+  items            BOMItem[]
+  productionOrders ProductionOrder[]
+
+  @@unique([tenantId, productSku, version])
+  @@index([tenantId, productSku, isActive])
+  @@index([tenantId])
+  @@map("boms")
+}
+
+/// سطر واحد في الـBOM: مادة خام + الكمية المطلوبة لإنتاج وحدة واحدة
+model BOMItem {
+  id       String  @id @default(uuid()) @db.Uuid
+  tenantId String? @db.Uuid
+  tenant   Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  bomId String @db.Uuid
+  bom   BOM    @relation(fields: [bomId], references: [id], onDelete: Cascade)
+
+  /// SKU المادة الخام
+  materialSku String
+
+  /// الكمية المطلوبة لإنتاج وحدة واحدة من المنتج النهائي
+  quantity Decimal @db.Decimal(12, 4)
+
+  /// وحدة القياس (متر، قطعة، كغ...)
+  unit String @default("قطعة")
+
+  /// نسبة الهدر المتوقعة % — تُضاف تلقائياً على الكمية المسحوبة
+  wastePercent Decimal @default(0) @db.Decimal(6, 3)
+
+  notes String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  material Product? @relation("RawMaterialBOMItem", fields: [tenantId, materialSku], references: [tenantId, sku], onDelete: Restrict)
+
+  @@unique([tenantId, bomId, materialSku])
+  @@index([tenantId, bomId])
+  @@index([tenantId, materialSku])
+  @@index([tenantId])
+  @@map("bom_items")
+}
+
+// ---------------------------------------------------------------------------
+// أوامر الإنتاج
+// ---------------------------------------------------------------------------
+
+/// أمر إنتاج واحد: يسحب المواد الخام وينتج المنتج النهائي
+model ProductionOrder {
+  id       String  @id @default(uuid()) @db.Uuid
+  tenantId String? @db.Uuid
+  tenant   Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  orderNumber String
+
+  bomId      String @db.Uuid
+  bom        BOM    @relation(fields: [bomId], references: [id], onDelete: Restrict)
+
+  /// SKU المنتج النهائي (مكرر هنا لسهولة الاستعلام)
+  productSku String
+
+  plannedQty Int
+  actualQty  Int @default(0)
+  wasteQty   Int @default(0)
+
+  status ProductionStatus @default(DRAFT)
+
+  plannedDate   DateTime  @db.Date
+  startedAt     DateTime?
+  completedAt   DateTime?
+  completedDate DateTime? @db.Date
+
+  /// التكاليف المكوّنة — تُحسب عند الإتمام
+  materialCost  Decimal @default(0) @db.Decimal(14, 4)
+  laborCost     Decimal @default(0) @db.Decimal(14, 4)
+  overheadCost  Decimal @default(0) @db.Decimal(14, 4)
+  packagingCost Decimal @default(0) @db.Decimal(14, 4)
+  otherCost     Decimal @default(0) @db.Decimal(14, 4)
+  totalCost     Decimal @default(0) @db.Decimal(14, 4)
+
+  /// تكلفة الوحدة الواحدة = totalCost / actualQty
+  unitCost Decimal @default(0) @db.Decimal(14, 4)
+
+  notes     String?
+  createdBy String  @db.Uuid
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  consumption MaterialConsumption[]
+
+  @@unique([tenantId, orderNumber])
+  @@index([tenantId, productSku])
+  @@index([tenantId, status])
+  @@index([tenantId, plannedDate])
+  @@index([tenantId])
+  @@map("production_orders")
+}
+
+/// تفاصيل استهلاك المواد الخام في أمر إنتاج واحد
+model MaterialConsumption {
+  id       String  @id @default(uuid()) @db.Uuid
+  tenantId String? @db.Uuid
+  tenant   Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  productionOrderId String          @db.Uuid
+  productionOrder   ProductionOrder @relation(fields: [productionOrderId], references: [id], onDelete: Cascade)
+
+  materialSku String
+
+  /// الكمية المخططة (من BOM × plannedQty)
+  plannedQty Decimal @db.Decimal(12, 4)
+
+  /// الكمية الفعلية المسحوبة من المخزن
+  actualQty Decimal @db.Decimal(12, 4)
+
+  /// الهدر الفعلي
+  wasteQty Decimal @default(0) @db.Decimal(12, 4)
+
+  /// تكلفة الوحدة وقت السحب (snapshot)
+  unitCost  Decimal @db.Decimal(12, 4)
+  totalCost Decimal @db.Decimal(14, 4)
+
+  /// الموقع الذي سُحبت منه المادة
+  location String
+
+  createdAt DateTime @default(now())
+
+  @@index([productionOrderId])
+  @@index([tenantId, materialSku])
+  @@index([tenantId])
+  @@map("material_consumptions")
+}
+
+// ===========================================================================
+// REPRESENTATIVES EXTENSION — نظام المندوبين مع العزل الكامل
+// ===========================================================================
+
+enum RepMovementType {
+  RECEIVED   // استلام من المخزن الرئيسي
+  SOLD       // بيع لعميل
+  RETURNED   // مرتجع من عميل
+  ADJUSTED   // تسوية يدوية
+  SETTLED    // في إطار التسوية
+}
+
+enum RepSaleStatus {
+  PENDING    // بانتظار التحصيل
+  PARTIAL    // مدفوع جزئياً
+  PAID       // مدفوع بالكامل
+  CANCELLED  // ملغى
+}
+
+enum SettlementStatus {
+  PENDING    // قيد الإعداد
+  SUBMITTED  // مقدَّمة للاعتماد
+  APPROVED   // معتمدة
+  DISPUTED   // متنازع عليها
+  CLOSED     // مغلقة
+}
+
+// ---------------------------------------------------------------------------
+// المندوب الرئيسي
+// ---------------------------------------------------------------------------
+
+model Representative {
+  id       String  @id @default(uuid()) @db.Uuid
+  tenantId String? @db.Uuid
+  tenant   Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  /// ربط بحساب المستخدم — Login مستقل للمندوب
+  userId String @unique @db.Uuid
+  user   User   @relation(fields: [userId], references: [id], onDelete: Restrict)
+
+  /// ربط اختياري بسجل الموظف
+  employeeId String? @db.Uuid
+
+  name   String
+  code   String
+  phone  String?
+  email  String?
+  status String @default("active") // active | inactive | suspended
+
+  notes String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  routes      RepRoute[]
+  customers   RepCustomer[]
+  products    RepProduct[]
+  stockItems  RepStock[]
+  movements   RepStockMovement[]
+  sales       RepSale[]
+  collections RepCollection[]
+  returns     RepReturn[]
+  settlements RepSettlement[]
+
+  @@unique([tenantId, code])
+  @@index([tenantId, status])
+  @@index([tenantId])
+  @@map("representatives")
+}
+
+/// مسار/منطقة المندوب
+model RepRoute {
+  id       String  @id @default(uuid()) @db.Uuid
+  tenantId String? @db.Uuid
+  tenant   Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  representativeId String         @db.Uuid
+  representative   Representative @relation(fields: [representativeId], references: [id], onDelete: Cascade)
+
+  name     String
+  areas    String[] @default([])
+  schedule String?
+  isActive Boolean  @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([tenantId, representativeId])
+  @@index([tenantId])
+  @@map("rep_routes")
+}
+
+/// عملاء مخصصون لمندوب معين
+model RepCustomer {
+  id       String  @id @default(uuid()) @db.Uuid
+  tenantId String? @db.Uuid
+  tenant   Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  representativeId String         @db.Uuid
+  representative   Representative @relation(fields: [representativeId], references: [id], onDelete: Cascade)
+
+  /// رابط للعميل في النظام المركزي
+  customerId String @db.Uuid
+
+  assignedAt DateTime @default(now())
+  isActive   Boolean  @default(true)
+
+  @@unique([tenantId, representativeId, customerId])
+  @@index([tenantId, representativeId])
+  @@index([tenantId, customerId])
+  @@index([tenantId])
+  @@map("rep_customers")
+}
+
+/// منتجات مسموحة لمندوب معين
+model RepProduct {
+  id       String  @id @default(uuid()) @db.Uuid
+  tenantId String? @db.Uuid
+  tenant   Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  representativeId String         @db.Uuid
+  representative   Representative @relation(fields: [representativeId], references: [id], onDelete: Cascade)
+
+  sku      String
+  isActive Boolean @default(true)
+
+  @@unique([tenantId, representativeId, sku])
+  @@index([tenantId, representativeId])
+  @@index([tenantId])
+  @@map("rep_products")
+}
+
+// ---------------------------------------------------------------------------
+// مخزون المندوب
+// ---------------------------------------------------------------------------
+
+/// الرصيد الحالي لكل صنف في حوزة المندوب
+model RepStock {
+  id       String  @id @default(uuid()) @db.Uuid
+  tenantId String? @db.Uuid
+  tenant   Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  representativeId String         @db.Uuid
+  representative   Representative @relation(fields: [representativeId], references: [id], onDelete: Cascade)
+
+  sku      String
+  quantity Int     @default(0)
+
+  /// متوسط تكلفة الوحدة في حوزة المندوب
+  unitCost   Decimal @default(0) @db.Decimal(12, 4)
+  totalValue Decimal @default(0) @db.Decimal(14, 2)
+
+  updatedAt DateTime @updatedAt
+
+  @@unique([tenantId, representativeId, sku])
+  @@index([tenantId, representativeId])
+  @@index([tenantId])
+  @@map("rep_stocks")
+}
+
+/// كل حركة على مخزون المندوب — Audit Trail كامل
+model RepStockMovement {
+  id       String  @id @default(uuid()) @db.Uuid
+  tenantId String? @db.Uuid
+  tenant   Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  representativeId String         @db.Uuid
+  representative   Representative @relation(fields: [representativeId], references: [id], onDelete: Cascade)
+
+  sku  String
+  type RepMovementType
+
+  /// موجب = دخول، سالب = خروج
+  quantity   Int
+  unitCost   Decimal @db.Decimal(12, 4)
+  totalValue Decimal @db.Decimal(14, 2)
+
+  referenceType String? // warehouse_transfer | sale | return | settlement
+  referenceId   String?
+
+  notes     String?
+  createdBy String  @db.Uuid
+
+  createdAt DateTime @default(now())
+
+  @@index([tenantId, representativeId, createdAt])
+  @@index([tenantId, representativeId, type])
+  @@index([tenantId, sku])
+  @@index([tenantId])
+  @@map("rep_stock_movements")
+}
+
+// ---------------------------------------------------------------------------
+// مبيعات المندوب
+// ---------------------------------------------------------------------------
+
+/// فاتورة بيع المندوب
+model RepSale {
+  id       String  @id @default(uuid()) @db.Uuid
+  tenantId String? @db.Uuid
+  tenant   Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  representativeId String         @db.Uuid
+  representative   Representative @relation(fields: [representativeId], references: [id], onDelete: Cascade)
+
+  customerId String @db.Uuid
+
+  saleNumber String
+  saleDate   DateTime @db.Date
+
+  subtotal       Decimal @default(0) @db.Decimal(14, 2)
+  discountAmount Decimal @default(0) @db.Decimal(14, 2)
+  totalAmount    Decimal @db.Decimal(14, 2)
+  paidAmount     Decimal @default(0) @db.Decimal(14, 2)
+
+  status RepSaleStatus @default(PENDING)
+
+  notes     String?
+  createdBy String  @db.Uuid
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  items       RepSaleItem[]
+  collections RepCollection[]
+  returns     RepReturn[]
+
+  @@unique([tenantId, saleNumber])
+  @@index([tenantId, representativeId, saleDate])
+  @@index([tenantId, representativeId, status])
+  @@index([tenantId, customerId])
+  @@index([tenantId])
+  @@map("rep_sales")
+}
+
+/// بند واحد في فاتورة بيع المندوب
+model RepSaleItem {
+  id       String  @id @default(uuid()) @db.Uuid
+  tenantId String? @db.Uuid
+  tenant   Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  saleId String  @db.Uuid
+  sale   RepSale @relation(fields: [saleId], references: [id], onDelete: Cascade)
+
+  sku       String
+  quantity  Int
+  unitPrice Decimal @db.Decimal(12, 2)
+
+  /// تكلفة الوحدة وقت البيع (snapshot) لحساب الربح
+  unitCost  Decimal @db.Decimal(12, 4)
+  lineTotal Decimal @db.Decimal(14, 2)
+
+  discountPercent Decimal @default(0) @db.Decimal(6, 3)
+  discountAmount  Decimal @default(0) @db.Decimal(14, 2)
+
+  createdAt DateTime @default(now())
+
+  @@index([saleId])
+  @@index([tenantId, sku])
+  @@index([tenantId])
+  @@map("rep_sale_items")
+}
+
+/// تحصيل مبلغ من عميل عبر المندوب
+model RepCollection {
+  id       String  @id @default(uuid()) @db.Uuid
+  tenantId String? @db.Uuid
+  tenant   Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  representativeId String         @db.Uuid
+  representative   Representative @relation(fields: [representativeId], references: [id], onDelete: Cascade)
+
+  /// رابط اختياري لفاتورة البيع
+  saleId String?  @db.Uuid
+  sale   RepSale? @relation(fields: [saleId], references: [id], onDelete: SetNull)
+
+  customerId String @db.Uuid
+
+  amount         Decimal  @db.Decimal(14, 2)
+  method         String   @default("cash") // cash | transfer | check
+  collectionDate DateTime @db.Date
+
+  notes     String?
+  createdBy String  @db.Uuid
+
+  createdAt DateTime @default(now())
+
+  @@index([tenantId, representativeId, collectionDate])
+  @@index([tenantId, saleId])
+  @@index([tenantId])
+  @@map("rep_collections")
+}
+
+/// مرتجع من عميل عبر المندوب
+model RepReturn {
+  id       String  @id @default(uuid()) @db.Uuid
+  tenantId String? @db.Uuid
+  tenant   Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  representativeId String         @db.Uuid
+  representative   Representative @relation(fields: [representativeId], references: [id], onDelete: Cascade)
+
+  saleId String?  @db.Uuid
+  sale   RepSale? @relation(fields: [saleId], references: [id], onDelete: SetNull)
+
+  customerId String @db.Uuid
+
+  sku        String
+  quantity   Int
+  unitPrice  Decimal @db.Decimal(12, 2)
+  totalValue Decimal @db.Decimal(14, 2)
+
+  reason     String?
+  returnDate DateTime @db.Date
+
+  /// pending | approved | rejected
+  status String @default("pending")
+
+  notes     String?
+  createdBy String  @db.Uuid
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([tenantId, representativeId, returnDate])
+  @@index([tenantId, saleId])
+  @@index([tenantId])
+  @@map("rep_returns")
+}
+
+// ---------------------------------------------------------------------------
+// تسوية المندوب
+// ---------------------------------------------------------------------------
+
+/// تسوية دورية شاملة للمندوب: مخزون + مبيعات + تحصيلات + مرتجعات
+model RepSettlement {
+  id       String  @id @default(uuid()) @db.Uuid
+  tenantId String? @db.Uuid
+  tenant   Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  representativeId String         @db.Uuid
+  representative   Representative @relation(fields: [representativeId], references: [id], onDelete: Cascade)
+
+  periodStart DateTime @db.Date
+  periodEnd   DateTime @db.Date
+
+  /// قيمة البضاعة المستلمة خلال الفترة
+  receivedValue Decimal @db.Decimal(14, 2)
+
+  /// قيمة المبيعات المسجلة
+  soldValue Decimal @db.Decimal(14, 2)
+
+  /// المبالغ المحصّلة فعلياً
+  collectedValue Decimal @db.Decimal(14, 2)
+
+  /// قيمة المرتجعات
+  returnedValue Decimal @default(0) @db.Decimal(14, 2)
+
+  /// المتبقي المستحق = soldValue - collectedValue
+  outstandingAmount Decimal @default(0) @db.Decimal(14, 2)
+
+  /// المخزون المتوقع (JSON: [{sku, expectedQty, actualQty, unitCost}])
+  expectedStock Json @default("[]")
+  actualStock   Json @default("[]")
+
+  /// فرق المخزون بالقيمة (موجب = عجز، سالب = زيادة)
+  stockVarianceValue Decimal @default(0) @db.Decimal(14, 2)
+
+  varianceReason String?
+
+  status     SettlementStatus @default(PENDING)
+  approvedBy String?          @db.Uuid
+  approvedAt DateTime?
+
+  notes String?
+
+  createdBy String   @db.Uuid
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([tenantId, representativeId, periodStart, periodEnd])
+  @@index([tenantId, representativeId, status])
+  @@index([tenantId, status])
+  @@index([tenantId])
+  @@map("rep_settlements")
+}
+
+// ===========================================================================
+// WMS SETUP + SYSTEM SETTINGS
+// ===========================================================================
+
+/// حالة إعداد WMS لكل مستأجر — يُحفظ تقدم الـWizard
+model WmsSetupState {
+  id       String @id @default(uuid()) @db.Uuid
+  tenantId String @unique @db.Uuid
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  /// الخطوة الحالية (1-8)
+  currentStep Int @default(1)
+
+  /// بيانات كل خطوة مكتملة — JSON بمفاتيح step1..step8
+  stepsData Json @default("{}")
+
+  /// هل اكتمل الـSetup وفُتح WMS؟
+  isCompleted Boolean   @default(false)
+  completedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("wms_setup_states")
+}
+
+/// إعدادات النظام المركزية لكل مستأجر — العملة، اللغة، التوقيت...
+model SystemSettings {
+  id       String @id @default(uuid()) @db.Uuid
+  tenantId String @unique @db.Uuid
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  /// رمز العملة (SYP, USD, EUR...)
+  currency String @default("SYP")
+
+  /// رمز العملة للعرض (ل.س، $، €...)
+  currencySymbol String @default("ل.س")
+
+  /// عدد المنازل العشرية للعملة
+  currencyDecimals Int @default(0)
+
+  /// الـLocale للتنسيق (ar-SY, en-US...)
+  locale String @default("ar-SY")
+
+  /// المنطقة الزمنية
+  timezone String @default("Asia/Damascus")
+
+  /// اتجاه النص (rtl | ltr)
+  textDirection String @default("rtl")
+
+  /// إعدادات إضافية مرنة (JSON)
+  settings Json @default("{}")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("system_settings")
+}

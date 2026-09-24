@@ -18,6 +18,15 @@ export class InventoryProductsQueryDto extends PaginationQueryDto {
   search?: string;
 
   /**
+   * Filter by product type — RAW_MATERIAL | SEMI_FINISHED | FINISHED
+   * Used by the manufacturing module to list only raw materials or finished products.
+   */
+  @IsOptional()
+  @IsString()
+  @IsIn(['RAW_MATERIAL', 'SEMI_FINISHED', 'FINISHED'])
+  productType?: string;
+
+  /**
    * Whitelisted so the value can go straight into Prisma's `orderBy` without
    * letting a caller name an arbitrary column.
    */

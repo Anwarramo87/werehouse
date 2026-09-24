@@ -25,6 +25,11 @@ export const DOCUMENT_SEQUENCES = {
   putawayTask: { table: 'putaway_tasks', column: 'taskNumber', prefix: 'PUT' },
   shipment: { table: 'shipments', column: 'shipmentNumber', prefix: 'SHP' },
   package: { table: 'packages', column: 'packageNumber', prefix: 'PKG' },
+  // Manufacturing
+  productionOrder: { table: 'production_orders', column: 'orderNumber', prefix: 'PO' },
+  productBatch: { table: 'product_batches', column: 'batchNumber', prefix: 'BAT' },
+  // Representatives
+  repSale: { table: 'rep_sales', column: 'saleNumber', prefix: 'RS' },
 } as const;
 
 export type DocumentSequenceName = keyof typeof DOCUMENT_SEQUENCES;

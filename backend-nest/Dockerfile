@@ -11,7 +11,7 @@ RUN set -e; \
 	elif [ -f /workspace/package-lock.json ]; then APP_DIR="/workspace"; \
 	else echo "package-lock.json not found in supported locations"; exit 1; fi; \
 	cd "$APP_DIR"; \
-	npm ci; \
+	npm install --prefer-offline || npm install; \
 	DATABASE_URL="${DATABASE_URL:-postgresql://postgres:postgres@localhost:5432/warehouse_system?schema=public}" npm run prisma:generate; \
 	npm run build; \
 	mkdir -p /out; \

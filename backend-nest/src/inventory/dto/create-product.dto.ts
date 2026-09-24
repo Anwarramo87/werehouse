@@ -16,11 +16,20 @@ export class CreateProductDto {
   @MaxLength(120)
   category: string;
 
+  @IsOptional()
   @IsNumber()
-  unitPrice: number;
+  unitPrice?: number;
 
   @IsNumber()
   costPrice: number;
+
+  @IsOptional()
+  @IsNumber()
+  profitPercent?: number;
+
+  @IsOptional()
+  @IsIn(['RAW_MATERIAL', 'SEMI_FINISHED', 'FINISHED'])
+  productType?: 'RAW_MATERIAL' | 'SEMI_FINISHED' | 'FINISHED';
 
   @IsOptional()
   @IsNumber()
@@ -35,4 +44,7 @@ export class CreateProductDto {
   @IsString()
   @MaxLength(2_000_000)
   photo?: string;
+
+  @IsOptional()
+  batchTracked?: boolean;
 }
