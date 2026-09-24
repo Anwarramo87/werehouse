@@ -4,8 +4,7 @@
     "builder": "DOCKERFILE",
     "dockerfilePath": "backend-nest/Dockerfile",
     "watchPatterns": [
-      "backend-nest/**",
-      "railway.json"
+      "**"
     ]
   },
   "deploy": {
