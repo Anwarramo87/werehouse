@@ -1,21 +1,84 @@
-import { Controller, Post, Logger, UseGuards } from '@nestjs/common';
+import { Controller, Post, Get, Param, Query, Logger, UseGuards } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { PermissionsGuard } from '../common/guards/permissions.guard';
 import { Permissions } from '../common/decorators/permissions.decorator';
+import { SuperadminGuard } from '../common/guards/superadmin.guard';
 
 /**
  * Admin controller for one-time database cleanup operations.
  * Protected — requires manage_users permission.
  */
 @Controller('admin')
-@UseGuards(JwtAuthGuard, PermissionsGuard)
+@UseGuards(JwtAuthGuard)
 export class AdminController {
   private readonly logger = new Logger(AdminController.name);
 
   constructor(private readonly prisma: PrismaService) {}
 
+  // ── SuperAdmin: مستخدمو مصنع معين ──────────────────────────────────────
+  @Get('tenants/:tenantId/users')
+  @UseGuards(SuperadminGuard)
+  async getTenantUsers(@Param('tenantId') tenantId: string) {
+    const users = await this.prisma.user.findMany({
+      where: { tenantId },
+      select: {
+        id: true,
+        username: true,
+        email: true,
+        status: true,
+        lastLogin: true,
+        role: { select: { id: true, name: true } },
+      },
+      orderBy: { username: 'asc' },
+    });
+    return users;
+  }
+
+  // ── SuperAdmin: أقسام مصنع معين مع عدد الموظفين ─────────────────────────
+  @Get('tenants/:tenantId/departments')
+  @UseGuards(SuperadminGuard)
+  async getTenantDepartments(
+    @Param('tenantId') tenantId: string,
+    @Query('search') search?: string,
+  ) {
+    const departments = await this.prisma.department.findMany({
+      where: {
+        tenantId,
+        ...(search ? { name: { contains: search, mode: 'insensitive' } } : {}),
+      },
+      include: { _count: { select: { employees: { where: { status: 'active' } } } } },
+      orderBy: { name: 'asc' },
+    });
+    return { departments };
+  }
+
+  // ── SuperAdmin: موظفو قسم معين داخل مصنع ────────────────────────────────
+  @Get('tenants/:tenantId/departments/:departmentId/employees')
+  @UseGuards(SuperadminGuard)
+  async getDepartmentEmployees(
+    @Param('tenantId') tenantId: string,
+    @Param('departmentId') departmentId: string,
+  ) {
+    const employees = await this.prisma.employee.findMany({
+      where: { tenantId, departmentId, status: 'active' },
+      select: {
+        id: true,
+        employeeId: true,
+        name: true,
+        jobTitle: true,
+        mobile: true,
+        status: true,
+        department: true,
+        createdAt: true,
+      },
+      orderBy: { name: 'asc' },
+    });
+    return { employees };
+  }
+
   @Post('cleanup-overlapping-leaves')
+  @UseGuards(PermissionsGuard)
   @Permissions('manage_users')
   async cleanupOverlappingLeaves() {
     this.logger.log('Starting cleanup of overlapping leaves...');
