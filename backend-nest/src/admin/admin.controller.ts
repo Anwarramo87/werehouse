@@ -3,7 +3,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { PermissionsGuard } from '../common/guards/permissions.guard';
 import { Permissions } from '../common/decorators/permissions.decorator';
-import { SuperadminGuard } from '../common/guards/superadmin.guard';
+import { SuperAdminGuard } from '../common/guards/superadmin.guard';
 
 /**
  * Admin controller for one-time database cleanup operations.
@@ -18,7 +18,7 @@ export class AdminController {
 
   // ── SuperAdmin: مستخدمو مصنع معين ──────────────────────────────────────
   @Get('tenants/:tenantId/users')
-  @UseGuards(SuperadminGuard)
+  @UseGuards(SuperAdminGuard)
   async getTenantUsers(@Param('tenantId') tenantId: string) {
     const users = await this.prisma.user.findMany({
       where: { tenantId },
@@ -37,7 +37,7 @@ export class AdminController {
 
   // ── SuperAdmin: أقسام مصنع معين مع عدد الموظفين ─────────────────────────
   @Get('tenants/:tenantId/departments')
-  @UseGuards(SuperadminGuard)
+  @UseGuards(SuperAdminGuard)
   async getTenantDepartments(
     @Param('tenantId') tenantId: string,
     @Query('search') search?: string,
@@ -55,7 +55,7 @@ export class AdminController {
 
   // ── SuperAdmin: موظفو قسم معين داخل مصنع ────────────────────────────────
   @Get('tenants/:tenantId/departments/:departmentId/employees')
-  @UseGuards(SuperadminGuard)
+  @UseGuards(SuperAdminGuard)
   async getDepartmentEmployees(
     @Param('tenantId') tenantId: string,
     @Param('departmentId') departmentId: string,
