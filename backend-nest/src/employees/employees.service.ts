@@ -1,4 +1,5 @@
 import { tenantKey } from '../common/tenant/tenant-key';
+import { currentTenant } from '../common/tenant/tenant-context';
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import * as bcrypt from 'bcryptjs';
@@ -91,9 +92,20 @@ export class EmployeesService {
   private async resolveDepartment(departmentName: string, tx?: Pick<typeof this.prisma, "department">) {
     const normalizedName = this.normalizeDepartmentName(departmentName);
     const client = tx ?? this.prisma;
+    const scope = currentTenant();
+    const tenantId = scope?.tenantId ?? null;
+
+    // Department.tenantId is required: without a factory the row would be
+    // orphaned and invisible. Employee create/update already reject the
+    // super-admin-without-factory case before reaching here.
+    if (!tenantId) {
+      throw new BadRequestException(
+        'تعذر ربط القسم بدون مصنع: ادخل إلى المصنع المطلوب أولاً.',
+      );
+    }
 
     const existing = await client.department.findFirst({
-      where: { name: { equals: normalizedName, mode: "insensitive" } },
+      where: { tenantId, name: { equals: normalizedName, mode: "insensitive" } },
     });
 
     if (existing) {
@@ -101,7 +113,7 @@ export class EmployeesService {
     }
 
     return client.department.create({
-      data: { name: normalizedName },
+      data: { name: normalizedName, tenantId },
     });
   }
 
@@ -467,7 +479,17 @@ export class EmployeesService {
   }
 
   async create(dto: CreateEmployeeDto, actor?: AuthenticatedUser) {
-    const loginName = this.normalizeLoginName(dto.username || dto.employeeId);
+    // إنشاء الموظف سجل موارد بشرية فقط — لا ينشئ حساب دخول (user).
+    // حسابات الدخول تُنشأ صراحةً من FactoryUsersPanel.
+    // المشرف العام بلا نطاق مصنع: صف الموظف سيكون بلا tenantId فينفجر
+    // الـ tenant extension بخطأ 500 — نرفض مبكراً بـ 400 واضح.
+    const scope = currentTenant();
+    if (scope?.bypass && !scope.tenantId) {
+      throw new BadRequestException(
+        'تعذر إنشاء الموظف بدون مصنع: ادخل إلى المصنع المطلوب أولاً (لوحة الإشراف ← المصانع) ثم أعد المحاولة.',
+      );
+    }
+
     const mobile = this.normalizeOptionalString(dto.mobile);
     const residence = this.normalizeOptionalString(dto.residence);
     const nationalId = this.normalizeOptionalString(dto.nationalId);
@@ -528,18 +550,15 @@ export class EmployeesService {
 
     this.validateEmploymentDates(employmentStartDate, terminationDate);
 
-    const [existingEmployee, existingUser] = await Promise.all([
-      this.prisma.employee.findFirst({
-        where: {
-          OR: [
-            { employeeId: dto.employeeId },
-            ...(nationalId ? [{ nationalId }] : []),
-            ...(biometricNumber !== null ? [{ biometricNumber }] : []),
-          ],
-        },
-      }),
-      this.findAuthUserByLogin(loginName),
-    ]);
+    const existingEmployee = await this.prisma.employee.findFirst({
+      where: {
+        OR: [
+          { employeeId: dto.employeeId },
+          ...(nationalId ? [{ nationalId }] : []),
+          ...(biometricNumber !== null ? [{ biometricNumber }] : []),
+        ],
+      },
+    });
 
     if (existingEmployee) {
       if (existingEmployee.employeeId === dto.employeeId) {
@@ -555,13 +574,6 @@ export class EmployeesService {
       }
     }
 
-    if (existingUser) {
-      throw new BadRequestException('Username already exists');
-    }
-
-    const passwordToHash = dto.password || dto.employeeId;
-    const passwordHash = await bcrypt.hash(passwordToHash, BCRYPT_DEFAULT_ROUNDS);
-
     const created = await this.prisma.$transaction(async (transaction) => {
       const department = await this.resolveDepartment(departmentName, transaction);
       const roleId = (await this.resolveRoleId(dto.roleId, transaction)) ?? null;
@@ -574,17 +586,6 @@ export class EmployeesService {
         });
         assertCanAssignRole(targetRole?.name ?? null, actor);
       }
-
-      const user = await transaction.user.create({
-        data: {
-          username: loginName,
-          email: loginName,
-          passwordHash,
-          roleId,
-          status: 'active',
-          photo: dto.photo,
-        },
-      });
 
       const employee = await transaction.employee.create({
         data: {
@@ -643,7 +644,7 @@ export class EmployeesService {
         },
       });
 
-      return { user, employee };
+      return { employee };
     });
 
     await this.invalidateEmployeeCaches();

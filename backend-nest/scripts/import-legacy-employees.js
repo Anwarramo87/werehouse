@@ -283,9 +283,10 @@ function mapRow(row, rowIndex, startCode) {
   };
 }
 
-async function resolveDepartment(tx, departmentName) {
+async function resolveDepartment(tx, departmentName, tenantId) {
   const existing = await tx.department.findFirst({
     where: {
+      tenantId,
       name: {
         equals: departmentName,
         mode: 'insensitive',
@@ -298,7 +299,7 @@ async function resolveDepartment(tx, departmentName) {
   }
 
   return tx.department.create({
-    data: { name: departmentName },
+    data: { name: departmentName, tenantId },
   });
 }
 
@@ -323,7 +324,7 @@ async function resolveRoleId(tx) {
   return created.id;
 }
 
-async function upsertEmployee(prisma, row) {
+async function upsertEmployee(prisma, row, tenantId) {
   const conflictByBiometric = await prisma.employee.findUnique({
     where: { biometricNumber: row.biometricNumber },
     select: { employeeId: true, biometricNumber: true, employmentStartDate: true },
@@ -356,7 +357,7 @@ async function upsertEmployee(prisma, row) {
     new Date();
 
   const roleId = await resolveRoleId(prisma);
-  const department = await resolveDepartment(prisma, row.department);
+  const department = await resolveDepartment(prisma, row.department, tenantId);
 
   await prisma.employee.upsert({
     where: { employeeId: row.employeeId },
@@ -485,10 +486,19 @@ async function main() {
   let successCount = 0;
 
   try {
+    // Department.tenantId is required — resolve (or create) the default tenant
+    // once so every department row is scoped instead of orphaned.
+    let tenant = await prisma.tenant.findFirst({ where: { code: 'default' } });
+    if (!tenant) {
+      tenant = await prisma.tenant.create({
+        data: { code: 'default', name: 'Default Factory' },
+      });
+    }
+
     for (let index = 0; index < mappedRows.length; index += 1) {
       const row = mappedRows[index];
       try {
-        await upsertEmployee(prisma, row);
+        await upsertEmployee(prisma, row, tenant.id);
         successCount += 1;
       } catch (error) {
         errors.push({

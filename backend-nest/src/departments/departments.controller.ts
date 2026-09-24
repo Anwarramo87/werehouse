@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, Put, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, Put, Query, UseGuards } from '@nestjs/common';
 import { ApiTags, ApiCookieAuth } from '@nestjs/swagger';
 import { DepartmentsService } from './departments.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
@@ -17,10 +17,13 @@ export class DepartmentsController {
 
   @Get()
   @Permissions('view_employees')
-  list(@CurrentUser() user: AuthenticatedUser) {
+  list(
+    @CurrentUser() user: AuthenticatedUser,
+    @Query('tenantId') tenantId?: string,
+  ) {
     return this.departmentsService.list({
       userId: user?.userId,
-      tenantId: user?.tenantId ?? null,
+      tenantId: tenantId ?? user?.tenantId ?? null,
     });
   }
 

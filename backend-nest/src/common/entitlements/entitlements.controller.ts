@@ -2,7 +2,6 @@ import {
   BadRequestException,
   Body,
   Controller,
-  ForbiddenException,
   Get,
   Param,
   ParseUUIDPipe,
@@ -22,6 +21,7 @@ import { JwtAuthGuard } from '../guards/jwt-auth.guard';
 import { SuperAdminGuard } from '../guards/superadmin.guard';
 import { SetSubscriptionDto } from './dto/set-subscription.dto';
 import { SetUserSubscriptionDto } from './dto/set-user-subscription.dto';
+import { CreateTenantDto } from './dto/create-tenant.dto';
 import { AuthenticatedUser } from '../types/authenticated-user.types';
 import { AuditService } from '../services/audit.service';
 import { ALWAYS_AVAILABLE_ROUTES, MODULES } from './catalogue';
@@ -105,6 +105,45 @@ export class TenantEntitlementsController {
   @ApiOperation({ summary: 'Every factory, with what each one holds (super admin)' })
   list() {
     return this.entitlements.listTenants();
+  }
+
+  @Get('next-code')
+  @ApiOperation({ summary: 'Next available sequential factory code (super admin)' })
+  async nextCode() {
+    return { code: await this.entitlements.getNextFactoryCode() };
+  }
+
+  @Post()
+  @ApiOperation({
+    summary: 'Create a factory (super admin)',
+    description:
+      'Zero-state: only the Tenant row is written — no departments, users, ' +
+      'employees, or seed data. The factory starts with full page access ' +
+      'until someone configures entitlements.',
+  })
+  async create(
+    @Body() dto: CreateTenantDto,
+    @CurrentUser() user: AuthenticatedUser,
+    @Req() req: Request,
+  ) {
+    const tenant = await this.entitlements.createTenant({
+      name: dto.name,
+      code: dto.code,
+      description: dto.description,
+    });
+    this.audit.log(
+      {
+        action: 'factory.create',
+        actorId: user?.userId,
+        actorUsername: user?.username,
+        targetType: 'tenant',
+        targetId: tenant.id,
+        targetTenantId: tenant.id,
+        metadata: { name: tenant.name, code: tenant.code },
+      },
+      req,
+    );
+    return tenant;
   }
 
   @Get('employees')
