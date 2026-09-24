@@ -1,0 +1,39 @@
+PASS test/unit/representatives/rep-isolation.guard.spec.ts (28.693 s)
+  RepIsolationGuard
+    √ allows admin regardless of repId (31 ms)
+    √ allows superadmin regardless of repId (4 ms)
+    √ allows a representative to access their own data (4 ms)
+    √ injects representativeId into request after allowing access (3 ms)
+    √ throws ForbiddenException when rep tries to access ANOTHER rep ID (6 ms)
+    √ throws ForbiddenException when the requesting user is not a registered rep (4 ms)
+    √ throws ForbiddenException when the rep account is suspended (3 ms)
+    √ throws ForbiddenException with no user in request (3 ms)
+    √ blocks a rep even if they manually craft a valid UUID for another rep (6 ms)
+
+PASS test/unit/manufacturing/manufacturing.service.spec.ts (28.791 s)
+  ManufacturingService — BOM
+    createBOM
+      √ throws NotFoundException if the finished product does not exist (23 ms)
+      √ throws BadRequestException if no items are provided (8 ms)
+      √ throws NotFoundException if a raw material does not exist (4 ms)
+      √ creates a BOM with version 1 when no previous BOM exists (9 ms)
+      √ increments version when a previous BOM exists (4 ms)
+    calculateBOMCost
+      √ returns zero cost if BOM not found (6 ms)
+      √ calculates material cost correctly with waste (5 ms)
+  ManufacturingService — Production Orders
+    startProductionOrder
+      √ throws NotFoundException for a non-existent order (3 ms)
+      √ throws BadRequestException if order is not PLANNED (4 ms)
+      √ throws BadRequestException when raw material stock is insufficient (5 ms)
+      √ sets order to IN_PROGRESS when stock is sufficient (3 ms)
+    createProductionOrder
+      √ throws NotFoundException when BOM is not active (2 ms)
+      √ creates a production order with a sequential number (5 ms)
+
+Test Suites: 2 passed, 2 total
+Tests:       22 passed, 22 total
+Snapshots:   0 total
+Time:        33.514 s
+Ran all test suites matching test/unit/manufacturing/manufacturing.service.spec.ts|test/unit/representatives/rep-isolation.guard.spec.ts.
+Force exiting Jest: Have you considered using `--detectOpenHandles` to detect async operations that kept running after all tests finished?

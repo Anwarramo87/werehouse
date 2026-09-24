@@ -1,0 +1,18 @@
+FAIL test/unit/manufacturing/manufacturing.service.spec.ts
+  ● Test suite failed to run
+
+    [96mtest/unit/manufacturing/manufacturing.service.spec.ts[0m:[93m13[0m:[93m7[0m - [91merror[0m[90m TS7022: [0m'prismaMock' implicitly has type 'any' because it does not have a type annotation and is referenced directly or indirectly in its own initializer.
+
+    [7m13[0m const prismaMock = {
+    [7m  [0m [91m      ~~~~~~~~~~[0m
+    [96mtest/unit/manufacturing/manufacturing.service.spec.ts[0m:[93m55[0m:[93m25[0m - [91merror[0m[90m TS7024: [0mFunction implicitly has return type 'any' because it does not have a return type annotation and is referenced directly or indirectly in one of its return expressions.
+
+    [7m55[0m   $transaction: jest.fn((fn: (tx: unknown) => Promise<unknown>) => fn(prismaMock)),
+    [7m  [0m [91m                        ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~[0m
+
+Test Suites: 1 failed, 1 total
+Tests:       0 total
+Snapshots:   0 total
+Time:        8.106 s
+Ran all test suites matching test/unit/manufacturing/manufacturing.service.spec.ts.
+Force exiting Jest: Have you considered using `--detectOpenHandles` to detect async operations that kept running after all tests finished?

@@ -1,0 +1,18 @@
+FAIL test/unit/manufacturing/manufacturing.service.spec.ts
+  ● Test suite failed to run
+
+    [96mtest/unit/manufacturing/manufacturing.service.spec.ts[0m:[93m15[0m:[93m7[0m - [91merror[0m[90m TS2322: [0mType '{ product: { findFirst: jest.Mock<any, any, any>; findMany: jest.Mock<any, any, any>; findUnique: jest.Mock<any, any, any>; update: jest.Mock<any, any, any>; }; ... 6 more ...; $transaction: jest.Mock<...>; }' is not assignable to type 'DeepMock & { $transaction: Mock<any, any, any>; }'.
+      Type '{ product: { findFirst: jest.Mock<any, any, any>; findMany: jest.Mock<any, any, any>; findUnique: jest.Mock<any, any, any>; update: jest.Mock<any, any, any>; }; ... 6 more ...; $transaction: jest.Mock<...>; }' is not assignable to type 'DeepMock'.
+        Property '$transaction' is incompatible with index signature.
+          Type 'Mock<Promise<unknown>, [fn: (tx: unknown) => Promise<unknown>], any>' is not assignable to type 'Record<string, Mock<any, any, any>>'.
+            Index signature for type 'string' is missing in type 'Mock<Promise<unknown>, [fn: (tx: unknown) => Promise<unknown>], any>'.
+
+    [7m15[0m const prismaMock: DeepMock & {
+    [7m  [0m [91m      ~~~~~~~~~~[0m
+
+Test Suites: 1 failed, 1 total
+Tests:       0 total
+Snapshots:   0 total
+Time:        6.063 s
+Ran all test suites matching test/unit/manufacturing/manufacturing.service.spec.ts.
+Force exiting Jest: Have you considered using `--detectOpenHandles` to detect async operations that kept running after all tests finished?

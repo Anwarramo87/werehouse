@@ -1,0 +1,9 @@
+PASS test/unit/representatives/rep-isolation.guard.spec.ts (7.826 s)
+PASS test/unit/manufacturing/manufacturing.service.spec.ts (8.044 s)
+
+Test Suites: 2 passed, 2 total
+Tests:       22 passed, 22 total
+Snapshots:   0 total
+Time:        8.732 s
+Ran all test suites matching test/unit/manufacturing/manufacturing.service.spec.ts|test/unit/representatives/rep-isolation.guard.spec.ts.
+Force exiting Jest: Have you considered using `--detectOpenHandles` to detect async operations that kept running after all tests finished?
