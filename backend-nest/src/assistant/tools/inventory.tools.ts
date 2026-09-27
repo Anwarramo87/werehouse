@@ -18,6 +18,7 @@ export class InventoryTools {
     return [
       this.searchProducts(),
       this.getStockLevels(),
+      this.getInventoryValuation(),
       this.listStockMovements(),
     ];
   }
@@ -76,6 +77,7 @@ export class InventoryTools {
             costPrice: true,
             reorderLevel: true,
             status: true,
+            tenant: { select: { name: true, code: true } },
           },
         });
 
@@ -83,6 +85,8 @@ export class InventoryTools {
           rowCount: rows.length,
           rows: rows.map((r) => ({
             ...r,
+            tenant: undefined,
+            ...(r.tenant ? { factory: r.tenant.name } : {}),
             unitPrice: Number(r.unitPrice),
             costPrice: Number(r.costPrice),
           })),
@@ -138,6 +142,7 @@ export class InventoryTools {
             category: true,
             unit: true,
             reorderLevel: true,
+            tenant: { select: { name: true, code: true } },
           },
           take: MAX_ROW_LIMIT,
           orderBy: { name: 'asc' },
@@ -175,6 +180,9 @@ export class InventoryTools {
                   : available <= p.reorderLevel
                     ? 'low'
                     : 'ok',
+              ...((p as { tenant?: { name?: string } }).tenant
+                ? { factory: (p as { tenant?: { name?: string } }).tenant!.name }
+                : {}),
             };
           })
           .filter((r) => state === 'any' || r.state === state);
@@ -194,6 +202,96 @@ export class InventoryTools {
            */
           countsCoverWholeCatalogue: windowCovered,
           rows: rows.slice(0, limit),
+        };
+      },
+    };
+  }
+
+  private getInventoryValuation(): AssistantTool {
+    const input = z.object({
+      location: z.string().min(1).max(60).optional().describe('Warehouse code.'),
+      category: z.string().min(1).max(120).optional(),
+    });
+
+    return {
+      name: 'get_inventory_valuation',
+      description:
+        'Total stock value: for each product with stock on hand, its value at cost (costPrice × onHand) and at selling price (unitPrice × onHand), plus whole-catalogue totals. Use this to answer how much the warehouse stock is worth, the cost of the materials/goods held, or the value of products in a category or location.',
+      input,
+      permissions: ['view_inventory'],
+      run: async (raw) => {
+        const args = raw as z.infer<typeof input>;
+        const productWhere: Prisma.ProductWhereInput = {};
+        if (args.category) {
+          productWhere.category = {
+            contains: args.category,
+            mode: 'insensitive',
+          };
+        }
+
+        const products = await this.prisma.product.findMany({
+          where: productWhere,
+          select: {
+            sku: true,
+            name: true,
+            category: true,
+            unit: true,
+            unitPrice: true,
+            costPrice: true,
+            tenant: { select: { name: true, code: true } },
+          },
+          take: MAX_ROW_LIMIT,
+          orderBy: { name: 'asc' },
+        });
+
+        if (products.length === 0) {
+          return { productCountWithStock: 0, totalCostValue: 0, totalSellValue: 0, rows: [] };
+        }
+
+        const levels = await this.prisma.stockLevel.groupBy({
+          by: ['sku'],
+          where: {
+            sku: { in: products.map((p) => p.sku) },
+            ...(args.location ? { location: args.location } : {}),
+          },
+          _sum: { quantity: true },
+        });
+        const bySku = new Map(levels.map((l) => [l.sku, l]));
+
+        const rows: Array<Record<string, unknown>> = [];
+        let totalCostValue = 0;
+        let totalSellValue = 0;
+
+        for (const p of products) {
+          const onHand = Number(bySku.get(p.sku)?._sum.quantity ?? 0);
+          if (!Number.isFinite(onHand) || onHand <= 0) continue;
+          const unitCost = Number(p.costPrice ?? 0);
+          const unitPrice = Number(p.unitPrice ?? 0);
+          const costValue = onHand * unitCost;
+          const sellValue = onHand * unitPrice;
+          totalCostValue += costValue;
+          totalSellValue += sellValue;
+          rows.push({
+            sku: p.sku,
+            name: p.name,
+            category: p.category,
+            unit: p.unit,
+            onHand,
+            unitCost,
+            costValue,
+            unitPrice,
+            sellValue,
+            ...((p as { tenant?: { name?: string } }).tenant
+              ? { factory: (p as { tenant?: { name?: string } }).tenant!.name }
+              : {}),
+          });
+        }
+
+        return {
+          productCountWithStock: rows.length,
+          totalCostValue,
+          totalSellValue,
+          rows,
         };
       },
     };

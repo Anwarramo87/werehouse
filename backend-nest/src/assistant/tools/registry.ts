@@ -140,10 +140,14 @@ export class ToolRegistry {
       // The async wrapper matters: a bare `runWithTenant(s, () => prisma.x.find())`
       // builds a lazy PrismaPromise inside the scope but resolves it outside,
       // losing the AsyncLocalStorage context and failing closed.
-      const result = await runWithTenant(
-        { tenantId: ctx.tenantId, bypass: false },
-        async () => await tool.run(parsed.data, ctx),
-      );
+      //
+      // A null tenantId means the super admin is asking: the tools then run
+      // with a bypass scope and read across every factory. Any tenant user is
+      // narrowed to exactly its factory.
+      const scope = ctx.tenantId
+        ? { tenantId: ctx.tenantId, bypass: false }
+        : { tenantId: null, bypass: true };
+      const result = await runWithTenant(scope, async () => await tool.run(parsed.data, ctx));
 
       const rowCount = Array.isArray(result)
         ? result.length
@@ -179,13 +183,19 @@ export class ToolRegistry {
     rowCount: number,
   ): Promise<void> {
     try {
-      await runWithTenant({ tenantId: ctx.tenantId, bypass: false }, async () =>
+      const scope = ctx.tenantId
+        ? { tenantId: ctx.tenantId, bypass: false }
+        : { tenantId: null, bypass: true };
+      await runWithTenant(scope, async () =>
         this.prisma.auditLog.create({
           data: {
             actorId: ctx.user.userId,
             actorUsername: ctx.user.username,
             action: `assistant.${name}`,
             targetType: 'assistant',
+            // The super admin has no factory; an explicit null keeps the create
+            // legal under the bypass scope (a silently unstamped create is not).
+            ...(ctx.tenantId ? { tenantId: ctx.tenantId } : { tenantId: null }),
             metadata: { args, rowCount } as object,
           },
         }),

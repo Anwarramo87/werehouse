@@ -10,7 +10,7 @@ export const WMS_SETUP_STEPS = {
   1: { key: 'warehouse', label: 'إعداد المخزن', required: true },
   2: { key: 'rawMaterials', label: 'إضافة المواد الخام', required: true },
   3: { key: 'finishedProducts', label: 'إنشاء المنتج النهائي', required: true },
-  4: { key: 'bom', label: 'تحديد BOM', required: true },
+  4: { key: 'bom', label: 'تحديد BOM', required: false },
   5: { key: 'productionCost', label: 'حساب تكلفة الإنتاج', required: false },
   6: { key: 'pricing', label: 'تحديد سعر البيع والربح', required: true },
   7: { key: 'review', label: 'مراجعة الإعداد', required: false },
@@ -271,11 +271,9 @@ export class WmsSetupService {
         break;
       }
       case 4: {
-        // التحقق من وجود BOM
-        const count = await this.prisma.bOM.count({ where: { isActive: true } });
-        if (count === 0) {
-          throw new BadRequestException('يجب إنشاء BOM واحدة على الأقل');
-        }
+        // BOMs are created later from the Production module (the wizard's step 4
+        // screen is informational and explicitly defers them). Zero active BOMs
+        // must not block a fresh factory from completing the WMS setup.
         break;
       }
       case 6: {

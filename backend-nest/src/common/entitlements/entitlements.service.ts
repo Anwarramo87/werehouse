@@ -1,9 +1,16 @@
-import { BadRequestException, ConflictException, Injectable, Logger } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  Injectable,
+  Logger,
+  OnModuleInit,
+} from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { ShortCacheService } from '../cache/short-cache.service';
 import { runUnscoped, runWithTenant } from '../tenant/tenant-context';
 import {
   ALL_PAGE_KEYS,
+  BACKFILL_PAGE_KEYS,
   MODULES,
   isKnownPage,
   moduleState,
@@ -45,13 +52,77 @@ export interface SubscriptionView {
 }
 
 @Injectable()
-export class EntitlementsService {
+export class EntitlementsService implements OnModuleInit {
   private readonly logger = new Logger(EntitlementsService.name);
 
   constructor(
     private readonly prisma: PrismaService,
     private readonly cache: ShortCacheService,
   ) {}
+
+  /**
+   * Pages shipped after the catalogue: previously ungated (everyone reached
+   * them), so every configured factory keeps them. Idempotent — on later boots
+   * the keys are already present and nothing changes.
+   *
+   * Deferred off the bootstrap call stack (setImmediate, like the cron scans
+   * in ExpiryService / NotificationsService): an AsyncLocalStorage store set
+   * while Nest is still onModuleInit-ing is not reliably visible to the tenant
+   * Prisma extension on the very first query, so the runUnscoped query at boot
+   * can 500 with "Tenant scope missing". By letting bootstrap finish as a
+   * macrotask first, the backfill behaves exactly like the schedulers that
+   * already prove runUnscoped works outside requests.
+   */
+  async onModuleInit(): Promise<void> {
+    if (BACKFILL_PAGE_KEYS.length === 0) return;
+
+    const run = () => void this.runBackfill();
+    if (typeof setImmediate === 'function') {
+      setImmediate(run);
+    } else {
+      setTimeout(run, 0);
+    }
+  }
+
+  private async runBackfill(): Promise<void> {
+    try {
+      const rows = await runUnscoped('entitlements-backfill-read', () =>
+        this.prisma.tenantEntitlement.findMany({
+          select: { tenantId: true, enabledPages: true },
+        }),
+      );
+
+      let changed = 0;
+      for (const row of rows) {
+        const missing = BACKFILL_PAGE_KEYS.filter((key) => !row.enabledPages.includes(key));
+        if (missing.length === 0) continue;
+
+        await runUnscoped('entitlements-backfill-write', () =>
+          this.prisma.tenantEntitlement.update({
+            where: { tenantId: row.tenantId },
+            data: { enabledPages: [...row.enabledPages, ...missing] },
+          }),
+        );
+        await this.cache.del(this.cacheKey(row.tenantId));
+        changed += 1;
+      }
+
+      if (changed > 0) {
+        this.logger.log(
+          `Backfilled ${changed} factory(-ies) with new catalogue pages: ${BACKFILL_PAGE_KEYS.join(', ')}`,
+        );
+      }
+    } catch (error) {
+      // Failing open here is safe: factories without a configured row already
+      // receive ALL_PAGE_KEYS, and the guard answers per request anyway.
+      console.error('[DIAG-backfill] stack=' + (error instanceof Error ? error.stack : String(error)));
+      this.logger.error(
+        `Entitlements backfill failed — new pages stay un-granted for configured factories: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+  }
 
   private cacheKey(tenantId: string) {
     return `entitlements:${tenantId}`;

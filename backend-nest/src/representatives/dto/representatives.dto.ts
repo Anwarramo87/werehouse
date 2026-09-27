@@ -102,6 +102,27 @@ export class AssignProductsDto {
 }
 
 // ---------------------------------------------------------------------------
+// Rep self-service — shops (محلات المندوب في خطه)
+// ---------------------------------------------------------------------------
+
+export class CreateRepShopDto {
+  @IsString()
+  name: string;
+
+  @IsString()
+  @IsOptional()
+  phone?: string;
+
+  @IsString()
+  @IsOptional()
+  address?: string;
+
+  @IsUUID()
+  @IsOptional()
+  routeId?: string;
+}
+
+// ---------------------------------------------------------------------------
 // Stock Transfer (Warehouse → Representative)
 // ---------------------------------------------------------------------------
 

@@ -21,6 +21,7 @@ import {
   AssignCustomersDto,
   AssignProductsDto,
   CreateRepRouteDto,
+  CreateRepShopDto,
   RepQueryDto,
   RepSaleQueryDto,
 } from './dto/representatives.dto';
@@ -73,10 +74,30 @@ export class RepresentativesService {
     if (!user) throw new NotFoundException('المستخدم غير موجود');
     if (user.representative) throw new ConflictException('هذا المستخدم مرتبط بمندوب آخر');
 
+    // المندوب = موظف بخاصية مندوب: إن مُرر employeeId نتحقق أن الموظف موجود
+    // وأنّ حسابه هو نفس حساب المستخدم المختار، وأنه غير مرتبط بمندوب آخر.
+    let employeeId = dto.employeeId;
+    if (employeeId) {
+      const employee = await this.prisma.employee.findUnique({
+        where: { id: employeeId },
+        select: { id: true, userId: true },
+      });
+      if (!employee) throw new NotFoundException('الموظف غير موجود');
+      if (employee.userId !== user.id) {
+        throw new BadRequestException('حساب المندوب يجب أن يطابق حساب المستخدم المرتبط بالموظف');
+      }
+      const alreadyRep = await this.prisma.representative.findFirst({
+        where: { employeeId },
+        select: { id: true },
+      });
+      if (alreadyRep) throw new ConflictException('هذا الموظف مرتبط بمندوب آخر');
+    }
+
     return this.prisma.representative.create({
       data: {
+        tenantId: user.tenantId,
         userId: dto.userId,
-        employeeId: dto.employeeId,
+        employeeId,
         name: dto.name,
         code: dto.code,
         phone: dto.phone,
@@ -240,6 +261,39 @@ export class RepresentativesService {
         isActive: true,
       },
     });
+  }
+
+  // =========================================================================
+  // ADMIN — Employee candidates (مندوب = موظف بخاصية مندوب)
+  // =========================================================================
+
+  /** الموظفون المرشحون ليصبحوا مندوبين: على account مرتبط وغير مرتبطين بمندوب */
+  async listEmployeeCandidates() {
+    const reps = await this.prisma.representative.findMany({
+      where: { employeeId: { not: null } },
+      select: { employeeId: true },
+    });
+    const takenEmployeeIds = new Set(reps.map((r) => r.employeeId as string));
+
+    const employees = await this.prisma.employee.findMany({
+      where: {
+        status: 'active',
+        userId: { not: null },
+        ...(takenEmployeeIds.size > 0 ? { id: { notIn: [...takenEmployeeIds] } } : {}),
+      },
+      select: {
+        id: true,
+        employeeId: true,
+        name: true,
+        mobile: true,
+        userId: true,
+        department: true,
+        jobTitle: true,
+      },
+      orderBy: { name: 'asc' },
+    });
+
+    return employees;
   }
 
   // =========================================================================
@@ -460,8 +514,141 @@ export class RepresentativesService {
         products: { where: { isActive: true }, select: { sku: true } },
       },
     });
-    if (!rep) throw new NotFoundException('لا يوجد سجل مندوب لهذا المستخدم');
+    // 200 + null instead of a 404: the endpoint is probed from the workspace
+    // shell for ANY logged-in user (admins preview the rep screen too), and a
+    // missing profile is a normal state, not a routing error.
+    if (!rep) return null;
     return rep;
+  }
+
+  // =========================================================================
+  // REP-SCOPED — My Route & Shops (خطي ومحلاتي)
+  // =========================================================================
+
+  /** خطوط المندوب */
+  async getMyRoutes(repId: string) {
+    await this.assertRepExists(repId);
+    return this.prisma.repRoute.findMany({
+      where: { representativeId: repId },
+      orderBy: { createdAt: 'asc' },
+    });
+  }
+
+  /** المندوب يُنشئ خطاً (مساره) بنفسه */
+  async createMyRoute(repId: string, dto: CreateRepRouteDto) {
+    await this.assertRepExists(repId);
+    return this.prisma.repRoute.create({
+      data: {
+        representativeId: repId,
+        name: dto.name,
+        areas: dto.areas ?? [],
+        schedule: dto.schedule,
+        isActive: true,
+      },
+    });
+  }
+
+  /** محلات المندوب في خطه — مع دفتر ذاكرة الشراء لكل محل */
+  async getMyShops(repId: string) {
+    await this.assertRepExists(repId);
+
+    const links = await this.prisma.repCustomer.findMany({
+      where: { representativeId: repId, isActive: true },
+      orderBy: { assignedAt: 'desc' },
+    });
+    if (links.length === 0) return [];
+
+    const customerIds = links.map((l) => l.customerId);
+    const customers = await this.prisma.customer.findMany({
+      where: { id: { in: customerIds } },
+      select: { id: true, name: true, phone: true, address: true, createdAt: true },
+    });
+    // ذاكرة الشراء لكل محل: إجمالي المشتريات، عدد الفواتير، آخر عملية شراء
+    const sales = await this.prisma.repSale.groupBy({
+      by: ['customerId'],
+      where: {
+        representativeId: repId,
+        status: { not: RepSaleStatus.CANCELLED },
+        customerId: { in: customerIds },
+      },
+      _sum: { totalAmount: true },
+      _count: { _all: true },
+      _max: { saleDate: true },
+    });
+
+    const saleMap = new Map(
+      sales.map((s) => [
+        s.customerId,
+        {
+          totalBought: Number(s._sum.totalAmount ?? 0),
+          saleCount: s._count._all,
+          lastSaleDate: s._max.saleDate,
+        },
+      ]),
+    );
+
+    return customers.map((c) => {
+      const memory = saleMap.get(c.id);
+      return {
+        customerId: c.id,
+        name: c.name,
+        phone: c.phone,
+        address: c.address,
+        createdAt: c.createdAt,
+        memory: {
+          totalBought: memory?.totalBought ?? 0,
+          saleCount: memory?.saleCount ?? 0,
+          lastSaleDate: memory?.lastSaleDate ?? null,
+        },
+      };
+    });
+  }
+
+  /** المندوب يضيف محلاً لخطه (مترافق مع عميل مركزي) */
+  async createMyShop(repId: string, dto: CreateRepShopDto) {
+    const rep = await this.assertRepExists(repId);
+
+    const name = dto.name.trim();
+    if (!name) throw new BadRequestException('اسم المحل مطلوب');
+
+    // إنشاء عميل مركزي (موجود مسبقاً بلا تينانت أو باسمه)
+    const existing = await this.prisma.customer.findFirst({
+      where: { name: { equals: name, mode: 'insensitive' } },
+      select: { id: true, tenantId: true },
+    });
+
+    let customerId: string;
+    if (existing) {
+      customerId = existing.id;
+    } else {
+      const created = await this.prisma.customer.create({
+        data: {
+          tenantId: rep.tenantId,
+          name,
+          phone: dto.phone,
+          address: dto.address,
+        },
+        select: { id: true },
+      });
+      customerId = created.id;
+    }
+
+    // ربط المحل بالمندوب (findFirst لتجنب مشكلة upsert مع tenantId null)
+    const existingLink = await this.prisma.repCustomer.findFirst({
+      where: { representativeId: repId, customerId },
+    });
+    if (existingLink) {
+      await this.prisma.repCustomer.update({
+        where: { id: existingLink.id },
+        data: { isActive: true },
+      });
+    } else {
+      await this.prisma.repCustomer.create({
+        data: { representativeId: repId, customerId, isActive: true },
+      });
+    }
+
+    return { customerId, name, phone: dto.phone, address: dto.address };
   }
 
   // =========================================================================

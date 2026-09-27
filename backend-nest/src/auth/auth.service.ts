@@ -31,6 +31,7 @@ import { currentTenant, runUnscoped } from '../common/tenant/tenant-context';
 import {
   DEFAULT_TENANT_CODE,
   MANAGE_TENANTS,
+  SUPERADMIN_ONLY_PERMISSIONS,
   SUPERADMIN_ROLE,
 } from '../common/tenant/tenant.constants';
 import { AuthenticatedUser } from '../common/types/authenticated-user.types';
@@ -510,25 +511,35 @@ export class AuthService {
   }
 
   /**
-   * Grants any permission the role is missing from its canonical list.
+   * Grants any permission the role is missing from its canonical list, while
+   * pruning Super Admin-only permissions the role should not hold.
    *
    * `permissions` used to be written only when the role row was first created,
    * so a permission added to ADMIN_PERMISSIONS later never reached an existing
    * install -- every endpoint gated on it answered 403 forever. Union rather
    * than overwrite so permissions an operator added by hand survive.
+   *
+   * `SUPERADMIN_ONLY_PERMISSIONS` (manage_roles / manage_tenants) are pruned
+   * unless the canonical list itself contains them, so a factory `admin` role
+   * can never drift into holding `manage_roles`. The canonical superadmin list
+   * includes both, so the superadmin role is never pruned.
    */
   private async reconcileRolePermissions(
     role: { id: string; permissions: string[] },
     canonical: string[],
   ) {
-    const missing = canonical.filter((p) => !role.permissions.includes(p));
-    if (missing.length === 0) {
+    const merged = [...new Set([...role.permissions, ...canonical])];
+    const final = merged.filter(
+      (p) =>
+        !(SUPERADMIN_ONLY_PERMISSIONS.includes(p) && !canonical.includes(p)),
+    );
+    if (final.length === role.permissions.length) {
       return role;
     }
 
     const updated = await this.prisma.role.update({
       where: { id: role.id },
-      data: { permissions: [...role.permissions, ...missing] },
+      data: { permissions: final },
     });
     await this.authCache.invalidateAllRoles();
     await this.authCache.invalidateAllUsers();

@@ -13,6 +13,8 @@ import {
 import { RepresentativesService } from './representatives.service';
 import { RepIsolationGuard } from './guards/rep-isolation.guard';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
+import { PageAccessGuard } from '../common/entitlements/page-access.guard';
+import { RequiresPage } from '../common/entitlements/requires-page.decorator';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { AuthenticatedUser } from '../common/types/authenticated-user.types';
 import {
@@ -27,12 +29,14 @@ import {
   AssignCustomersDto,
   AssignProductsDto,
   CreateRepRouteDto,
+  CreateRepShopDto,
   RepQueryDto,
   RepSaleQueryDto,
 } from './dto/representatives.dto';
 
 @Controller('representatives')
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, PageAccessGuard)
+@RequiresPage('reps.management')
 export class RepresentativesController {
   constructor(private readonly reps: RepresentativesService) {}
 
@@ -56,6 +60,13 @@ export class RepresentativesController {
   list(@Query() query: RepQueryDto, @CurrentUser() user: AuthenticatedUser) {
     this.requireAdmin(user);
     return this.reps.listRepresentatives(query);
+  }
+
+  /** الموظفون المرشحون ليصبحوا مندوبين (مندوب = موظف بخاصية مندوب) */
+  @Get('employee-options')
+  getEmployeeOptions(@CurrentUser() user: AuthenticatedUser) {
+    this.requireAdmin(user);
+    return this.reps.listEmployeeCandidates();
   }
 
   @Get(':repId')
@@ -157,6 +168,40 @@ export class RepresentativesController {
   @Get('me/profile')
   getMyProfile(@CurrentUser() user: AuthenticatedUser) {
     return this.reps.getMyProfile(user.userId);
+  }
+
+  // =========================================================================
+  // REP-SCOPED — My Route & Shops (خطي ومحلاتي)
+  // =========================================================================
+
+  @Get(':repId/routes')
+  @UseGuards(RepIsolationGuard)
+  getMyRoutes(@Param('repId', ParseUUIDPipe) repId: string) {
+    return this.reps.getMyRoutes(repId);
+  }
+
+  @Post(':repId/route')
+  @UseGuards(RepIsolationGuard)
+  createMyRoute(
+    @Param('repId', ParseUUIDPipe) repId: string,
+    @Body() dto: CreateRepRouteDto,
+  ) {
+    return this.reps.createMyRoute(repId, dto);
+  }
+
+  @Get(':repId/shops')
+  @UseGuards(RepIsolationGuard)
+  getMyShops(@Param('repId', ParseUUIDPipe) repId: string) {
+    return this.reps.getMyShops(repId);
+  }
+
+  @Post(':repId/shops')
+  @UseGuards(RepIsolationGuard)
+  createMyShop(
+    @Param('repId', ParseUUIDPipe) repId: string,
+    @Body() dto: CreateRepShopDto,
+  ) {
+    return this.reps.createMyShop(repId, dto);
   }
 
   // =========================================================================

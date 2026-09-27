@@ -41,6 +41,18 @@ export class CustomizationController {
     return this.service.getCustomization(user.tenantId);
   }
 
+  // Static route MUST be declared before `tenant/:tenantId` below: otherwise
+  // Nest registers the parameterized route first and a request to
+  // `tenant/custom-fields` matches it with tenantId="custom-fields".
+  @Get('tenant/custom-fields')
+  async listCurrentTenantCustomFields(
+    @CurrentUser() user: AuthenticatedUser,
+    @Query('entity') entity?: string,
+  ) {
+    assertTenantScope(user);
+    return this.service.listCustomFields(user.tenantId, entity);
+  }
+
   @Get('tenant/:tenantId')
   @UseGuards(SuperAdminGuard)
   async getTenantCustomization(@Param('tenantId') tenantId: string) {
@@ -82,15 +94,6 @@ export class CustomizationController {
     @CurrentUser() user: AuthenticatedUser,
   ) {
     return this.service.resetCustomization(tenantId, user);
-  }
-
-  @Get('tenant/custom-fields')
-  async listCurrentTenantCustomFields(
-    @CurrentUser() user: AuthenticatedUser,
-    @Query('entity') entity?: string,
-  ) {
-    assertTenantScope(user);
-    return this.service.listCustomFields(user.tenantId, entity);
   }
 
   @Get('tenant/:tenantId/custom-fields')

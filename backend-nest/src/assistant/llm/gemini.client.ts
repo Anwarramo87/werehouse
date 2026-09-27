@@ -167,6 +167,7 @@ export class GeminiClient implements LlmProvider {
     let text = '';
 
     for (const step of steps as Array<Record<string, unknown>>) {
+      // Gemini storage v2: a tool call can be a top-level step...
       if (step.type === 'function_call') {
         calls.push({
           id: String(step.id ?? ''),
@@ -181,6 +182,18 @@ export class GeminiClient implements LlmProvider {
         for (const part of content) {
           if (part.type === 'text' && typeof part.text === 'string') {
             text += part.text;
+          }
+          // ...or, on the newer models, a function_call content part nested
+          // inside the model_output step. Both shapes must be read or the
+          // assistant answers with prose and never runs a tool.
+          if (part.type === 'function_call') {
+            calls.push({
+              id: String(part.id ?? ''),
+              name: String(part.name ?? ''),
+              args: (part.args as Record<string, unknown>) ??
+                (part.arguments as Record<string, unknown>) ??
+                {},
+            });
           }
         }
       }

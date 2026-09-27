@@ -16,6 +16,7 @@ import { Permissions } from '../common/decorators/permissions.decorator';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { PermissionsGuard } from '../common/guards/permissions.guard';
 import { AuthenticatedUser } from '../common/types/authenticated-user.types';
+import { SUPERADMIN_ROLE } from '../common/tenant/tenant.constants';
 import { AssistantService } from './assistant.service';
 
 const askSchema = z.object({
@@ -76,9 +77,14 @@ export class AssistantController {
       );
     }
 
-    // The super admin has no factory of its own, and every assistant tool reads
-    // factory-scoped data. Refusing here is clearer than returning nothing.
-    if (!user.tenantId) {
+    // The super admin has no factory of its own, so it may ask across every
+    // factory (the registry runs its tools with a bypass scope). A factory user
+    // must belong to one -- every assistant tool reads factory-scoped data and
+    // refusing here is clearer than returning nothing.
+    const isSuperAdmin =
+      (Array.isArray(user.roles) && user.roles.includes(SUPERADMIN_ROLE)) ||
+      user.role === SUPERADMIN_ROLE;
+    if (!user.tenantId && !isSuperAdmin) {
       throw new ForbiddenException(
         'The assistant runs inside one factory. Sign in as a factory user to use it.',
       );
@@ -99,7 +105,7 @@ export class AssistantController {
     try {
       for await (const event of this.assistant.ask({
         user,
-        tenantId: user.tenantId,
+        tenantId: user.tenantId ?? null,
         message: parsed.data.message,
         conversationId: parsed.data.conversationId,
       })) {

@@ -11,11 +11,14 @@ import {
 } from '@nestjs/common';
 import { WmsSetupService } from './wms-setup.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
+import { PageAccessGuard } from '../common/entitlements/page-access.guard';
+import { RequiresPage } from '../common/entitlements/requires-page.decorator';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { AuthenticatedUser } from '../common/types/authenticated-user.types';
 
 @Controller('wms-setup')
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, PageAccessGuard)
+@RequiresPage('wms.setup')
 export class WmsSetupController {
   constructor(private readonly wmsSetup: WmsSetupService) {}
 

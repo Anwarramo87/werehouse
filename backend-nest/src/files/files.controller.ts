@@ -17,6 +17,8 @@ import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { Permissions } from '../common/decorators/permissions.decorator';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { PermissionsGuard } from '../common/guards/permissions.guard';
+import { PageAccessGuard } from '../common/entitlements/page-access.guard';
+import { RequiresPage } from '../common/entitlements/requires-page.decorator';
 import { AuthenticatedUser } from '../common/types/authenticated-user.types';
 import { GENERAL_FILE_EXTENSIONS, FilesService } from './files.service';
 import { FilesListQueryDto } from './dto/files-list-query.dto';
@@ -24,7 +26,8 @@ import { FilesListQueryDto } from './dto/files-list-query.dto';
 @ApiTags('files')
 @ApiCookieAuth()
 @Controller('files')
-@UseGuards(JwtAuthGuard, PermissionsGuard)
+@UseGuards(JwtAuthGuard, PermissionsGuard, PageAccessGuard)
+@RequiresPage('imports.files')
 export class FilesController {
   constructor(private readonly filesService: FilesService) {}
 
