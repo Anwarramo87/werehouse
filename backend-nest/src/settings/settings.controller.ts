@@ -23,6 +23,9 @@ export class SettingsController {
 
   @Get()
   getSettings(@CurrentUser() user: AuthenticatedUser) {
+    if (user.role !== 'admin' && user.role !== 'superadmin') {
+      throw new ForbiddenException('قراءة الإعدادات للمسؤول فقط');
+    }
     return this.settings.getSettings(this.requireTenant(user));
   }
 

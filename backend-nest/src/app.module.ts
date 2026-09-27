@@ -65,6 +65,7 @@ import { ManufacturingModule } from './manufacturing/manufacturing.module';
 import { WmsSetupModule } from './wms-setup/wms-setup.module';
 import { SettingsModule } from './settings/settings.module';
 import { RepresentativesModule } from './representatives/representatives.module';
+import { CustomizationModule } from './customization/customization.module';
 
 function parseBooleanEnv(value: string | undefined): boolean | undefined {
   if (value === undefined) {
@@ -294,6 +295,7 @@ const queueInfraModules = queuesEnabled
     WmsSetupModule,
     SettingsModule,
     RepresentativesModule,
+    CustomizationModule,
     AssistantModule,
     AccountingModule,
     ImportsModule,

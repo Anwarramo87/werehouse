@@ -7,10 +7,13 @@ import { AuthenticatedUser } from '../common/types/authenticated-user.types';
  * There is deliberately no Prisma client on here -- tools receive their
  * dependencies through the Nest injector, so a tool cannot reach around the
  * tenant-scoped client it was given.
+ *
+ * `tenantId` is null only for the super admin, who reads across every factory
+ * (the registry then runs tools with a bypass scope instead of narrowing them).
  */
 export interface AssistantContext {
   user: AuthenticatedUser;
-  tenantId: string;
+  tenantId: string | null;
 }
 
 /**

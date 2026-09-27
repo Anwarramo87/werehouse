@@ -1,3 +1,4 @@
+import { InternalServerErrorException, UnauthorizedException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { currentTenant } from './tenant-context';
 import { isTenantScoped } from './tenant-models';
@@ -72,21 +73,26 @@ function toCompoundWhere(
 }
 
 /**
- * Fails closed. Reaching Prisma with no tenant scope at all is a bug -- either
- * the request never passed through TenantMiddleware, or background work forgot
- * to wrap itself in runUnscoped(). Both are far better surfaced as a loud 500
- * than as one factory silently reading another's rows.
+ * Fails closed with a well-defined HTTP exception instead of a raw Error so
+ * the GlobalExceptionFilter can surface a 401/403 instead of a spurious 500
+ * whenever the caller hits a tenant-scoped model without a valid scope.
+ *
+ *   - Missing scope entirely → 500 InternalServerError (true server misconfig,
+ *     either the request skipped TenantMiddleware or a job forgot runUnscoped).
+ *   - Non-bypass principal but no tenantId resolved → 401 Unauthorized (their
+ *     session claims do not identify a factory, so no Prisma query can proceed
+ *     safely — the auth layer should retry or log them out).
  */
 function requireScope(model: string, operation: string) {
   const scope = currentTenant();
   if (!scope) {
-    throw new Error(
+    throw new InternalServerErrorException(
       `Tenant scope missing for ${model}.${operation}(). Requests must pass ` +
         `through TenantMiddleware; background jobs must use runUnscoped(reason, fn).`,
     );
   }
   if (!scope.bypass && !scope.tenantId) {
-    throw new Error(
+    throw new UnauthorizedException(
       `Tenant scope is empty for ${model}.${operation}(). A non-superadmin ` +
         `principal must always resolve to a factory.`,
     );
@@ -101,11 +107,7 @@ function requireScope(model: string, operation: string) {
  * snapshot reproduces what was backed up, nulls included. Only silence is
  * refused, because silence is always a bug.
  */
-export function assertTenantNamed(
-  model: string,
-  operation: string,
-  args: Record<string, unknown>,
-) {
+export function assertTenantNamed(model: string, operation: string, args: Record<string, unknown>) {
   const named = (payload: unknown): boolean => {
     if (Array.isArray(payload)) return payload.every(named);
     return !!payload && typeof payload === 'object' && 'tenantId' in payload;
@@ -207,9 +209,7 @@ export function tenantExtension() {
           }
 
           const scope = requireScope(model, operation);
-          return query(
-            applyTenantScope(model, operation, args as Record<string, unknown>, scope),
-          );
+          return query(applyTenantScope(model, operation, args as Record<string, unknown>, scope));
         },
       },
     },

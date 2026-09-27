@@ -11,6 +11,14 @@
  * its pages, disabling one removes them. There is exactly one source of truth,
  * and "HR only" and "HR minus the bus page" are both expressible.
  *
+ * ── Why the order mirrors the factory sidebar ───────────────────────────────
+ * Module order here is the order the Super Admin panel renders and the order a
+ * buyer sees. It deliberately follows the factory application's sidebar (HR →
+ * payroll → inventory → purchasing → sales → fulfillment → production →
+ * representatives → WMS setup → imports → administration) so that configuring
+ * a factory is as easy as walking its own pages, and nothing feels "out of
+ * sequence".
+ *
  * ── Why /home is not in here ────────────────────────────────────────────────
  * It is the landing page after login and the redirect target when access is
  * refused. Making it revocable would let a factory be configured into a
@@ -37,7 +45,7 @@ export const MODULES: ModuleDefinition[] = [
   {
     key: 'hr',
     label: 'الموارد البشرية',
-    description: 'Employees, departures, attendance and the bus roster.',
+    description: 'الموظفون، المستقيلون، سجل الحضور، أجهزة البصمة والمواصلات.',
     pages: [
       { key: 'hr.employees', route: '/employees', label: 'إدارة الموظفين' },
       { key: 'hr.resigned', route: '/resigned', label: 'المستقيلون' },
@@ -49,7 +57,7 @@ export const MODULES: ModuleDefinition[] = [
   {
     key: 'payroll',
     label: 'الرواتب',
-    description: 'Salary settings, bonuses, deductions, timetable and payroll runs.',
+    description: 'إعدادات الرواتب، المكافآت والحوافز، الخصومات والسلف، جدول الدوام، التقارير والسندات.',
     pages: [
       { key: 'payroll.settings', route: '/salaries/salariesSetting', label: 'إعدادات الرواتب' },
       { key: 'payroll.rewards', route: '/salaries/rewards', label: 'المكافآت والحوافز' },
@@ -62,7 +70,7 @@ export const MODULES: ModuleDefinition[] = [
   {
     key: 'inventory',
     label: 'المخزن',
-    description: 'Products, batches, locations, counting, quality and warehouse analytics.',
+    description: 'الأصناف، الدفعات والصلاحية، الحركات، المخازن، المواقع والخانات، الجرد، الجودة ومؤشرات المخزن.',
     pages: [
       { key: 'inventory.products', route: '/inventory', label: 'الأصناف' },
       { key: 'inventory.batches', route: '/inventory/batches', label: 'الدفعات والصلاحية' },
@@ -78,7 +86,7 @@ export const MODULES: ModuleDefinition[] = [
   {
     key: 'purchasing',
     label: 'المشتريات',
-    description: 'Purchase orders and supplier invoices.',
+    description: 'أوامر الشراء وفواتير الشراء والموردون.',
     pages: [
       { key: 'purchasing.orders', route: '/purchasing', label: 'أوامر الشراء' },
       { key: 'purchasing.invoices', route: '/purchasing/invoices', label: 'فواتير الشراء' },
@@ -87,7 +95,7 @@ export const MODULES: ModuleDefinition[] = [
   {
     key: 'sales',
     label: 'المبيعات',
-    description: 'Sales orders, customer invoices and price lists.',
+    description: 'طلبات البيع وفواتير البيع والتسعير والضرائب.',
     pages: [
       { key: 'sales.orders', route: '/sales', label: 'طلبات البيع' },
       { key: 'sales.invoices', route: '/sales/invoices', label: 'فواتير البيع' },
@@ -97,22 +105,49 @@ export const MODULES: ModuleDefinition[] = [
   {
     key: 'fulfillment',
     label: 'التجهيز والشحن',
-    description: 'Pick lists and shipments.',
+    description: 'جولات الالتقاط والشحنات (تجهيز وتوصيل الطلبات).',
     pages: [
       { key: 'fulfillment.picking', route: '/fulfillment', label: 'جولات الالتقاط' },
       { key: 'fulfillment.shipments', route: '/fulfillment/shipments', label: 'الشحنات' },
     ],
   },
   {
+    key: 'production',
+    label: 'الإنتاج والتصنيع',
+    description: 'أوامر الإنتاج وقوائم المواد (BOM) وحساب تكاليف الإنتاج.',
+    pages: [
+      { key: 'production.orders', route: '/wms/production', label: 'أوامر الإنتاج' },
+      { key: 'production.bom', route: '/wms/production/bom', label: 'قوائم المواد (BOM)' },
+    ],
+  },
+  {
+    key: 'reps',
+    label: 'المندوبون',
+    description: 'إدارة المندوبين ومساحة المندوب: الطرقات والمحلات والمبيعات وجباية المندوب.',
+    pages: [
+      { key: 'reps.management', route: '/representatives', label: 'إدارة المندوبين' },
+      { key: 'reps.workspace', route: '/representatives/workspace', label: 'مساحة المندوب' },
+    ],
+  },
+  {
+    key: 'wms',
+    label: 'إعداد WMS',
+    description: 'الخطوات الإرشادية لترتيب المخازن والمواد والخانات والأسعار.',
+    pages: [{ key: 'wms.setup', route: '/wms/setup', label: 'إعداد WMS' }],
+  },
+  {
     key: 'imports',
     label: 'استيراد البيانات',
-    description: 'Bulk import of employees and products.',
-    pages: [{ key: 'imports.data', route: '/importData', label: 'استيراد البيانات' }],
+    description: 'استيراد الموظفين والأصناف بالجملة وتخزين الملفات.',
+    pages: [
+      { key: 'imports.data', route: '/importData', label: 'استيراد البيانات' },
+      { key: 'imports.files', route: '/files', label: 'الملفات' },
+    ],
   },
   {
     key: 'administration',
     label: 'الإدارة',
-    description: 'Settings, integrations and the recycle bin.',
+    description: 'الإعدادات، الربط مع الأنظمة الخارجية وسلة المهملات.',
     pages: [
       { key: 'admin.settings', route: '/settings', label: 'الإعدادات' },
       { key: 'admin.integrations', route: '/settings/integrations', label: 'الربط والتكامل' },
@@ -123,6 +158,23 @@ export const MODULES: ModuleDefinition[] = [
 
 /** Every page key in the catalogue. This is what a new factory gets by default. */
 export const ALL_PAGE_KEYS: string[] = MODULES.flatMap((m) => m.pages.map((p) => p.key));
+
+/**
+ * Pages that were added to the catalogue AFTER it first shipped.
+ *
+ * These routes were previously reachable by every factory with no entitlement
+ * check at all — a buyer who never saw "الإنتاج" in a contract could still open
+ * it. Making them sellable would silent-break every configured factory, so
+ * EntitlementsService grants this exact list to factories on boot (idempotent).
+ */
+export const BACKFILL_PAGE_KEYS: string[] = [
+  'production.orders',
+  'production.bom',
+  'reps.management',
+  'reps.workspace',
+  'wms.setup',
+  'imports.files',
+];
 
 const PAGES_BY_KEY = new Map<string, PageDefinition>(
   MODULES.flatMap((m) => m.pages.map((p) => [p.key, p] as const)),

@@ -1,5 +1,7 @@
 import {
   IsString,
+  IsNotEmpty,
+  MaxLength,
   IsOptional,
   IsEmail,
   IsUUID,
@@ -86,7 +88,7 @@ export class CreateRepRouteDto {
 }
 
 // ---------------------------------------------------------------------------
-// Assign customers / products
+// Assign customers / products + create-and-assign customer (إضافة عميل وربطه)
 // ---------------------------------------------------------------------------
 
 export class AssignCustomersDto {
@@ -99,6 +101,44 @@ export class AssignProductsDto {
   @IsArray()
   @IsString({ each: true })
   skus: string[];
+}
+
+export class CreateAndAssignCustomerDto {
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(200)
+  name: string;
+
+  @IsString()
+  @IsOptional()
+  @MaxLength(50)
+  phone?: string;
+
+  @IsString()
+  @IsOptional()
+  @MaxLength(500)
+  address?: string;
+}
+
+// ---------------------------------------------------------------------------
+// Rep self-service — shops (محلات المندوب في خطه)
+// ---------------------------------------------------------------------------
+
+export class CreateRepShopDto {
+  @IsString()
+  name: string;
+
+  @IsString()
+  @IsOptional()
+  phone?: string;
+
+  @IsString()
+  @IsOptional()
+  address?: string;
+
+  @IsUUID()
+  @IsOptional()
+  routeId?: string;
 }
 
 // ---------------------------------------------------------------------------
