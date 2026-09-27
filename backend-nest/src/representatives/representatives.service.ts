@@ -9,6 +9,7 @@ import {
 import { Prisma, RepMovementType, RepSaleStatus, SettlementStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { DocumentNumberService } from '../common/wms/document-number.service';
+import { currentTenant } from '../common/tenant/tenant-context';
 import {
   CreateRepresentativeDto,
   UpdateRepresentativeDto,
@@ -18,6 +19,7 @@ import {
   CreateRepCollectionDto,
   CreateRepReturnDto,
   CreateSettlementDto,
+  CreateAndAssignCustomerDto,
   AssignCustomersDto,
   AssignProductsDto,
   CreateRepRouteDto,
@@ -207,53 +209,105 @@ export class RepresentativesService {
   // =========================================================================
 
   async assignCustomers(repId: string, dto: AssignCustomersDto) {
-    const rep = await this.assertRepExists(repId);
-    const tenantId = rep.tenantId;
+    const rep = await this.assertWritableRep(repId);
 
-    await Promise.all(
-      dto.customerIds.map((customerId) =>
-        this.prisma.repCustomer.upsert({
-          where: {
-            tenantId_representativeId_customerId: {
-              tenantId: tenantId as string,
-              representativeId: repId,
-              customerId,
-            },
-          },
-          update: { isActive: true },
-          create: { representativeId: repId, customerId, isActive: true },
-        }),
-      ),
-    );
+    // findFirst + create/update بدل upsert: الـ unique مركّب يحوي tenantId
+    // وقد يكون null في بيانات قديمة فيرمي upsert خطأ 500.
+    for (const customerId of dto.customerIds) {
+      const existing = await this.prisma.repCustomer.findFirst({
+        where: { representativeId: repId, customerId },
+        select: { id: true },
+      });
+      if (existing) {
+        await this.prisma.repCustomer.update({
+          where: { id: existing.id },
+          data: { isActive: true },
+        });
+      } else {
+        await this.prisma.repCustomer.create({
+          data: { tenantId: rep.tenantId, representativeId: repId, customerId, isActive: true },
+        });
+      }
+    }
     return { assigned: dto.customerIds.length };
   }
 
-  async assignProducts(repId: string, dto: AssignProductsDto) {
-    const rep = await this.assertRepExists(repId);
-    const tenantId = rep.tenantId;
+  /** إنشاء عميل مركزي جديد وربطه بالمندوب مباشرة (من شاشة إدارة المندوب) */
+  async createAndAssignCustomer(
+    repId: string,
+    dto: CreateAndAssignCustomerDto,
+  ) {
+    const rep = await this.assertWritableRep(repId);
+    const name = dto.name?.trim();
+    if (!name) throw new BadRequestException('اسم العميل مطلوب');
+    // tenantId للمندوب قد يكون null في بيانات قديمة: inherit من سياق الطلب
+    // (TenantMiddleware) بدل تمرير null الذي يكسر stamp/fk المركبة.
+    const scopeTenantId = currentTenant()?.tenantId ?? rep.tenantId ?? null;
+    if (!scopeTenantId) {
+      throw new BadRequestException('لا يمكن إنشاء عميل: المصنع غير محدد في الجلسة');
+    }
+    let customer: { id: string; name: string };
+    try {
+      customer = await this.prisma.customer.create({
+        data: {
+          tenantId: scopeTenantId,
+          name,
+          phone: dto.phone?.trim() || undefined,
+          address: dto.address?.trim() || undefined,
+        },
+        select: { id: true, name: true },
+      });
+    } catch (error) {
+      this.logger.error(
+        `createAndAssignCustomer failed for rep ${repId}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      throw new BadRequestException('تعذّر إنشاء العميل — تحقق من الاسم/Payload ثم أعد المحاولة');
+    }
+    const existing = await this.prisma.repCustomer.findFirst({
+      where: { representativeId: repId, customerId: customer.id },
+      select: { id: true },
+    });
+    if (existing) {
+      await this.prisma.repCustomer.update({
+        where: { id: existing.id },
+        data: { isActive: true },
+      });
+    } else {
+      await this.prisma.repCustomer.create({
+          data: { tenantId: rep.tenantId, representativeId: repId, customerId: customer.id, isActive: true },
+      });
+    }
+    return { customerId: customer.id, name: customer.name };
+  }
 
-    await Promise.all(
-      dto.skus.map((sku) =>
-        this.prisma.repProduct.upsert({
-          where: {
-            tenantId_representativeId_sku: {
-              tenantId: tenantId as string,
-              representativeId: repId,
-              sku,
-            },
-          },
-          update: { isActive: true },
-          create: { representativeId: repId, sku, isActive: true },
-        }),
-      ),
-    );
+  async assignProducts(repId: string, dto: AssignProductsDto) {
+    const rep = await this.assertWritableRep(repId);
+
+    // نفس سبب العملاء: تجنّب upsert على unique يحوي tenantId قد يكون null.
+    for (const sku of dto.skus) {
+      const existing = await this.prisma.repProduct.findFirst({
+        where: { representativeId: repId, sku },
+        select: { id: true },
+      });
+      if (existing) {
+        await this.prisma.repProduct.update({
+          where: { id: existing.id },
+          data: { isActive: true },
+        });
+      } else {
+        await this.prisma.repProduct.create({
+          data: { tenantId: rep.tenantId, representativeId: repId, sku, isActive: true },
+        });
+      }
+    }
     return { assigned: dto.skus.length };
   }
 
   async assignRoute(repId: string, dto: CreateRepRouteDto) {
-    await this.assertRepExists(repId);
+    const rep = await this.assertWritableRep(repId);
     return this.prisma.repRoute.create({
       data: {
+        tenantId: rep.tenantId,
         representativeId: repId,
         name: dto.name,
         areas: dto.areas ?? [],
@@ -301,7 +355,7 @@ export class RepresentativesService {
   // =========================================================================
 
   async transferStockToRep(repId: string, dto: TransferStockToRepDto, userId: string) {
-    const rep = await this.assertRepExists(repId);
+    const rep = await this.assertWritableRep(repId);
     const tenantId = rep.tenantId;
     const preferred = dto.warehouseLocation;
 
@@ -333,6 +387,7 @@ export class RepresentativesService {
         // 1. خصم من المخزن الرئيسي
         await tx.stockMovement.create({
           data: {
+            tenantId: rep.tenantId,
             sku: item.sku,
             type: 'OUT',
             quantity: -item.quantity,
@@ -378,6 +433,7 @@ export class RepresentativesService {
         } else {
           await tx.repStock.create({
             data: {
+              tenantId: rep.tenantId,
               representativeId: repId,
               sku: item.sku,
               quantity: item.quantity,
@@ -390,6 +446,7 @@ export class RepresentativesService {
         // 3. تسجيل حركة المندوب
         await tx.repStockMovement.create({
           data: {
+            tenantId: rep.tenantId,
             representativeId: repId,
             sku: item.sku,
             type: RepMovementType.RECEIVED,
@@ -411,7 +468,7 @@ export class RepresentativesService {
 
   /** إعادة مخزون من المندوب إلى المخزن الرئيسي — حركات مخزون حقيقية بالاتجاهين */
   async transferStockFromRep(repId: string, dto: TransferStockFromRepDto, userId: string) {
-    const rep = await this.assertRepExists(repId);
+    const rep = await this.assertWritableRep(repId);
     const preferred = dto.warehouseLocation;
 
     return this.prisma.$transaction(async (tx) => {
@@ -446,6 +503,7 @@ export class RepresentativesService {
         // 2. إضافة للمخزن الرئيسي (حركة مخزون فعلية)
         await tx.stockMovement.create({
           data: {
+            tenantId: rep.tenantId,
             sku: item.sku,
             type: 'IN',
             quantity: item.quantity,
@@ -468,6 +526,7 @@ export class RepresentativesService {
         } else {
           await tx.stockLevel.create({
             data: {
+              tenantId: rep.tenantId,
               sku: item.sku,
               location,
               quantity: item.quantity,
@@ -480,6 +539,7 @@ export class RepresentativesService {
         // 3. تسجيل حركة المندوب (خروج)
         await tx.repStockMovement.create({
           data: {
+            tenantId: rep.tenantId,
             representativeId: repId,
             sku: item.sku,
             type: RepMovementType.ADJUSTED,
@@ -536,9 +596,10 @@ export class RepresentativesService {
 
   /** المندوب يُنشئ خطاً (مساره) بنفسه */
   async createMyRoute(repId: string, dto: CreateRepRouteDto) {
-    await this.assertRepExists(repId);
+    const rep = await this.assertWritableRep(repId);
     return this.prisma.repRoute.create({
       data: {
+        tenantId: rep.tenantId,
         representativeId: repId,
         name: dto.name,
         areas: dto.areas ?? [],
@@ -606,7 +667,7 @@ export class RepresentativesService {
 
   /** المندوب يضيف محلاً لخطه (مترافق مع عميل مركزي) */
   async createMyShop(repId: string, dto: CreateRepShopDto) {
-    const rep = await this.assertRepExists(repId);
+    const rep = await this.assertWritableRep(repId);
 
     const name = dto.name.trim();
     if (!name) throw new BadRequestException('اسم المحل مطلوب');
@@ -694,7 +755,7 @@ export class RepresentativesService {
   // =========================================================================
 
   async createSale(repId: string, dto: CreateRepSaleDto, userId: string) {
-    const rep = await this.assertRepExists(repId);
+    const rep = await this.assertWritableRep(repId);
 
     // التحقق من أن العميل مخصص لهذا المندوب
     const customerAssigned = await this.prisma.repCustomer.findFirst({
@@ -724,6 +785,7 @@ export class RepresentativesService {
 
       let subtotal = 0;
       const saleItemsData: Array<{
+        tenantId: string;
         sku: string; quantity: number;
         unitPrice: Prisma.Decimal; unitCost: Prisma.Decimal;
         lineTotal: Prisma.Decimal; discountPercent: Prisma.Decimal; discountAmount: Prisma.Decimal;
@@ -740,6 +802,7 @@ export class RepresentativesService {
         subtotal += lineTotal;
 
         saleItemsData.push({
+          tenantId: rep.tenantId,
           sku: item.sku, quantity: item.quantity,
           unitPrice: new Prisma.Decimal(item.unitPrice),
           unitCost: new Prisma.Decimal(unitCost),
@@ -754,6 +817,7 @@ export class RepresentativesService {
 
       const sale = await tx.repSale.create({
         data: {
+          tenantId: rep.tenantId,
           representativeId: repId,
           customerId: dto.customerId,
           saleNumber,
@@ -793,6 +857,7 @@ export class RepresentativesService {
 
         await tx.repStockMovement.create({
           data: {
+            tenantId: rep.tenantId,
             representativeId: repId,
             sku: item.sku,
             type: RepMovementType.SOLD,
@@ -835,7 +900,7 @@ export class RepresentativesService {
   // =========================================================================
 
   async createCollection(repId: string, dto: CreateRepCollectionDto, userId: string) {
-    await this.assertRepExists(repId);
+    const rep = await this.assertWritableRep(repId);
 
     if (dto.saleId) {
       const sale = await this.prisma.repSale.findFirst({
@@ -847,6 +912,7 @@ export class RepresentativesService {
     return this.prisma.$transaction(async (tx) => {
       const collection = await tx.repCollection.create({
         data: {
+          tenantId: rep.tenantId,
           representativeId: repId,
           saleId: dto.saleId,
           customerId: dto.customerId,
@@ -898,7 +964,7 @@ export class RepresentativesService {
   // =========================================================================
 
   async createReturn(repId: string, dto: CreateRepReturnDto, userId: string) {
-    await this.assertRepExists(repId);
+    const rep = await this.assertWritableRep(repId);
 
     if (dto.saleId) {
       const sale = await this.prisma.repSale.findFirst({
@@ -910,6 +976,7 @@ export class RepresentativesService {
     return this.prisma.$transaction(async (tx) => {
       const ret = await tx.repReturn.create({
         data: {
+          tenantId: rep.tenantId,
           representativeId: repId,
           saleId: dto.saleId,
           customerId: dto.customerId,
@@ -943,6 +1010,7 @@ export class RepresentativesService {
       } else {
         await tx.repStock.create({
           data: {
+            tenantId: rep.tenantId,
             representativeId: repId,
             sku: dto.sku,
             quantity: dto.quantity,
@@ -954,6 +1022,7 @@ export class RepresentativesService {
 
       await tx.repStockMovement.create({
         data: {
+          tenantId: rep.tenantId,
           representativeId: repId,
           sku: dto.sku,
           type: RepMovementType.RETURNED,
@@ -993,7 +1062,7 @@ export class RepresentativesService {
   // =========================================================================
 
   async createSettlement(repId: string, dto: CreateSettlementDto, userId: string) {
-    await this.assertRepExists(repId);
+    const rep = await this.assertWritableRep(repId);
 
     const periodStart = new Date(dto.periodStart);
     const periodEnd = new Date(dto.periodEnd);
@@ -1049,6 +1118,7 @@ export class RepresentativesService {
 
     return this.prisma.repSettlement.create({
       data: {
+        tenantId: rep.tenantId,
         representativeId: repId, periodStart, periodEnd,
         receivedValue: new Prisma.Decimal(receivedValue),
         soldValue: new Prisma.Decimal(soldValue),
@@ -1149,5 +1219,23 @@ export class RepresentativesService {
     });
     if (!rep) throw new NotFoundException('المندوب غير موجود');
     return rep;
+  }
+
+  /**
+   * Same as assertRepExists but for WRITE paths: every row a representative
+   * operation produces must land inside a factory. Writes stamp
+   * `rep.tenantId` explicitly because a super admin bypasses the tenant
+   * extension's auto-stamping, and the extension demands the payload name its
+   * factory (assertTenantNamed) — without the stamp those calls die with a 500
+   * and, worse, a legacy rep row with no tenant would produce factory-less
+   * rows no factory could ever see. A rep without a factory is refused up
+   * front with an actionable message instead.
+   */
+  private async assertWritableRep(repId: string) {
+    const rep = await this.assertRepExists(repId);
+    if (!rep.tenantId) {
+      throw new BadRequestException('المندوب غير مربوط بمعمل — اربطه بمعمل أولاً');
+    }
+    return rep as typeof rep & { tenantId: string };
   }
 }

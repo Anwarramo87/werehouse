@@ -3,7 +3,6 @@ import {
   ConflictException,
   Injectable,
   Logger,
-  OnModuleInit,
 } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { ShortCacheService } from '../cache/short-cache.service';
@@ -52,7 +51,7 @@ export interface SubscriptionView {
 }
 
 @Injectable()
-export class EntitlementsService implements OnModuleInit {
+export class EntitlementsService {
   private readonly logger = new Logger(EntitlementsService.name);
 
   constructor(
@@ -61,65 +60,65 @@ export class EntitlementsService implements OnModuleInit {
   ) {}
 
   /**
-   * Pages shipped after the catalogue: previously ungated (everyone reached
-   * them), so every configured factory keeps them. Idempotent — on later boots
-   * the keys are already present and nothing changes.
+   * Idempotent one-time run that grants newly shipped catalogue pages to every
+   * factory that has a configured entitlement row. Pages in BACKFILL_PAGE_KEYS
+   * were reachable before their @RequiresPage guard existed, so a configured
+   * factory must keep them.
    *
-   * Deferred off the bootstrap call stack (setImmediate, like the cron scans
-   * in ExpiryService / NotificationsService): an AsyncLocalStorage store set
-   * while Nest is still onModuleInit-ing is not reliably visible to the tenant
-   * Prisma extension on the very first query, so the runUnscoped query at boot
-   * can 500 with "Tenant scope missing". By letting bootstrap finish as a
-   * macrotask first, the backfill behaves exactly like the schedulers that
-   * already prove runUnscoped works outside requests.
+   * Deliberately NOT fired on module boot: the tenant Prisma extension reads
+   * its scope out of AsyncLocalStorage, but the extension middleware executes
+   * from a later PrismaPromise continuation, after bootstrap's storage.run
+   * frame has already returned — so the query surfaces in an empty context and
+   * fails with "Tenant scope missing ... use runUnscoped(reason, fn)" (it does,
+   * and still failed at boot under setImmediate too). Inside a real request
+   * TenantMiddleware keeps the store alive across every await, and runUnscoped
+   * is proven there — enabledPagesFor itself reads via it.
    */
-  async onModuleInit(): Promise<void> {
-    if (BACKFILL_PAGE_KEYS.length === 0) return;
+  private backfillPromise: Promise<void> | null = null;
 
-    const run = () => void this.runBackfill();
-    if (typeof setImmediate === 'function') {
-      setImmediate(run);
-    } else {
-      setTimeout(run, 0);
+  private async ensureBackfill(): Promise<void> {
+    if (!this.backfillPromise) {
+      this.backfillPromise = this.runBackfill().catch((error: unknown) => {
+        // Failing open is safe: an ungated tenant already receives ALL_PAGE_KEYS
+        // for the missing row, and the union retries on a later request.
+        this.logger.error(
+          `Entitlements backfill failed — new pages stay un-granted for configured factories: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+        this.backfillPromise = null;
+      });
     }
+    return this.backfillPromise;
   }
 
   private async runBackfill(): Promise<void> {
-    try {
-      const rows = await runUnscoped('entitlements-backfill-read', () =>
-        this.prisma.tenantEntitlement.findMany({
-          select: { tenantId: true, enabledPages: true },
+    if (typeof this.prisma.tenantEntitlement?.findMany !== 'function') return;
+
+    const rows = await runUnscoped('entitlements-backfill-read', () =>
+      this.prisma.tenantEntitlement.findMany({
+        select: { tenantId: true, enabledPages: true },
+      }),
+    );
+
+    let changed = 0;
+    for (const row of rows) {
+      const missing = BACKFILL_PAGE_KEYS.filter((key) => !row.enabledPages.includes(key));
+      if (missing.length === 0) continue;
+
+      await runUnscoped('entitlements-backfill-write', () =>
+        this.prisma.tenantEntitlement.update({
+          where: { tenantId: row.tenantId },
+          data: { enabledPages: [...row.enabledPages, ...missing] },
         }),
       );
+      await this.cache.del(this.cacheKey(row.tenantId));
+      changed += 1;
+    }
 
-      let changed = 0;
-      for (const row of rows) {
-        const missing = BACKFILL_PAGE_KEYS.filter((key) => !row.enabledPages.includes(key));
-        if (missing.length === 0) continue;
-
-        await runUnscoped('entitlements-backfill-write', () =>
-          this.prisma.tenantEntitlement.update({
-            where: { tenantId: row.tenantId },
-            data: { enabledPages: [...row.enabledPages, ...missing] },
-          }),
-        );
-        await this.cache.del(this.cacheKey(row.tenantId));
-        changed += 1;
-      }
-
-      if (changed > 0) {
-        this.logger.log(
-          `Backfilled ${changed} factory(-ies) with new catalogue pages: ${BACKFILL_PAGE_KEYS.join(', ')}`,
-        );
-      }
-    } catch (error) {
-      // Failing open here is safe: factories without a configured row already
-      // receive ALL_PAGE_KEYS, and the guard answers per request anyway.
-      console.error('[DIAG-backfill] stack=' + (error instanceof Error ? error.stack : String(error)));
-      this.logger.error(
-        `Entitlements backfill failed — new pages stay un-granted for configured factories: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
+    if (changed > 0) {
+      this.logger.log(
+        `Backfilled ${changed} factory(-ies) with new catalogue pages: ${BACKFILL_PAGE_KEYS.join(', ')}`,
       );
     }
   }
@@ -190,6 +189,8 @@ export class EntitlementsService implements OnModuleInit {
    * check closes them all and only the always-available routes survive.
    */
   async enabledPagesFor(tenantId: string): Promise<Set<string>> {
+    await this.ensureBackfill();
+
     const cached = await this.cache.getJson<string[]>(this.cacheKey(tenantId));
     if (cached) return new Set(cached);
 
@@ -264,6 +265,8 @@ export class EntitlementsService implements OnModuleInit {
    * gated by SuperAdminGuard.
    */
   async listTenants() {
+    await this.ensureBackfill();
+
     const coreSelect = {
       id: true,
       name: true,
