@@ -133,6 +133,44 @@ export const MODEL_DEPENDENCIES: Record<string, readonly string[]> = {
   userEntitlement: ['tenant', 'user'],
   // The factory's time-boxed subscription. Restores with the factory itself.
   tenantSubscription: ['tenant'],
+
+  // Tenant branding/customization. Only the factory itself; the audit trail
+  // points at tenants as well and never at customization rows.
+  tenantCustomization: ['tenant'],
+  tenantCustomizationAudit: ['tenant'],
+  // Custom fields are tenant-owned; values carry a scalar fieldId but no FK,
+  // so they restore right after the factory too.
+  customFieldDefinition: ['tenant'],
+  customFieldValue: ['tenant'],
+
+  // WMS setup state and the system settings row the settings tab reads/writes.
+  // Both are one row per factory with no tenant-scoped parents.
+  wmsSetupState: ['tenant'],
+  systemSettings: ['tenant'],
+
+  // Manufacturing (BOM). BOMItem points at both its BOM and the material
+  // Product via the compound (tenantId, sku) FK, so the product must land
+  // before either BOM row.
+  bOM: ['tenant', 'product'],
+  bOMItem: ['tenant', 'bOM', 'product'],
+  productionOrder: ['tenant', 'bOM'],
+  materialConsumption: ['tenant', 'productionOrder'],
+
+  // Representatives extension. A representative links to its User account
+  // (and only via a scalar employeeId -- no FK to employees), and every rep
+  // child points back to the representative. Sale items/collections/returns
+  // additionally point at the sale; customerId is scalar with no FK.
+  representative: ['tenant', 'user'],
+  repRoute: ['tenant', 'representative'],
+  repCustomer: ['tenant', 'representative'],
+  repProduct: ['tenant', 'representative'],
+  repStock: ['tenant', 'representative'],
+  repStockMovement: ['tenant', 'representative'],
+  repSale: ['tenant', 'representative'],
+  repSaleItem: ['tenant', 'repSale'],
+  repCollection: ['tenant', 'representative', 'repSale'],
+  repReturn: ['tenant', 'representative', 'repSale'],
+  repSettlement: ['tenant', 'representative'],
 };
 
 /**

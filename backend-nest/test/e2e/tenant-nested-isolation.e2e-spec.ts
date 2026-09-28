@@ -1,6 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from '@jest/globals';
-import { Prisma } from '@prisma/client';
+import { Prisma, ProductionStatus } from '@prisma/client';
 import { AppModule } from '../../src/app.module';
 import { PrismaService } from '../../src/prisma/prisma.service';
 import { runUnscoped, runWithTenant } from '../../src/common/tenant/tenant-context';
@@ -61,42 +61,12 @@ describe('Nested-write tenant isolation (e2e, real PostgreSQL)', () => {
     await moduleRef?.close();
   }, TEST_TIMEOUT);
 
-  beforeEach(async () => {
-    await asA(async () => {
-      await prisma.salesOrderItem.deleteMany({});
-      await prisma.salesOrder.deleteMany({});
-      await prisma.product.deleteMany({});
-      await prisma.customer.deleteMany({});
-      await prisma.product.create({
-        data: { sku: `NA-${stamp}`, name: 'PA', category: 'x', unitPrice: new Prisma.Decimal(1), costPrice: new Prisma.Decimal(1) },
-      });
-      customerA = (await prisma.customer.create({ data: { name: 'Cust A' } })).id;
-    });
-
-    await asB(async () => {
-      await prisma.salesOrderItem.deleteMany({});
-      await prisma.salesOrder.deleteMany({});
-      await prisma.product.deleteMany({});
-      await prisma.customer.deleteMany({});
-      await prisma.product.create({
-        data: { sku: `NB-${stamp}`, name: 'PB', category: 'x', unitPrice: new Prisma.Decimal(1), costPrice: new Prisma.Decimal(1) },
-      });
-      customerB = (await prisma.customer.create({ data: { name: 'Cust B' } })).id;
-
-      const so = await prisma.salesOrder.create({
-        data: {
-          soNumber: `SO-B-${stamp}`, customerId: customerB, status: 'draft',
-          orderDate: new Date(), totalAmount: new Prisma.Decimal(10), createdBy: B,
-        },
-      });
-      orderB = so.id;
-      itemB = (await prisma.salesOrderItem.create({
-        data: { salesOrderId: orderB, sku: `NB-${stamp}`, quantity: 1, unitPrice: new Prisma.Decimal(10), location: 'W' },
-      })).id;
-    });
-  }, TEST_TIMEOUT);
-
   // ============================================================ PART 1: matrix
+  // NOTE: no beforeEach here on purpose. The matrix exercises the pure
+  // `walkWriteData` transform; it does not touch the database. Keeping the
+  // seed/cleanup below inside the Part 2 describe keeps this suite fast even
+  // against a remote Postgres (every row wipe + create round-trips seconds
+  // when the database is far away).
 
   describe('generated matrix over the DMMF relation graph', () => {
     const paths: Array<{ model: string; field: string; target: string }> = [];
@@ -185,8 +155,44 @@ describe('Nested-write tenant isolation (e2e, real PostgreSQL)', () => {
 
   // ====================================================== PART 2: real database
 
-  describe('nested create', () => {
-    it(
+  describe('real database', () => {
+    beforeEach(async () => {
+      await asA(async () => {
+        await prisma.salesOrderItem.deleteMany({});
+        await prisma.salesOrder.deleteMany({});
+        await prisma.product.deleteMany({});
+        await prisma.customer.deleteMany({});
+        await prisma.product.create({
+          data: { sku: `NA-${stamp}`, name: 'PA', category: 'x', unitPrice: new Prisma.Decimal(1), costPrice: new Prisma.Decimal(1) },
+        });
+        customerA = (await prisma.customer.create({ data: { name: 'Cust A' } })).id;
+      });
+
+      await asB(async () => {
+        await prisma.salesOrderItem.deleteMany({});
+        await prisma.salesOrder.deleteMany({});
+        await prisma.product.deleteMany({});
+        await prisma.customer.deleteMany({});
+        await prisma.product.create({
+          data: { sku: `NB-${stamp}`, name: 'PB', category: 'x', unitPrice: new Prisma.Decimal(1), costPrice: new Prisma.Decimal(1) },
+        });
+        customerB = (await prisma.customer.create({ data: { name: 'Cust B' } })).id;
+
+        const so = await prisma.salesOrder.create({
+          data: {
+            soNumber: `SO-B-${stamp}`, customerId: customerB, status: 'draft',
+            orderDate: new Date(), totalAmount: new Prisma.Decimal(10), createdBy: B,
+          },
+        });
+        orderB = so.id;
+        itemB = (await prisma.salesOrderItem.create({
+          data: { salesOrderId: orderB, sku: `NB-${stamp}`, quantity: 1, unitPrice: new Prisma.Decimal(10), location: 'W' },
+        })).id;
+      });
+    }, TEST_TIMEOUT);
+
+    describe('nested create', () => {
+      it(
       'assigns the caller factory to rows created through a relation',
       async () => {
         await asA(() =>
@@ -384,6 +390,100 @@ describe('Nested-write tenant isolation (e2e, real PostgreSQL)', () => {
     );
   });
 
+  describe('manufacturing isolation', () => {
+    const stubBom = (prefix: string) =>
+      asB(async () => {
+        const bom = await prisma.bOM.create({
+          data: {
+            productSku: `FG-${prefix}-${stamp}`,
+            version: 1,
+            isActive: true,
+            items: {
+              create: [{ materialSku: `NB-${stamp}`, quantity: new Prisma.Decimal(2), unit: 'قطعة', wastePercent: new Prisma.Decimal(0) }],
+            },
+          },
+        });
+        return bom.id;
+      });
+    const stubOrder = (bomId: string, prefix: string) =>
+      asB(async () => {
+        const o = await prisma.productionOrder.create({
+          data: {
+            orderNumber: `PO-${prefix}-${stamp}`,
+            bomId,
+            productSku: `FG-${prefix}-${stamp}`,
+            plannedQty: 5,
+            status: ProductionStatus.PLANNED,
+            plannedDate: new Date(),
+            createdBy: B,
+          },
+        });
+        return o.id;
+      });
+
+    it(
+      'stamps the BOM, its nested items and the production order with the owning factory',
+      async () => {
+        const bomId = await stubBom('B');
+        const orderId = await stubOrder(bomId, 'B');
+
+        const raw = await runUnscoped('verify', () =>
+          prisma.$queryRaw<{ tenantId: string | null }[]>`
+            SELECT "tenantId" FROM boms WHERE id = ${bomId}
+            UNION ALL
+            SELECT "tenantId" FROM bom_items WHERE "bomId" = ${bomId}
+            UNION ALL
+            SELECT "tenantId" FROM production_orders WHERE id = ${orderId}
+          `,
+        );
+        expect(raw).toHaveLength(3);
+        raw.forEach((r) => expect(r.tenantId).toBe(B));
+      },
+      TEST_TIMEOUT,
+    );
+
+    it(
+      "factory A cannot read B's BOM, production order or consumptions",
+      async () => {
+        const bomId = await stubBom('R');
+        const orderId = await stubOrder(bomId, 'R');
+
+        const bomAsA = await asA(() => prisma.bOM.findFirst({ where: { id: bomId } }));
+        expect(bomAsA).toBeNull();
+
+        const orderAsA = await asA(() => prisma.productionOrder.findFirst({ where: { id: orderId } }));
+        expect(orderAsA).toBeNull();
+
+        expect(await asA(() => prisma.bOM.count())).toBe(0);
+        expect(await asA(() => prisma.materialConsumption.count())).toBe(0);
+      },
+      TEST_TIMEOUT,
+    );
+
+    it(
+      "factory A cannot update or delete B's BOM / production order",
+      async () => {
+        const bomId = await stubBom('W');
+        const orderId = await stubOrder(bomId, 'W');
+
+        await expect(
+          asA(() => prisma.bOM.update({ where: { id: bomId }, data: { isActive: false } })),
+        ).rejects.toBeDefined();
+
+        const deletedBomItems = await asA(() => prisma.bOMItem.deleteMany({ where: { bomId } }));
+        expect(deletedBomItems).toMatchObject({ count: 0 });
+
+        await expect(
+          asA(() => prisma.productionOrder.delete({ where: { id: orderId } })),
+        ).rejects.toBeDefined();
+
+        const stillThere = await asB(() => prisma.productionOrder.findFirst({ where: { id: orderId } }));
+        expect(stillThere).not.toBeNull();
+      },
+      TEST_TIMEOUT,
+    );
+  });
+
   describe('transactions', () => {
     it(
       'preserves tenant scope through $transaction and rolls back cleanly',
@@ -475,5 +575,6 @@ describe('Nested-write tenant isolation (e2e, real PostgreSQL)', () => {
       },
       TEST_TIMEOUT,
     );
+  });
   });
 });

@@ -16,7 +16,17 @@ function extractCookies(rawCookieHeader: string[] | string | undefined) {
 describe('Security Controls (e2e)', () => {
   let app: INestApplication;
 
+  const previousThrottleLimit = process.env.THROTTLE_LIMIT;
+  const previousThrottleTtl = process.env.THROTTLE_TTL_MS;
+
   beforeAll(async () => {
+    // This is the one spec that wants the limiter strict. Every other spec in
+    // the suite logs in repeatedly as fixture users and would trip a low limit
+    // -- the shared default is loose, so tighten it here, for this app only,
+    // before the module bootstraps and reads it.
+    process.env.THROTTLE_LIMIT = '10';
+    process.env.THROTTLE_TTL_MS = '60000';
+
     const moduleFixture: TestingModule = await Test.createTestingModule({
       imports: [AppModule],
     }).compile();
@@ -28,6 +38,12 @@ describe('Security Controls (e2e)', () => {
   }, 30000);
 
   afterAll(async () => {
+    // Restore whatever the suite was using: process.env is shared with every
+    // other spec in this jest process, and a leaked tight limit would 429
+    // their fixture logins.
+    process.env.THROTTLE_LIMIT = previousThrottleLimit;
+    process.env.THROTTLE_TTL_MS = previousThrottleTtl;
+
     if (app) {
       await app.close();
     }

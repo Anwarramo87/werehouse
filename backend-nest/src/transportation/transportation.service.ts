@@ -504,11 +504,11 @@ export class TransportationService {
 
       const employeeIsActive = employee.status === 'active';
       const passengerLeftThisMonth =
-        passenger.terminationDate != null &&
+        passenger.terminationDate !== null &&
         passenger.terminationDate >= monthStart &&
         passenger.terminationDate <= monthEnd;
       const employeeLeftThisMonth =
-        employee.terminationDate != null &&
+        employee.terminationDate !== null &&
         employee.terminationDate >= monthStart &&
         employee.terminationDate <= monthEnd;
 

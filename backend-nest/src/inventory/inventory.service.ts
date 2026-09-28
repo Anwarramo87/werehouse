@@ -140,7 +140,7 @@ export class InventoryService {
     price: Prisma.Decimal | undefined,
     profitPercent: number | undefined,
   ): { unitPrice: Prisma.Decimal; profitPercent: Prisma.Decimal | null } {
-    if (profitPercent != null && cost.gt(0)) {
+    if (profitPercent !== undefined && cost.gt(0)) {
       const pct = new Prisma.Decimal(profitPercent);
       const unitPrice = cost
         .mul(new Prisma.Decimal(100).add(pct).div(100))
@@ -240,7 +240,7 @@ export class InventoryService {
     const costPrice = new Prisma.Decimal(dto.costPrice ?? 0);
     const pricing = this.resolvePricing(
       costPrice,
-      dto.unitPrice != null ? new Prisma.Decimal(dto.unitPrice) : undefined,
+      dto.unitPrice !== undefined ? new Prisma.Decimal(dto.unitPrice) : undefined,
       dto.profitPercent,
     );
 
@@ -274,9 +274,9 @@ export class InventoryService {
     const { sku: _ignoredSku, profitPercent: dtoProfit, ...safeDto } = dto;
 
     const costPrice =
-      dto.costPrice != null ? new Prisma.Decimal(dto.costPrice) : existing.costPrice;
+      dto.costPrice !== undefined ? new Prisma.Decimal(dto.costPrice) : existing.costPrice;
     const unitPrice =
-      dto.unitPrice != null ? new Prisma.Decimal(dto.unitPrice) : existing.unitPrice;
+      dto.unitPrice !== undefined ? new Prisma.Decimal(dto.unitPrice) : existing.unitPrice;
     const pricing = this.resolvePricing(costPrice, unitPrice, dtoProfit);
 
     const product = await this.prisma.product.update({
