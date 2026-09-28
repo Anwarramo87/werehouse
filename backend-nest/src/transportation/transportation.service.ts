@@ -16,9 +16,7 @@ import { randomBytes } from 'crypto';
 export class TransportationService {
   private readonly logger = new Logger(TransportationService.name);
 
-  constructor(
-    private readonly prisma: PrismaService,
-  ) {}
+  constructor(private readonly prisma: PrismaService) {}
 
   private generateBusId(): string {
     return `BUS${randomBytes(3).toString('hex').toUpperCase()}`;
@@ -145,9 +143,10 @@ export class TransportationService {
         driverPhone: dto.driverPhone,
         totalCost: new Prisma.Decimal(dto.totalCost.toString()),
         companyDeductionPct: new Prisma.Decimal(dto.companyDeductionPct.toString()),
-        employeeDeductionPct: dto.employeeDeductionPct !== undefined
-          ? new Prisma.Decimal(dto.employeeDeductionPct.toString())
-          : new Prisma.Decimal(0),
+        employeeDeductionPct:
+          dto.employeeDeductionPct !== undefined
+            ? new Prisma.Decimal(dto.employeeDeductionPct.toString())
+            : new Prisma.Decimal(0),
         capacity: dto.capacity,
       },
     });
@@ -170,15 +169,17 @@ export class TransportationService {
     }
 
     const data: Prisma.BusUpdateInput = {};
-    if (dto.route !== undefined)               data.route = dto.route;
-    if (dto.plateNumber !== undefined)         data.plateNumber = dto.plateNumber;
-    if (dto.driverName !== undefined)          data.driverName = dto.driverName;
-    if (dto.driverPhone !== undefined)         data.driverPhone = dto.driverPhone;
-    if (dto.totalCost !== undefined)           data.totalCost = new Prisma.Decimal(dto.totalCost.toString());
-    if (dto.companyDeductionPct !== undefined) data.companyDeductionPct = new Prisma.Decimal(dto.companyDeductionPct.toString());
-    if (dto.capacity !== undefined)            data.capacity = dto.capacity;
-    if (dto.employeeDeductionPct !== undefined) data.employeeDeductionPct = new Prisma.Decimal(dto.employeeDeductionPct.toString());
-    if (dto.status !== undefined)              data.status = dto.status;
+    if (dto.route !== undefined) data.route = dto.route;
+    if (dto.plateNumber !== undefined) data.plateNumber = dto.plateNumber;
+    if (dto.driverName !== undefined) data.driverName = dto.driverName;
+    if (dto.driverPhone !== undefined) data.driverPhone = dto.driverPhone;
+    if (dto.totalCost !== undefined) data.totalCost = new Prisma.Decimal(dto.totalCost.toString());
+    if (dto.companyDeductionPct !== undefined)
+      data.companyDeductionPct = new Prisma.Decimal(dto.companyDeductionPct.toString());
+    if (dto.capacity !== undefined) data.capacity = dto.capacity;
+    if (dto.employeeDeductionPct !== undefined)
+      data.employeeDeductionPct = new Prisma.Decimal(dto.employeeDeductionPct.toString());
+    if (dto.status !== undefined) data.status = dto.status;
 
     if (
       (dto.totalCost !== undefined || dto.companyDeductionPct !== undefined) &&
@@ -241,9 +242,9 @@ export class TransportationService {
   async addPassenger(busId: string, dto: AddPassengerDto) {
     const bus = await this.prisma.bus.findFirst({
       where: { OR: [{ id: busId }, { busId }] },
-      include: { 
+      include: {
         _count: { select: { passengers: { where: { status: 'active' } } } },
-        passengers: { where: { status: 'active' } }
+        passengers: { where: { status: 'active' } },
       },
     });
     if (!bus) throw new NotFoundException(`Bus not found: ${busId}`);
@@ -258,9 +259,7 @@ export class TransportationService {
 
     // منع تعديل الركاب بعد اعتماد الرواتب للشهر الحالي
     if (await this.hasApprovedPayrollForCurrentMonth()) {
-      throw new BadRequestException(
-        'لا يمكن تعديل ركاب الباص بعد اعتماد الرواتب لهذا الشهر',
-      );
+      throw new BadRequestException('لا يمكن تعديل ركاب الباص بعد اعتماد الرواتب لهذا الشهر');
     }
 
     // تحقق من أن الموظف غير مشترك بباص آخر نشط
@@ -298,9 +297,7 @@ export class TransportationService {
       // الراكب النشط الموجود مسبقاً لا يزيد العدد؛ غير ذلك نتحقق من السعة
       const willIncreaseCount = !existing || existing.status !== 'active';
       if (willIncreaseCount && activeCount >= bus.capacity) {
-        throw new BadRequestException(
-          `Bus is at full capacity (${bus.capacity} passengers)`,
-        );
+        throw new BadRequestException(`Bus is at full capacity (${bus.capacity} passengers)`);
       }
 
       if (existing) {
@@ -347,9 +344,7 @@ export class TransportationService {
 
     // منع تعديل الركاب بعد اعتماد الرواتب للشهر الحالي
     if (await this.hasApprovedPayrollForCurrentMonth()) {
-      throw new BadRequestException(
-        'لا يمكن تعديل ركاب الباص بعد اعتماد الرواتب لهذا الشهر',
-      );
+      throw new BadRequestException('لا يمكن تعديل ركاب الباص بعد اعتماد الرواتب لهذا الشهر');
     }
 
     const passenger = await this.prisma.busPassenger.findFirst({
@@ -398,7 +393,7 @@ export class TransportationService {
       include: { employee: { select: { name: true } } },
     });
 
-    return passengers.map(p => ({
+    return passengers.map((p) => ({
       ...p,
       name: p.employee?.name || p.name,
     }));
@@ -418,15 +413,15 @@ export class TransportationService {
       select: { totalCost: true, companyDeductionPct: true },
     });
 
-    const totalMonthlyCost = buses.reduce(
-      (sum, b) => sum + Number(b.totalCost),
-      0,
-    );
+    const totalMonthlyCost = buses.reduce((sum, b) => sum + Number(b.totalCost), 0);
     const totalCompanyDeduction = buses.reduce(
       (sum, b) =>
-        sum + Number(new Prisma.Decimal(b.totalCost.toString())
-          .times(b.companyDeductionPct.toString())
-          .div(100)),
+        sum +
+        Number(
+          new Prisma.Decimal(b.totalCost.toString())
+            .times(b.companyDeductionPct.toString())
+            .div(100),
+        ),
       0,
     );
 
@@ -536,7 +531,11 @@ export class TransportationService {
     return netCost;
   }
 
-  private getActiveWorkingDays(subscriptionDate: Date, targetMonth: Date, terminationDate?: Date | null): number {
+  private getActiveWorkingDays(
+    subscriptionDate: Date,
+    targetMonth: Date,
+    terminationDate?: Date | null,
+  ): number {
     const subYear = subscriptionDate.getFullYear();
     const subMonth = subscriptionDate.getMonth();
     const targetYear = targetMonth.getFullYear();
@@ -638,7 +637,7 @@ export class TransportationService {
       const dayOfWeek = current.getDay();
       // Assuming 0 = Sunday, 1 = Monday, ..., 6 = Saturday
       // Weekends are Friday (5) and Saturday (6)
-      return (dayOfWeek !== 5 && dayOfWeek !== 6) ? 1 : 0;
+      return dayOfWeek !== 5 && dayOfWeek !== 6 ? 1 : 0;
     }
 
     while (current <= end) {
