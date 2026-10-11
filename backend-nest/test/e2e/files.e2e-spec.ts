@@ -113,8 +113,10 @@ describe('Files API (e2e)', () => {
       .expect(201);
 
     expect(response.body?.file?.originalName).toBe('policy.pdf');
+    // Since tenant isolation, uploads live under general/<tenantId>/<bucket>/,
+    // with <bucket> being the YYYY-MM month folder.
     expect(response.body?.file?.path).toMatch(
-      /^general\/\d{4}-\d{2}\/[0-9a-f-]+\.pdf$/,
+      /^general\/[0-9a-f-]{36}\/\d{4}-\d{2}\/[0-9a-f-]+\.pdf$/,
     );
     expect(response.body?.file?.checksum).toHaveLength(64);
     trackUploadedPath(response.body?.file?.path);

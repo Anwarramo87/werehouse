@@ -138,6 +138,7 @@ const queueInfraModules = queuesEnabled
         JWT_REFRESH_DAYS: Joi.number().min(1).max(30).default(7),
         JWT_REFRESH_COOKIE_NAME: Joi.string().default('warehouse_refresh_token'),
         JWT_ROTATE_THRESHOLD_SEC: Joi.number().min(30).max(3_600).default(300),
+        SINGLE_SESSION_ENFORCED: Joi.boolean().default(false),
         AUTH_MAX_LOGIN_ATTEMPTS: Joi.number().min(3).max(20).default(5),
         // Comma-separated usernames (or "all") whose password the bootstrap may
         // reset from the environment on the next boot. Empty by default: a

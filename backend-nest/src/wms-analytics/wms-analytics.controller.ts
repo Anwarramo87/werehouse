@@ -49,10 +49,17 @@ export class WmsAnalyticsController {
   /** Demand forecast plus reorder-point advice. */
   @Get('forecast')
   @Permissions('view_inventory')
-  forecast(@Query('leadTimeDays') leadTimeDays?: string, @Query('horizonDays') horizonDays?: string) {
+  forecast(
+    @Query('leadTimeDays') leadTimeDays?: string,
+    @Query('horizonDays') horizonDays?: string,
+    @Query('limit') limit?: string,
+    @Query('offset') offset?: string,
+  ) {
     return this.analytics.forecast({
       leadTimeDays: toInt(leadTimeDays, 14),
       horizonDays: toInt(horizonDays, 30),
+      limit: toInt(limit, 500),
+      offset: toInt(offset, 1) - 1,
     });
   }
 

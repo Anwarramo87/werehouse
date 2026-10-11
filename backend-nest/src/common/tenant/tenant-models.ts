@@ -93,6 +93,16 @@ export const TENANT_SCOPED_MODELS: Record<string, true> = {
   repCollection: true,
   repReturn: true,
   repSettlement: true,
+  bOM: true,
+  bOMItem: true,
+  productionOrder: true,
+  materialConsumption: true,
+  customFieldDefinition: true,
+  customFieldValue: true,
+  systemSettings: true,
+  tenantCustomization: true,
+  tenantCustomizationAudit: true,
+  wmsSetupState: true,
 };
 
 export function isTenantScoped(model?: string): boolean {

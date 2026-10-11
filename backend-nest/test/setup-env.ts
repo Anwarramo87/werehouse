@@ -8,7 +8,11 @@ process.env.DATABASE_URL =
   'postgresql://postgres:Anwar%4023@localhost:5432/warehouse_system?schema=public';
 process.env.JWT_COOKIE_NAME = process.env.JWT_COOKIE_NAME || 'warehouse_access_token';
 process.env.THROTTLE_TTL_MS = process.env.THROTTLE_TTL_MS || '60000';
-process.env.THROTTLE_LIMIT = process.env.THROTTLE_LIMIT || '20';
+// The e2e suite is one process that logs in dozens of times as fixture users.
+// The default 20/60s limiter trips partway through and later specs see a 429
+// where they expect 201 -- a harness artifact, not a regression. Rate limiting
+// itself is covered by the throttler's own unit tests.
+process.env.THROTTLE_LIMIT = process.env.THROTTLE_LIMIT || '500';
 
 // -----------------------------------------------------------------------------
 // Ensure test database exists

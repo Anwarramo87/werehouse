@@ -44,7 +44,8 @@
     "prisma:migrate:local": "node scripts/prisma-safe.js local migrate deploy",
     "db:target": "node scripts/db-target-report.js",
     "test": "npm run test:unit",
-    "test:cov": "jest --coverage --testEnvironment=node"
+    "test:cov": "jest --coverage --testEnvironment=node",
+    "check:models": "node scripts/check-model-coverage.js"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.122.0",

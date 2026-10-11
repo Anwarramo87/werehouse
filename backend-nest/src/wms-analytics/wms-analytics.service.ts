@@ -7,6 +7,13 @@ const D = (v: Prisma.Decimal.Value) => new Prisma.Decimal(v);
 const ZERO = new Prisma.Decimal(0);
 const DAY_MS = 86_400_000;
 
+const MAX_WINDOW_DAYS = 730;
+const MAX_FORECAST_LIMIT = 1000;
+const DEFAULT_FORECAST_LIMIT = 500;
+
+const clampDays = (days: number) =>
+  Math.min(Math.max(1, Math.floor(days)), MAX_WINDOW_DAYS);
+
 @Injectable()
 export class WmsAnalyticsService {
   private readonly logger = new Logger(WmsAnalyticsService.name);
@@ -24,6 +31,7 @@ export class WmsAnalyticsService {
    * times, and a 60-second-old turnover figure changes no decision.
    */
   async kpis(days = 90) {
+    days = clampDays(days);
     return this.shortCache.getOrSetJson(`wms:kpis:${days}`, 60, async () => {
       const since = new Date(Date.now() - days * DAY_MS);
 
@@ -48,6 +56,7 @@ export class WmsAnalyticsService {
    * legible half of the same number, so both are returned.
    */
   async inventoryTurnover(days = 90) {
+    days = clampDays(days);
     const since = new Date(Date.now() - days * DAY_MS);
 
     const [outbound, products, stock] = await Promise.all([
@@ -136,6 +145,7 @@ export class WmsAnalyticsService {
 
   /** Order-to-ship time, measured on invoices that actually shipped. */
   async fulfillmentSpeed(days = 90) {
+    days = clampDays(days);
     const since = new Date(Date.now() - days * DAY_MS);
 
     const invoices = await this.prisma.salesInvoice.findMany({
@@ -176,6 +186,7 @@ export class WmsAnalyticsService {
    * hides which of the two went wrong.
    */
   async orderAccuracy(days = 90) {
+    days = clampDays(days);
     const since = new Date(Date.now() - days * DAY_MS);
 
     const [pickItems, invoices, cancelled] = await Promise.all([
@@ -249,6 +260,7 @@ export class WmsAnalyticsService {
 
   /** How long goods sit between arriving and being put away. */
   async receivingPerformance(days = 90) {
+    days = clampDays(days);
     const since = new Date(Date.now() - days * DAY_MS);
 
     const tasks = await this.prisma.putawayTask.findMany({
@@ -289,9 +301,11 @@ export class WmsAnalyticsService {
    * This is a planning aid, not a promise: `confidence` reports how much
    * history it had, so a two-week-old SKU is not mistaken for a stable signal.
    */
-  async forecast(options?: { leadTimeDays?: number; horizonDays?: number }) {
-    const leadTime = options?.leadTimeDays ?? 14;
-    const horizon = options?.horizonDays ?? 30;
+  async forecast(options?: { leadTimeDays?: number; horizonDays?: number; limit?: number; offset?: number }) {
+    const leadTime = Math.min(Math.max(1, Math.floor(options?.leadTimeDays ?? 14)), 90);
+    const horizon = Math.min(Math.max(1, Math.floor(options?.horizonDays ?? 30)), 365);
+    const limit = Math.min(Math.max(1, Math.floor(options?.limit ?? DEFAULT_FORECAST_LIMIT)), MAX_FORECAST_LIMIT);
+    const offset = Math.max(0, Math.floor(options?.offset ?? 0));
 
     const now = Date.now();
     const windows = [30, 60, 90];
@@ -399,7 +413,7 @@ export class WmsAnalyticsService {
         staleReorderLevels: rows.filter((r) => r.reorderLevelIsStale).length,
       },
       needsReorder: needsReorder.slice(0, 100),
-      all: rows,
+      all: rows.slice(offset, offset + limit),
     };
   }
 

@@ -310,6 +310,11 @@ describe('Scalar FK tenant isolation (e2e, real PostgreSQL)', () => {
       'Employee.departmentEntity',
       'PayrollReceipt.payrollRun',
       'RehireRecord.previousTermination',
+      // Representative-extension sales links. A SetNull composite key is not
+      // expressible (nulling the FK would orphan tenantId too), so these stay
+      // scalar and rely on the tenant extension's nested-write verification.
+      'RepCollection.sale',
+      'RepReturn.sale',
     ]);
 
     /**
@@ -321,6 +326,11 @@ describe('Scalar FK tenant isolation (e2e, real PostgreSQL)', () => {
      * a NEW tenant-to-tenant scalar relation appears, or when these are
      * retrofitted to (id, tenantId) composite keys and this list must shrink
      * with the schema. See SCALE_BACKLOG.md.
+     *
+     * The manufacturing (BOM/production) and representatives blocks below are
+     * the same posture: internally hierarchical, tenant-carried by the parent
+     * row, and app-layer isolated. Retrofitting them to composite keys is
+     * tracked as a single follow-up migration rather than a per-relation fix.
      */
     const TRACKED_NON_COMPOSITE = new Set([
       'AccountMapping.account',
@@ -352,6 +362,31 @@ describe('Scalar FK tenant isolation (e2e, real PostgreSQL)', () => {
       'Shipment.salesInvoice',
       'StorageBin.zone',
       'WarehouseZone.warehouse',
+      // Manufacturing: BOM -> items -> production orders -> material
+      // consumption. Each child row carries tenantId and is only ever written
+      // through the scoped client.
+      'BOMItem.bom',
+      'ProductionOrder.bom',
+      'MaterialConsumption.productionOrder',
+      // Representatives: every rep child row points back to its representative
+      // (and sale items/collections/returns to their sale) with a scalar FK.
+      // The workspace endpoints additionally run RepIsolationGuard, which
+      // compares the URL's repId against the JWT's representative.
+      'Representative.user',
+      'RepRoute.representative',
+      'RepCustomer.representative',
+      'RepProduct.representative',
+      'RepStock.representative',
+      'RepStockMovement.representative',
+      'RepSale.representative',
+      'RepSaleItem.sale',
+      'RepCollection.representative',
+      'RepReturn.representative',
+      'RepSettlement.representative',
+      // Per-admin page grants. userId is @unique (one grant per account) and a
+      // user belongs to exactly one factory, so a composite key cannot express
+      // it; the entitlement is only ever read by tenant-scoped queries.
+      'UserEntitlement.user',
     ]);
 
     it('every tenant-to-tenant relation is composite, or a documented exception', () => {

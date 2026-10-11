@@ -138,14 +138,33 @@ export class PickingService {
     const planned: PlannedLine[] = [];
     const shortfalls: Array<{ sku: string; short: number; orderId: string }> = [];
 
+    const skus = [...new Set(orders.flatMap((o) => o.items.map((i) => i.sku)))];
+    const [products, levels] = await Promise.all([
+      this.prisma.product.findMany({
+        where: { sku: { in: skus } },
+        select: { sku: true, batchTracked: true },
+      }),
+      this.prisma.stockLevel.findMany({
+        where: { sku: { in: skus }, available: { gt: 0 } },
+        orderBy: { available: 'desc' },
+        select: { sku: true, location: true, available: true },
+      }),
+    ]);
+
+    const batchTrackedBySku = new Map(products.map((p) => [p.sku, p.batchTracked]));
+    const bestLevelBySku = new Map<string, { location: string | null; available: number }>();
+    for (const level of levels) {
+      if (!bestLevelBySku.has(level.sku)) {
+        bestLevelBySku.set(level.sku, {
+          location: level.location,
+          available: level.available,
+        });
+      }
+    }
+
     for (const order of orders) {
       for (const item of order.items) {
-        const product = await this.prisma.product.findFirst({
-          where: { sku: item.sku },
-          select: { batchTracked: true },
-        });
-
-        if (product?.batchTracked) {
+        if (batchTrackedBySku.get(item.sku)) {
           const plan = await this.batches.allocate({
             sku: item.sku,
             quantity: item.quantity,
@@ -164,10 +183,7 @@ export class PickingService {
             });
           }
         } else {
-          const level = await this.prisma.stockLevel.findFirst({
-            where: { sku: item.sku, available: { gt: 0 } },
-            orderBy: { available: 'desc' },
-          });
+          const level = bestLevelBySku.get(item.sku) ?? null;
           planned.push({
             salesOrderId: order.id,
             sku: item.sku,

@@ -1,15 +1,1 @@
-{
-  "$schema": "https://railway.com/railway.schema.json",
-  "build": {
-    "builder": "DOCKERFILE",
-    "dockerfilePath": "backend-nest/Dockerfile",
-    "watchPatterns": [
-      "**"
-    ]
-  },
-  "deploy": {
-    "preDeployCommand": "npx prisma migrate deploy",
-    "restartPolicyType": "ON_FAILURE",
-    "restartPolicyMaxRetries": 10
-  }
-}
+{"$schema":"https://railway.com/railway.schema.json","build":{"builder":"DOCKERFILE","dockerfilePath":"Dockerfile"},"deploy":{"startCommand":"node dist/main","restartPolicyType":"ON_FAILURE","restartPolicyMaxRetries":3}}

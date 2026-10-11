@@ -160,20 +160,11 @@ export class RepresentativesController {
     @Param('repId', ParseUUIDPipe) repId: string,
     @CurrentUser() user: AuthenticatedUser,
   ) {
-    // الأدمن + المندوب صاحب السجل (عبر العزل) — الصفحة تحددها الـ guard أما
-    // الدور فيُفحص هنا: أدمن يمر، مندوب يمر فقط لسجله.
-    const roles = Array.isArray(user.roles) ? user.roles : [];
-    const isAdmin =
-      user.role === 'admin' ||
-      user.role === 'superadmin' ||
-      roles.includes('admin') ||
-      roles.includes('superadmin');
-    if (!isAdmin) {
-      // ليس أدمن: اسمح فقط إن كان مندوباً — العزل الكامل يتم عبر
-      // RepIsolationGuard على مسارات workspace، وهنا نسمح بقراءة تسوياته.
-      const isRep = user.role === 'representative' || roles.includes('representative');
-      if (!isRep) throw new ForbiddenException('هذه العملية للمسؤول فقط');
-    }
+    // تسويات المندوبين صفحة إدارية: موافقة التسوية وتفاصيلها للمسؤول فقط.
+    // المندوب يصل لتسوياته عبر مسار workspace الخاص به، وليس عبر هذا المسار.
+    // الفحص هنا وليس في الـguard لأن الـguard يمرّر المندوب نحو سجله بينما
+    // هذه النقطة ترفعه أصلاً.
+    this.requireAdmin(user);
     return this.reps.getRepSettlements(repId);
   }
 

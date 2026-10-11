@@ -591,22 +591,22 @@ export class PayrollService {
     // - paidLeaveDays: إدارية/وفاة/PAID تُدفع 100%
     let sickLeaveDays = 0;
     let paidLeaveDays = 0;
-    if (ov?.sickLeaveDays != null) {
+    if (typeof ov?.sickLeaveDays === 'number') {
       sickLeaveDays = Math.max(0, ov.sickLeaveDays);
     }
-    if (ov?.paidLeaveDays != null) {
+    if (typeof ov?.paidLeaveDays === 'number') {
       paidLeaveDays = Math.max(0, ov.paidLeaveDays);
     }
-    if (ov?.sickLeaveDays == null || ov?.paidLeaveDays == null) {
+    if (typeof ov?.sickLeaveDays !== 'number' || typeof ov?.paidLeaveDays !== 'number') {
       for (const l of periodLeaves) {
         const start = l.startDate > periodStart ? l.startDate : periodStart;
         const end = l.endDate < endDate ? l.endDate : endDate;
         const days = Math.floor((new Date(end).getTime() - new Date(start).getTime()) / 86_400_000) + 1;
         if (l.leaveType === 'SICK') {
           if (l.isHourly) continue; // تُعالَج عبر sickRemainderMinutes
-          if (ov?.sickLeaveDays == null) sickLeaveDays += days;
+          if (typeof ov?.sickLeaveDays !== 'number') sickLeaveDays += days;
         } else if (l.leaveType === 'PAID' || l.leaveType === 'ADMIN' || l.leaveType === 'DEATH') {
-          if (ov?.paidLeaveDays == null) paidLeaveDays += days;
+          if (typeof ov?.paidLeaveDays !== 'number') paidLeaveDays += days;
         }
       }
     }
@@ -654,7 +654,7 @@ export class PayrollService {
     // are derived from the manual day totals instead of punch data.
     let contractualWorkedMinutes = presentDays * hoursPerDayEmp * 60;
     const dayMinutes = hoursPerDayEmp * 60;
-    if (ov != null) {
+    if (ov !== undefined) {
       const manualAbsenceDays = Math.max(0, ov.absenceDays ?? 0);
       const manualUnpaidDays = Math.max(0, ov.unpaidLeaveDays ?? 0);
       const manualSickDays = Math.max(0, ov.sickLeaveDays ?? 0);
@@ -789,15 +789,19 @@ export class PayrollService {
     // aggregation for their dimension — so editing minutes/days in the modal
     // always flows into the earned salary (and therefore the payroll run).
     const effectiveWeekdayOvertime =
-      manualOvertimeMinutes != null ? Math.max(0, manualOvertimeMinutes) : weekdayOvertimeMinutes;
+      typeof manualOvertimeMinutes === 'number'
+          ? Math.max(0, manualOvertimeMinutes)
+          : weekdayOvertimeMinutes;
     const effectiveWeekendOvertime =
-      manualWeekendOvertimeMinutes != null
+      typeof manualWeekendOvertimeMinutes === 'number'
         ? Math.max(0, manualWeekendOvertimeMinutes)
         : weekendOvertimeMinutes;
     const effectiveDelayMinutes =
-      manualLateMinutes != null ? Math.max(0, manualLateMinutes) : totalDelayMinutes;
+      typeof manualLateMinutes === 'number'
+        ? Math.max(0, manualLateMinutes)
+        : totalDelayMinutes;
     const effectiveEarlyLeaveMinutes =
-      manualEarlyLeaveMinutes != null
+      typeof manualEarlyLeaveMinutes === 'number'
         ? Math.max(0, manualEarlyLeaveMinutes)
         : totalEarlyLeaveMinutes;
     const workedPay = minuteWage.times(new Prisma.Decimal(contractualWorkedMinutes));
