@@ -16,8 +16,8 @@ export class AdjustStockDto {
 
   /** Movement type. When omitted it is derived from the sign of `change`. */
   @IsOptional()
-  @IsIn(['IN', 'OUT', 'ADJUSTMENT'])
-  type?: 'IN' | 'OUT' | 'ADJUSTMENT';
+  @IsIn(['IN', 'OUT', 'ADJUSTMENT', 'PURCHASE_RECEIPT', 'PRODUCTION_OUTPUT', 'RETURN_TO_STOCK', 'SALES_SHIPMENT', 'PRODUCTION_CONSUMPTION', 'DAMAGE_LOSS', 'WAREHOUSE_TRANSFER'])
+  type?: 'IN' | 'OUT' | 'ADJUSTMENT' | 'PURCHASE_RECEIPT' | 'PRODUCTION_OUTPUT' | 'RETURN_TO_STOCK' | 'SALES_SHIPMENT' | 'PRODUCTION_CONSUMPTION' | 'DAMAGE_LOSS' | 'WAREHOUSE_TRANSFER';
 
   @IsString()
   @MaxLength(500)
