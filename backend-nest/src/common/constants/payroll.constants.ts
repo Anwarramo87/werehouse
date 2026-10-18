@@ -32,3 +32,6 @@ export const PAYROLL_BATCH_SIZE = 250;
 
 /** أقرب قيمة للتقريب للأعلى في صافي الراتب */
 export const PAYROLL_ROUNDING_UNIT = 1000;
+
+/** الخصم الثابت الشهري الخاص ببدل المعيشة — يُخصم كاملاً بغض النظر عن أيام الحضور */
+export const FLAT_PAYROLL_DEDUCTION = 10000;

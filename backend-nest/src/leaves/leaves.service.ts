@@ -3,6 +3,7 @@ import { BadRequestException, Injectable, NotFoundException } from '@nestjs/comm
 import { Prisma, LeaveRequestStatus, LeaveRequestType } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { ShortCacheService } from '../common/cache/short-cache.service';
+import { currentTenant } from '../common/tenant/tenant-context';
 import { NotificationsService } from '../notifications/notifications.service';
 import { paginatedResponse, resolvePagination } from '../common/utils/pagination.util';
 import { BulkCreateLeaveRequestDto, CreateLeaveRequestDto } from './dto/create-leave-request.dto';
@@ -76,6 +77,17 @@ export class LeavesService {
     };
     return map[type] ?? type ?? 'غير معروفة';
   }
+
+  /**
+   * The employees stats cache key is scoped to the caller factory, so the
+   * invalidation has to be scoped too: a global prefix matches no key and the
+   * stale entry lingers for its full TTL.
+   */
+  private async invalidateEmployeeStats() {
+    const scope = currentTenant()?.tenantId ?? 'global';
+    await this.shortCache.invalidatePrefix(`employees:stats:${scope}`);
+  }
+
 
   private async assertEmployeeExists(employeeId: string) {
     const employee = await this.prisma.employee.findFirst({ where: { employeeId } });
@@ -465,7 +477,7 @@ export class LeavesService {
       return created;
     });
 
-    await this.shortCache.invalidatePrefix('employees:stats');
+    await this.invalidateEmployeeStats();
 
     const employeeName = (result as any).employee?.name ?? dto.employeeId;
     void this.notifications.create({
@@ -640,7 +652,7 @@ export class LeavesService {
       return updated;
     });
 
-    await this.shortCache.invalidatePrefix('employees:stats');
+    await this.invalidateEmployeeStats();
 
     return { ...result, warning: warning ?? undefined };
   }

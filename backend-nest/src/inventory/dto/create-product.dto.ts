@@ -20,8 +20,9 @@ export class CreateProductDto {
   @IsNumber()
   unitPrice?: number;
 
+  @IsOptional()
   @IsNumber()
-  costPrice: number;
+  costPrice?: number;
 
   @IsOptional()
   @IsNumber()

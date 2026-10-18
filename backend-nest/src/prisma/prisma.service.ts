@@ -202,7 +202,10 @@ export class PrismaService
       try {
         await this.$connect();
         this.logger.log('Database connection established.');
-        await this.warmupPool();
+        // Warm the pool in the background: it now opens connections in
+        // parallel, but awaiting it here still delayed `app.listen` by the
+        // full TLS+auth round-trips (~15s when sequential, ~2s even parallel).
+        void this.warmupPool();
         this.startKeepalive();
         return;
       } catch (error) {
@@ -259,13 +262,36 @@ export class PrismaService
    * opened simultaneously.
    */
   private async warmupPool() {
-    const warmCount = Math.min(this.poolMax, 10);
+    // WARMUP_CONNECTIONS: عدد الاتصالات المسبقة (الافتراضي 10). 0 يعطّل التسخين.
+    const configured = Number(process.env.WARMUP_CONNECTIONS ?? 10);
+    const warmCount =
+      Number.isFinite(configured) && configured >= 0
+        ? Math.min(this.poolMax, Math.floor(configured))
+        : Math.min(this.poolMax, 10);
+
+    if (warmCount === 0) {
+      this.logger.log('[PrismaService] Pool warmup disabled (WARMUP_CONNECTIONS=0).');
+      return;
+    }
+
     const clients: import('pg').PoolClient[] = [];
     try {
-      for (let i = 0; i < warmCount; i++) {
-        clients.push(await this.pool.connect());
+      // Parallel — sequentially each connect paid a full TLS+auth round-trip to
+      // Neon (~1.5s × 10 ≈ 15s of blocked startup). All at once: ~1-2s.
+      const settled = await Promise.allSettled(
+        Array.from({ length: warmCount }, () => this.pool.connect()),
+      );
+      for (const result of settled) {
+        if (result.status === 'fulfilled') {
+          clients.push(result.value);
+        }
       }
-      this.logger.log(`[PrismaService] Warmed up ${clients.length} pooled connections.`);
+      const failed = settled.length - clients.length;
+      this.logger.log(
+        `[PrismaService] Warmed up ${clients.length}/${warmCount} pooled connections in parallel` +
+          (failed ? ` (${failed} failed)` : '') +
+          '.',
+      );
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       this.logger.warn(`[PrismaService] Pool warmup partial/failed: ${message}`);

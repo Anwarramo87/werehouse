@@ -8,6 +8,9 @@ import { randomUUID } from 'crypto';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { InventoryService } from '../inventory/inventory.service';
+import { CostingService } from '../common/wms/costing.service';
+import { CreateProductDto } from '../inventory/dto/create-product.dto';
+import { AuthenticatedUser } from '../common/types/authenticated-user.types';
 import { ShortCacheService } from '../common/cache/short-cache.service';
 import { paginatedResponse, resolvePagination } from '../common/utils/pagination.util';
 import { CreateSupplierDto } from './dto/create-supplier.dto';
@@ -24,6 +27,7 @@ export class PurchasingService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly inventory: InventoryService,
+    private readonly costing: CostingService,
     private readonly shortCache: ShortCacheService,
   ) {}
 
@@ -36,6 +40,19 @@ export class PurchasingService {
       this.shortCache.invalidatePrefix('purchasing:orders'),
       this.inventory.invalidateCaches(),
     ]);
+  }
+
+  /**
+   * Adds a new product/raw material directly from the purchasing workflow.
+   *
+   * Delegates to InventoryService.createProduct so product creation rules stay
+   * in one place (no duplication). It exists as a purchasing route so that a
+   * purchasing-only operator — who may not hold `edit_inventory` or the
+   * `inventory.products` entitlement — can still add a material while building a
+   * purchase order. Creating a product never touches stock.
+   */
+  async createProductFromPurchasing(dto: CreateProductDto, actor?: AuthenticatedUser) {
+    return this.inventory.createProduct(dto, actor);
   }
 
   // ---------------------------------------------------------------- suppliers
@@ -346,7 +363,12 @@ export class PurchasingService {
 
     const itemById = new Map(order.items.map((item) => [item.id, item]));
     const receiptItems: ReceiveGoodsItemDto[] = [];
-    const stockAdjustments: Array<{ sku: string; location: string; change: number }> = [];
+    const stockAdjustments: Array<{
+      sku: string;
+      location: string;
+      change: number;
+      unitCost: Prisma.Decimal;
+    }> = [];
 
     for (const incoming of dto.items) {
       const orderItem = itemById.get(incoming.purchaseOrderItemId);
@@ -366,6 +388,7 @@ export class PurchasingService {
         sku: orderItem.sku,
         location: incoming.location,
         change: incoming.quantity,
+        unitCost: orderItem.unitCost,
       });
     }
 
@@ -459,6 +482,22 @@ export class PurchasingService {
       // entered stock, with nothing to reconcile the two. Receipt, received
       // quantities, order status and stock now succeed or fail as one unit.
       for (const adj of stockAdjustments) {
+        // Cost follows the goods through the factory's configured method
+        // (weighted average by default), using the price captured on the order
+        // line. A line with no price (<= 0) leaves the existing product cost
+        // untouched rather than overwriting a real cost with a zero. This runs
+        // BEFORE the stock change because it weights the average by on-hand.
+        if (Number(adj.unitCost) > 0) {
+          await this.costing.applyInboundCost(tx, {
+            sku: adj.sku,
+            quantityIn: adj.change,
+            unitCost: adj.unitCost,
+            referenceType: 'purchase_order',
+            referenceId: purchaseOrderId,
+            createdById: userId,
+          });
+        }
+
         await this.inventory.applyStockChangeWithin(tx, {
           sku: adj.sku,
           location: adj.location,

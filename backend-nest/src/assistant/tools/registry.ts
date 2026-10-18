@@ -8,6 +8,8 @@ import { ToolDeclaration } from '../llm/llm.provider';
 import { HrTools } from './hr.tools';
 import { InventoryTools } from './inventory.tools';
 import { SalesTools } from './sales.tools';
+import { ManufacturingTools } from './manufacturing.tools';
+import { PurchasingTools } from './purchasing.tools';
 import { NavigationTools } from './navigation.tools';
 
 export interface ToolOutcome {
@@ -45,12 +47,16 @@ export class ToolRegistry {
     hr: HrTools,
     inventory: InventoryTools,
     sales: SalesTools,
+    manufacturing: ManufacturingTools,
+    purchasing: PurchasingTools,
     navigation: NavigationTools,
   ) {
     for (const tool of [
       ...hr.tools(),
       ...inventory.tools(),
       ...sales.tools(),
+      ...manufacturing.tools(),
+      ...purchasing.tools(),
       ...navigation.tools(),
     ]) {
       this.tools.set(tool.name, tool);

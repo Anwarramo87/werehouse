@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { DocumentStatus, PickStatus, Prisma, StockMovementType } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { ShortCacheService } from '../common/cache/short-cache.service';
+import { currentTenant } from '../common/tenant/tenant-context';
 
 const D = (v: Prisma.Decimal.Value) => new Prisma.Decimal(v);
 const ZERO = new Prisma.Decimal(0);
@@ -32,7 +33,11 @@ export class WmsAnalyticsService {
    */
   async kpis(days = 90) {
     days = clampDays(days);
-    return this.shortCache.getOrSetJson(`wms:kpis:${days}`, 60, async () => {
+    // The queries are tenant-narrowed by the Prisma extension, but the cache key
+    // sat in front of them without a factory in it: factory B's board read
+    // factory A's cached KPIs and the narrowing never ran.
+    const scope = currentTenant()?.tenantId ?? 'global';
+    return this.shortCache.getOrSetJson(`wms:kpis:${scope}:${days}`, 60, async () => {
       const since = new Date(Date.now() - days * DAY_MS);
 
       const [turnover, fulfillment, accuracy, expiry, receiving] = await Promise.all([

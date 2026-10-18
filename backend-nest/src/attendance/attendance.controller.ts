@@ -33,6 +33,7 @@ import { AttendancePeriodQueryDto } from './dto/attendance-period-query.dto';
 import { AttendanceAlertsQueryDto } from './dto/attendance-alerts-query.dto';
 import { CalculateDeductionsDto } from './dto/calculate-deductions.dto';
 import { AuthenticatedUser } from '../common/types/authenticated-user.types';
+import { BulkAttendanceDto } from './dto/bulk-attendance.dto';
 
 @ApiTags('attendance')
 @ApiCookieAuth()
@@ -186,6 +187,13 @@ export class AttendanceController {
   @Permissions('edit_attendance')
   update(@Param('recordId') recordId: string, @Body() dto: UpdateAttendanceDto) {
     return this.attendanceService.update(recordId, dto);
+  }
+
+  @Post('bulk')
+  @Permissions('edit_attendance')
+  @UseInterceptors(IdempotencyInterceptor)
+  bulkCreate(@Body() dto: BulkAttendanceDto, @CurrentUser() user: AuthenticatedUser) {
+    return this.attendanceService.bulkCreate(dto.records, user?.userId);
   }
 
   @Delete(':recordId')

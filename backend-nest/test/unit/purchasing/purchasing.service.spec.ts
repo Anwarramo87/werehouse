@@ -3,6 +3,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { PurchasingService } from '../../../src/purchasing/purchasing.service';
 import { PrismaService } from '../../../src/prisma/prisma.service';
 import { InventoryService } from '../../../src/inventory/inventory.service';
+import { CostingService } from '../../../src/common/wms/costing.service';
 import { ShortCacheService } from '../../../src/common/cache/short-cache.service';
 
 describe('PurchasingService', () => {
@@ -69,10 +70,18 @@ describe('PurchasingService', () => {
       .fn()
       .mockResolvedValue({ stockLevel: { id: 'stock-1' }, type: 'IN' }),
     invalidateCaches: jest.fn().mockResolvedValue(undefined),
+    // Product creation stays owned by InventoryService; purchasing only delegates.
+    createProduct: jest.fn(),
   };
 
   const shortCacheMock = {
     invalidatePrefix: jest.fn().mockResolvedValue(undefined),
+  };
+
+  // Receipt revalues the product through the shared costing service (weighted
+  // average by default), inside the same transaction as the stock change.
+  const costingMock = {
+    applyInboundCost: jest.fn().mockResolvedValue(null),
   };
 
   beforeEach(async () => {
@@ -83,6 +92,7 @@ describe('PurchasingService', () => {
         PurchasingService,
         { provide: PrismaService, useValue: prismaMock },
         { provide: InventoryService, useValue: inventoryMock },
+        { provide: CostingService, useValue: costingMock },
         { provide: ShortCacheService, useValue: shortCacheMock },
       ],
     }).compile();
@@ -178,6 +188,56 @@ describe('PurchasingService', () => {
       expect(createData.items.create).toHaveLength(2);
       expect(result.message).toBe('Purchase order created successfully');
     });
+
+    it('never moves stock when saving a purchase order', async () => {
+      prismaMock.supplier.findUnique.mockResolvedValue({ id: 'supplier-1' });
+      prismaMock.product.count.mockResolvedValue(1);
+      prismaMock.purchaseOrder.findFirst.mockResolvedValue(null);
+      prismaMock.purchaseOrder.create.mockResolvedValue({ id: 'po-1' });
+      prismaMock.purchaseOrderItem.createMany.mockResolvedValue({ count: 1 });
+      prismaMock.purchaseOrder.findUniqueOrThrow.mockResolvedValue({ id: 'po-1', items: [] });
+
+      await service.createPurchaseOrder(
+        { supplierId: 'supplier-1', items: [{ sku: 'SKU-001', quantity: 10, unitCost: 10 }] },
+        'user-1',
+      );
+
+      // Stock must rise only on goods receipt, never on order creation.
+      expect(inventoryMock.applyStockChangeWithin).not.toHaveBeenCalled();
+      expect(inventoryMock.adjustStock).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('createProductFromPurchasing', () => {
+    it('delegates to InventoryService.createProduct without touching stock', async () => {
+      inventoryMock.createProduct.mockResolvedValue({
+        message: 'Product created successfully',
+        product: { id: 'product-1', sku: 'RAW-001' },
+      });
+
+      const dto = {
+        sku: 'RAW-001',
+        name: 'قطن خام',
+        category: 'مواد خام',
+        costPrice: 500,
+        productType: 'RAW_MATERIAL' as const,
+        unit: 'كيلوغرام',
+      };
+
+      const result = await service.createProductFromPurchasing(dto, {
+        userId: 'user-1',
+        username: 'operator',
+      } as never);
+
+      expect(inventoryMock.createProduct).toHaveBeenCalledWith(
+        dto,
+        expect.objectContaining({ userId: 'user-1' }),
+      );
+      expect(result.product.sku).toBe('RAW-001');
+      // Adding a product is paperwork only — it must not move stock.
+      expect(inventoryMock.applyStockChangeWithin).not.toHaveBeenCalled();
+      expect(inventoryMock.adjustStock).not.toHaveBeenCalled();
+    });
   });
 
   describe('receiveGoods', () => {
@@ -247,7 +307,45 @@ describe('PurchasingService', () => {
         }),
       );
       expect(inventoryMock.adjustStock).not.toHaveBeenCalled();
+      // Cost follows the goods: the order line's price revalues the product
+      // through the configured costing method, before the stock change.
+      expect(costingMock.applyInboundCost).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          sku: 'SKU-001',
+          quantityIn: 6,
+          referenceType: 'purchase_order',
+        }),
+      );
       expect(result.message).toBe('Goods received successfully');
+    });
+
+    it('leaves the product cost untouched when the order line has no price', async () => {
+      prismaMock.purchaseOrder.findUnique.mockResolvedValue({
+        id: 'po-1',
+        poNumber: 'PO-001',
+        status: 'sent',
+        items: [
+          { id: 'poi-1', sku: 'SKU-001', quantity: 10, receivedQuantity: 0, unitCost: 0 },
+        ],
+      });
+      prismaMock.purchaseOrderItem.update.mockResolvedValue({ id: 'poi-1' });
+      prismaMock.goodsReceipt.create.mockResolvedValue({ id: 'gr-1', items: [] });
+      prismaMock.purchaseOrder.update.mockResolvedValue({
+        id: 'po-1',
+        status: 'received',
+        items: [],
+      });
+
+      await service.receiveGoods(
+        'po-1',
+        { items: [{ purchaseOrderItemId: 'poi-1', quantity: 10, location: 'WH-A' }] },
+        'user-1',
+      );
+
+      // A missing price must not be treated as a genuine zero cost.
+      expect(costingMock.applyInboundCost).not.toHaveBeenCalled();
+      expect(inventoryMock.applyStockChangeWithin).toHaveBeenCalled();
     });
 
     it('throws BadRequestException when the purchase order item does not belong to the order', async () => {

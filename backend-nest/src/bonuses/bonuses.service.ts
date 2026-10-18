@@ -4,6 +4,7 @@ import { Prisma } from '@prisma/client';
 import { paginatedResponse, resolvePagination } from '../common/utils/pagination.util';
 import { PrismaService } from '../prisma/prisma.service';
 import { ShortCacheService } from '../common/cache/short-cache.service';
+import { currentTenant } from '../common/tenant/tenant-context';
 import { NotificationsService } from '../notifications/notifications.service';
 import { CreateBonusDto } from './dto/create-bonus.dto';
 import { UpdateBonusDto } from './dto/update-bonus.dto';
@@ -22,6 +23,17 @@ export class BonusesService {
   private toHistoryPayload(value: unknown): Prisma.InputJsonValue {
     return JSON.parse(JSON.stringify(value)) as Prisma.InputJsonValue;
   }
+
+  /**
+   * The employees stats cache key is scoped to the caller factory, so the
+   * invalidation has to be scoped too: a global prefix matches no key and the
+   * stale entry lingers for its full TTL.
+   */
+  private async invalidateEmployeeStats() {
+    const scope = currentTenant()?.tenantId ?? 'global';
+    await this.shortCache.invalidatePrefix(`employees:stats:${scope}`);
+  }
+
 
   async list(query: BonusesListQueryDto) {
     const page  = Math.max(1, query.page  ?? 1);
@@ -101,7 +113,7 @@ export class BonusesService {
           },
         });
       }
-      await this.shortCache.invalidatePrefix('employees:stats');
+      await this.invalidateEmployeeStats();
       void this.notifications.create({
         type: 'BONUS',
         severity: 'SUCCESS',
@@ -137,7 +149,7 @@ export class BonusesService {
       metadata: { bonusAmount: dto.bonusAmount, assistanceAmount: dto.assistanceAmount, reason: dto.bonusReason },
     });
 
-    await this.shortCache.invalidatePrefix('employees:stats');
+    await this.invalidateEmployeeStats();
     return result;
   }
 
@@ -153,7 +165,7 @@ export class BonusesService {
       },
     });
 
-    await this.shortCache.invalidatePrefix('employees:stats');
+    await this.invalidateEmployeeStats();
     return result;
   }
 
@@ -173,7 +185,7 @@ export class BonusesService {
       await tx.employeeBonus.delete({ where: { id: record.id } });
     });
 
-    await this.shortCache.invalidatePrefix('employees:stats');
+    await this.invalidateEmployeeStats();
     return { message: 'Reward deleted and archived successfully' };
   }
 

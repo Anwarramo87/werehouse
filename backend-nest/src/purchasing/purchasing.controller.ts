@@ -15,6 +15,7 @@ import { CreatePurchaseOrderDto } from './dto/create-purchase-order.dto';
 import { UpdatePurchaseOrderDto } from './dto/update-purchase-order.dto';
 import { ReceiveGoodsDto } from './dto/receive-goods.dto';
 import { PurchaseOrderQueryDto } from './dto/purchase-order-query.dto';
+import { CreateProductDto } from '../inventory/dto/create-product.dto';
 
 @ApiTags('purchasing')
 @ApiCookieAuth()
@@ -72,6 +73,17 @@ export class PurchasingController {
   @Permissions('edit_purchasing')
   createPurchaseOrder(@Body() dto: CreatePurchaseOrderDto, @CurrentUser() user: AuthenticatedUser) {
     return this.purchasingService.createPurchaseOrder(dto, user.userId);
+  }
+
+  /**
+   * Adds a new material/product from inside the purchasing screen. Delegates to
+   * the inventory product-creation logic; guarded by the purchasing permission
+   * so purchasing-only operators are not blocked by an inventory entitlement.
+   */
+  @Post('products')
+  @Permissions('edit_purchasing')
+  createProduct(@Body() dto: CreateProductDto, @CurrentUser() user: AuthenticatedUser) {
+    return this.purchasingService.createProductFromPurchasing(dto, user);
   }
 
   @Put('purchase-orders/:purchaseOrderId')

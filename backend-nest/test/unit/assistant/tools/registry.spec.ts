@@ -1,6 +1,8 @@
 import { ToolRegistry } from '../../../../src/assistant/tools/registry';
 import { HrTools } from '../../../../src/assistant/tools/hr.tools';
 import { InventoryTools } from '../../../../src/assistant/tools/inventory.tools';
+import { ManufacturingTools } from '../../../../src/assistant/tools/manufacturing.tools';
+import { PurchasingTools } from '../../../../src/assistant/tools/purchasing.tools';
 import { SalesTools } from '../../../../src/assistant/tools/sales.tools';
 import { NavigationTools } from '../../../../src/assistant/tools/navigation.tools';
 import { PrismaService } from '../../../../src/prisma/prisma.service';
@@ -22,6 +24,8 @@ function makeRegistry(): ToolRegistry {
     new HrTools(prisma),
     new InventoryTools(prisma),
     new SalesTools(prisma),
+    new ManufacturingTools(prisma),
+    new PurchasingTools(prisma),
     new NavigationTools(),
   );
 }

@@ -54,10 +54,23 @@ export class EmployeesService {
   ) {}
 
   private async invalidateEmployeeCaches() {
+    // Same reason as inventory: without the scope in the key, one factory's
+    // stats are served to another. Prefixes stay scoped so a write here only
+    // evicts this factory's entries.
+    const scope = currentTenant()?.tenantId ?? 'global';
     await Promise.all([
-      this.shortCache.invalidatePrefix('employees:stats'),
+      this.shortCache.invalidatePrefix(`employees:stats:${scope}`),
       this.shortCache.invalidatePrefix('dashboard:home-stats:'),
     ]);
+  }
+
+  /**
+   * The factory this service's cached aggregates belong to. A super admin has
+   * none of their own, so their entries land under a fixed segment that a real
+   * factory can never collide with.
+   */
+  private cacheScope(): string {
+    return currentTenant()?.tenantId ?? 'global';
   }
 
 
@@ -424,7 +437,7 @@ export class EmployeesService {
 
   async stats() {
     // Stats is a pure aggregation; keep all statuses visible.
-    return this.shortCache.getOrSetJson('employees:stats', 30, async () => {
+    return this.shortCache.getOrSetJson(`employees:stats:${this.cacheScope()}`, 30, async () => {
       const [total, active, inactive, terminated, resigned, groupedByDepartment] =
         await Promise.all([
           this.prisma.employee.count(),

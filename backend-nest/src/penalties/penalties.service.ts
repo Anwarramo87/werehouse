@@ -3,6 +3,7 @@ import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { ShortCacheService } from '../common/cache/short-cache.service';
 import { NotificationsService } from '../notifications/notifications.service';
+import { currentTenant } from '../common/tenant/tenant-context';
 import { CreatePenaltyDto } from './dto/create-penalty.dto';
 import { UpdatePenaltyDto } from './dto/update-penalty.dto';
 import { PenaltiesListQueryDto } from './dto/penalties-list-query.dto';
@@ -16,6 +17,16 @@ export class PenaltiesService {
     private readonly shortCache: ShortCacheService,
     private readonly notifications: NotificationsService,
   ) {}
+
+  /**
+   * The employees stats cache key is scoped to the caller factory, so the
+   * invalidation has to be scoped too. A global prefix would no longer match
+   * any key and the stale entry would linger for its full TTL.
+   */
+  private async invalidateEmployeeStats() {
+    const scope = currentTenant()?.tenantId ?? 'global';
+    await this.shortCache.invalidatePrefix(`employees:stats:${scope}`);
+  }
 
   private async assertEmployeeExists(employeeId: string) {
     const employee = await this.prisma.employee.findFirst({ where: { employeeId } });
@@ -102,7 +113,7 @@ export class PenaltiesService {
       metadata: { amount: dto.amount, category: dto.category, reason: dto.reason },
     });
 
-    await this.shortCache.invalidatePrefix('employees:stats');
+    await this.invalidateEmployeeStats();
     return result;
   }
 
@@ -123,7 +134,7 @@ export class PenaltiesService {
 
     const result = await this.prisma.employeePenalty.update({ where: { id }, data });
 
-    await this.shortCache.invalidatePrefix('employees:stats');
+    await this.invalidateEmployeeStats();
     return result;
   }
 
@@ -143,7 +154,7 @@ export class PenaltiesService {
       await tx.employeePenalty.delete({ where: { id: record.id } });
     });
 
-    await this.shortCache.invalidatePrefix('employees:stats');
+    await this.invalidateEmployeeStats();
     return { message: 'Penalty deleted and archived successfully' };
   }
 

@@ -94,7 +94,7 @@ describe('PenaltiesService', () => {
       });
 
       expect(prismaMock.employeePenalty.create).toHaveBeenCalledTimes(1);
-      expect(cacheMock.invalidatePrefix).toHaveBeenCalledWith('employees:stats');
+      expect(cacheMock.invalidatePrefix).toHaveBeenCalledWith('employees:stats:global');
       expect(result.id).toBe('pen-1');
     });
   });
@@ -126,7 +126,7 @@ describe('PenaltiesService', () => {
 
       const result = await service.update('pen-1', { amount: 750 });
       expect(prismaMock.employeePenalty.update).toHaveBeenCalledTimes(1);
-      expect(cacheMock.invalidatePrefix).toHaveBeenCalledWith('employees:stats');
+      expect(cacheMock.invalidatePrefix).toHaveBeenCalledWith('employees:stats:global');
       expect(Number(result.amount)).toBe(750);
     });
   });
@@ -184,3 +184,4 @@ describe('PenaltiesService', () => {
     });
   });
 });
+

@@ -2,6 +2,7 @@ import { BadRequestException, Injectable, NotFoundException } from '@nestjs/comm
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { ShortCacheService } from '../common/cache/short-cache.service';
+import { currentTenant } from '../common/tenant/tenant-context';
 import { NotificationsService } from '../notifications/notifications.service';
 import { CreateAdvanceDto } from './dto/create-advance.dto';
 import { UpdateAdvanceDto } from './dto/update-advance.dto';
@@ -23,6 +24,17 @@ export class AdvancesService {
       throw new BadRequestException(`Employee not found: ${employeeId}`);
     }
   }
+
+  /**
+   * The employees stats cache key is scoped to the caller factory, so the
+   * invalidation has to be scoped too: a global prefix matches no key and the
+   * stale entry lingers for its full TTL.
+   */
+  private async invalidateEmployeeStats() {
+    const scope = currentTenant()?.tenantId ?? 'global';
+    await this.shortCache.invalidatePrefix(`employees:stats:${scope}`);
+  }
+
 
   private toHistoryPayload(value: unknown): Prisma.InputJsonValue {
     return JSON.parse(JSON.stringify(value)) as Prisma.InputJsonValue;
@@ -92,7 +104,7 @@ export class AdvancesService {
       metadata: { totalAmount: totalAmount.toString(), advanceType: dto.advanceType },
     });
 
-    await this.shortCache.invalidatePrefix('employees:stats');
+    await this.invalidateEmployeeStats();
     return result;
   }
 
@@ -140,7 +152,7 @@ export class AdvancesService {
       await tx.employeeAdvance.delete({ where: { id: record.id } });
     });
 
-    await this.shortCache.invalidatePrefix('employees:stats');
+    await this.invalidateEmployeeStats();
     return { message: 'Advance deleted and archived successfully' };
   }
 
@@ -194,7 +206,7 @@ export class AdvancesService {
       },
     });
 
-    await this.shortCache.invalidatePrefix('employees:stats');
+    await this.invalidateEmployeeStats();
     return result;
   }
 }

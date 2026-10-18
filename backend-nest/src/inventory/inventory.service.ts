@@ -74,14 +74,21 @@ export class InventoryService {
   }
 
   private async invalidateInventoryCaches() {
+    // Prefixes are per-scope, so a write in one factory never evicts another
+    // factory's entries. Sweep the shared segments too: a super-admin write
+    // (tenantId null) lands under `global` and must not linger as stale.
     await Promise.all([
-      this.shortCache.invalidatePrefix('inventory:stats'),
-      this.shortCache.invalidatePrefix('inventory:alerts:low-stock'),
-      this.shortCache.invalidatePrefix('inventory:products'),
-      this.shortCache.invalidatePrefix('inventory:product:'),
-      this.shortCache.invalidatePrefix('inventory:categories'),
-      this.shortCache.invalidatePrefix('inventory:movements'),
-      this.shortCache.invalidatePrefix('inventory:warehouses'),
+      this.shortCache.invalidatePrefix(`inventory:stats:${this.cacheScope()}`),
+      this.shortCache.invalidatePrefix(`inventory:alerts:low-stock:${this.cacheScope()}`),
+      this.shortCache.invalidatePrefix(`inventory:products:${this.cacheScope()}`),
+      // A product page entry holds stock for one SKU. Deleting or editing it
+      // invalidates by scope too, but the detail key names the product id
+      // directly -- a write that touches a single product cannot know which
+      // factories that SKU appears in, so this sweep stays broad on purpose.
+      this.shortCache.invalidatePrefix(`inventory:product:`),
+      this.shortCache.invalidatePrefix(`inventory:categories:${this.cacheScope()}`),
+      this.shortCache.invalidatePrefix(`inventory:movements:${this.cacheScope()}`),
+      this.shortCache.invalidatePrefix(`inventory:warehouses:${this.cacheScope()}`),
     ]);
   }
 
@@ -97,12 +104,29 @@ export class InventoryService {
     } = query;
     // Sort belongs in the key: without it, two differently-ordered requests
     // would serve each other's cached page.
-    return `inventory:products:${page}:${limit}:${search}:${category}:${status}:${sortBy}:${sortDir}`;
+    //
+    // The scope belongs in the key too, and matters far more. Every query below
+    // is tenant-narrowed by the Prisma extension, but the cache sits in front of
+    // it: without the factory in the key, factory B's request hits factory A's
+    // cached page and the narrowing never runs. The two factories then see each
+    // other's inventory.
+    return `inventory:products:${this.cacheScope()}:${page}:${limit}:${search}:${category}:${status}:${sortBy}:${sortDir}`;
   }
 
   private movementsCacheKey(query: StockMovementQueryDto) {
     const { page = 1, limit = 25, sku = '', type = '', location = '' } = query;
-    return `inventory:movements:${page}:${limit}:${sku}:${type}:${location}`;
+    return `inventory:movements:${this.cacheScope()}:${page}:${limit}:${sku}:${type}:${location}`;
+  }
+
+  /**
+   * The factory every key in this service is scoped to.
+   *
+   * A super admin has no factory of their own (bypass reads everything), so
+   * their entries land under a fixed segment instead -- they never collide with
+   * a real factory's, and the prefix invalidations below still sweep them.
+   */
+  private cacheScope(): string {
+    return currentTenant()?.tenantId ?? 'global';
   }
 
   /** Kept for backward compatibility (sales / purchasing call this). */
@@ -216,7 +240,7 @@ export class InventoryService {
   }
 
   async getProduct(productId: string) {
-    return this.shortCache.getOrSetJson(`inventory:product:${productId}`, 15, async () => {
+    return this.shortCache.getOrSetJson(`inventory:product:${this.cacheScope()}:${productId}`, 15, async () => {
       const product = await this.prisma.product.findUnique({ where: { id: productId } });
       if (!product) throw new NotFoundException('Product not found');
 
@@ -313,7 +337,7 @@ export class InventoryService {
   }
 
   async listCategories() {
-    return this.shortCache.getOrSetJson('inventory:categories', 60, async () => {
+    return this.shortCache.getOrSetJson(`inventory:categories:${this.cacheScope()}`, 60, async () => {
       const rows = await this.prisma.product.findMany({
         distinct: ['category'],
         select: { category: true },
@@ -716,7 +740,7 @@ export class InventoryService {
     const limit = Math.min(200, Math.max(1, query?.limit ?? 50));
     const skip = (page - 1) * limit;
 
-    return this.shortCache.getOrSetJson('inventory:alerts:low-stock', 20, async () => {
+    return this.shortCache.getOrSetJson(`inventory:alerts:low-stock:${this.cacheScope()}`, 20, async () => {
       const [products, stockSums] = await Promise.all([
         this.prisma.product.findMany({
           where: { status: 'active' },
@@ -753,7 +777,7 @@ export class InventoryService {
   }
 
   async stats() {
-    return this.shortCache.getOrSetJson('inventory:stats', 30, async () => {
+    return this.shortCache.getOrSetJson(`inventory:stats:${this.cacheScope()}`, 30, async () => {
       const [totalProducts, stock, lowStockAlerts, warehouses] = await Promise.all([
         this.prisma.product.count(),
         this.prisma.stockLevel.findMany(),
@@ -780,7 +804,7 @@ export class InventoryService {
   // --------------------------------------------------------------- warehouses
 
   async listWarehouses() {
-    return this.shortCache.getOrSetJson('inventory:warehouses', 60, async () => {
+    return this.shortCache.getOrSetJson(`inventory:warehouses:${this.cacheScope()}`, 60, async () => {
       const warehouses = await this.prisma.warehouse.findMany({ orderBy: { name: 'asc' } });
       return warehouses;
     });

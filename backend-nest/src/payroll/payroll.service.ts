@@ -37,6 +37,7 @@ import {
   SICK_LEAVE_DEDUCTION_RATIO,
   WEEKEND_MULTIPLIER,
   PAYROLL_ROUNDING_UNIT,
+  FLAT_PAYROLL_DEDUCTION,
 } from '../common/constants/payroll.constants';
 
 const MINUTES_PER_HOUR = new Prisma.Decimal(MINUTES_PER_HOUR_NUM);
@@ -654,12 +655,23 @@ export class PayrollService {
     // are derived from the manual day totals instead of punch data.
     let contractualWorkedMinutes = presentDays * hoursPerDayEmp * 60;
     const dayMinutes = hoursPerDayEmp * 60;
-    if (ov !== undefined) {
-      const manualAbsenceDays = Math.max(0, ov.absenceDays ?? 0);
-      const manualUnpaidDays = Math.max(0, ov.unpaidLeaveDays ?? 0);
-      const manualSickDays = Math.max(0, ov.sickLeaveDays ?? 0);
-      const manualPaidDays = Math.max(0, ov.paidLeaveDays ?? 0);
-      const manualUnpaidMinutes = Math.max(0, ov.unpaidHours ?? 0) * 60;
+    // لا نُعيد اشتقاق أيام الحضور يدوياً إلا عندما يضبط المدير بُعداً يومياً
+    // فعلاً (غياب/إجازة بدون أجر/مرضية/مدفوعة/ساعات بدون أجر). سجل تعديل يحمل
+    // دقائق فقط (تأخير/إضافي) لا يجوز أن يُفترض فيه حضور كامل — وإلا فإن ضبط
+    // تأخير على موظف غائب يتجاهل الغياب الفعلي.
+    const hasManualDayOverride =
+      ov !== undefined &&
+      ((ov.absenceDays ?? null) !== null ||
+        (typeof ov.unpaidLeaveDays === 'number' && ov.unpaidLeaveDays > 0) ||
+        (typeof ov.sickLeaveDays === 'number' && ov.sickLeaveDays > 0) ||
+        (typeof ov.paidLeaveDays === 'number' && ov.paidLeaveDays > 0) ||
+        (typeof ov.unpaidHours === 'number' && ov.unpaidHours > 0));
+    if (hasManualDayOverride) {
+      const manualAbsenceDays = Math.max(0, ov!.absenceDays ?? 0);
+      const manualUnpaidDays = Math.max(0, ov!.unpaidLeaveDays ?? 0);
+      const manualSickDays = Math.max(0, ov!.sickLeaveDays ?? 0);
+      const manualPaidDays = Math.max(0, ov!.paidLeaveDays ?? 0);
+      const manualUnpaidMinutes = Math.max(0, ov!.unpaidHours ?? 0) * 60;
       const manualPresentDays = Math.max(
         0,
         workDays - manualAbsenceDays - manualUnpaidDays - manualSickDays - manualPaidDays,
@@ -883,7 +895,12 @@ export class PayrollService {
       this.prisma.employeeBonus.findMany({
         where: {
           employeeId,
-          createdAt: { gte: monthStart, lte: monthEnd },
+          // ربط المكافأة بالفترة: تُنسب للشهر عبر `period` (YYYY-MM) بدل تاريخ
+          // الإنشاء، مع إبقاء منطق تاريخ الإنشاء للسجلات القديمة بلا `period`.
+          OR: [
+            { period: { startsWith: month } },
+            { period: null, createdAt: { gte: monthStart, lte: monthEnd } },
+          ],
         },
       }),
       this.prisma.employeeAdvance.findMany({
@@ -965,7 +982,8 @@ export class PayrollService {
       .plus(totalPenalties)
       .plus(insuranceDeduction)
       .plus(new Prisma.Decimal(busDeduction))
-      .plus(absencePenalty);
+      .plus(absencePenalty)
+      .plus(new Prisma.Decimal(FLAT_PAYROLL_DEDUCTION));
 
     // TEMP DIAGNOSTIC LOG
     this.logger.log(
@@ -990,9 +1008,11 @@ export class PayrollService {
     this.logger.log(`[PROVISIONAL] empId=${employeeId} earnedSalary=${earnedSalary.toFixed(2)} totalBonuses=${totalBonuses.toFixed(2)} totalDeductions=${totalDeductions.toFixed(2)}`);
 
     // Final provisional settlement (rounded UP to nearest thousand to match the
-    // monthly payroll netPay behavior — single source of truth for rounding)
+    // monthly payroll netPay behavior — single source of truth for rounding).
+    // سياسة حصر الراتب السالب عند صفر — نفس سلوك مسير الرواتب الشهري.
+    const provisionalRaw = earnedSalary.plus(totalBonuses).minus(totalDeductions);
     const provisionalFinalSalary = this.roundUpToNearestThousand(
-      earnedSalary.plus(totalBonuses).minus(totalDeductions),
+      provisionalRaw.lessThan(0) ? new Prisma.Decimal(0) : provisionalRaw,
     );
 
     return {
@@ -1804,11 +1824,20 @@ export class PayrollService {
       this.prisma.employeeBonus.findMany({
         where: {
           employeeId: { in: employeeIds },
-          // period column may not exist in DB yet — filter by createdAt date range
-          createdAt: {
-            gte: new Date(`${periodStart}T00:00:00.000Z`),
-            lte: new Date(`${periodEnd}T23:59:59.999Z`),
-          },
+          // ربط المكافأة بالفترة المحاسبية: يُنسب السجل للشهر عبر عمود `period`
+          // (YYYY-MM أو YYYY-MM-DD) بدل تاريخ الإنشاء — فمكافأة تُدخَل لاحقاً
+          // لشهر سابق تظهر في مسير ذلك الشهر. السجلات القديمة التي لا تحمل
+          // `period` تبقى على منطق تاريخ الإنشاء للتوافق الرجعي.
+          OR: [
+            { period: { startsWith: periodStart.slice(0, 7) } },
+            {
+              period: null,
+              createdAt: {
+                gte: new Date(`${periodStart}T00:00:00.000Z`),
+                lte: new Date(`${periodEnd}T23:59:59.999Z`),
+              },
+            },
+          ],
         },
       }),
       this.prisma.employeeAdvance.findMany({
@@ -2405,6 +2434,23 @@ export class PayrollService {
         const empSickHourlyLeaves = empPeriodLeaves.filter(
           (l) => l.leaveType === 'SICK' && l.isHourly === true,
         );
+        // لا نُمرّر تعديلات الحضور إلا إذا كان سجل PayrollInput يحمل فعلاً بُعداً
+        // حضورياً (غياب/إجازة/دقائق تأخير أو إضافي/ساعات بدون أجر). كان أي سجل
+        // — حتى لو أضاف تعديلاً مالياً فقط (عقوبة/سلفة/تأمين/مكافأة) — يُصفّر
+        // التأخير والإضافي ويُفترض حضوراً كاملاً، فيُفسد الحساب الآلي للحضور.
+        const hasAttendanceOverride = input
+          ? input.absenceDays !== null ||
+            Number(input.sickLeaveDays ?? 0) > 0 ||
+            Number(input.adminLeaveDays ?? 0) > 0 ||
+            Number(input.unpaidLeaveDays ?? 0) > 0 ||
+            Number(input.deathLeaveDays ?? 0) > 0 ||
+            Number(input.unpaidHours ?? 0) > 0 ||
+            Number(input.lateMinutes ?? 0) > 0 ||
+            Number(input.earlyLeaveMinutes ?? 0) > 0 ||
+            Number(input.overtimeRegularMinutes ?? 0) > 0 ||
+            Number(input.overtimeWeekendDays ?? 0) > 0
+          : false;
+
         const attendanceCalculatedSalary = this.computeEarnedSalaryFromData({
           employeeId: employee.employeeId,
           periodStart: this.toDateOnly(periodStart),
@@ -2427,17 +2473,17 @@ export class PayrollService {
           totalEarlyLeaveMinutes: earlyLeaveMinutesByEmployee.get(employee.employeeId) || 0,
           // تمرير تعديلات زر "تعديل المجاميع" اليدوية كـ source of truth
           // للحساب — أي تعديل في المودال ينعكس فوراً في راتب دورة الرواتب.
-          manualOverrides: input
+          manualOverrides: hasAttendanceOverride
             ? {
-                absenceDays: input.absenceDays ?? null,
-                unpaidLeaveDays: Number(input.unpaidLeaveDays ?? 0),
-                sickLeaveDays: Number(input.sickLeaveDays ?? 0),
+                absenceDays: input!.absenceDays ?? null,
+                unpaidLeaveDays: Number(input!.unpaidLeaveDays ?? 0),
+                sickLeaveDays: Number(input!.sickLeaveDays ?? 0),
                 paidLeaveDays: paidLeaveDays,
-                overtimeMinutes: Number(input.overtimeRegularMinutes ?? 0),
-                weekendOvertimeMinutes: Number(input.overtimeWeekendDays ?? 0),
-                lateMinutes: Number(input.lateMinutes ?? 0),
-                earlyLeaveMinutes: Number(input.earlyLeaveMinutes ?? 0),
-                unpaidHours: Number(input.unpaidHours ?? 0),
+                overtimeMinutes: Number(input!.overtimeRegularMinutes ?? 0),
+                weekendOvertimeMinutes: Number(input!.overtimeWeekendDays ?? 0),
+                lateMinutes: Number(input!.lateMinutes ?? 0),
+                earlyLeaveMinutes: Number(input!.earlyLeaveMinutes ?? 0),
+                unpaidHours: Number(input!.unpaidHours ?? 0),
               }
             : undefined,
         });
@@ -2453,11 +2499,19 @@ export class PayrollService {
           .plus(clothingDeduction)
           .plus(advanceAmount)
           .plus(insuranceAmount)
-          .plus(busDeductionAmount);
-        const netPay = grossPay.minus(employeeDeductions);
+          .plus(busDeductionAmount)
+          .plus(new Prisma.Decimal(FLAT_PAYROLL_DEDUCTION));
+        // سياسة حصر الراتب السالب عند صفر (floor = 0): لا يُعتمد صافٍ سالب —
+        // إذا تجاوزت الخصومات الإجمالي يُحصر الصافي عند صفر مع تسجيل المبلغ
+        // المتجاوَز في التنبيهات، ولا يُرحَّل أي رصيد سالب على الموظف.
+        const netPayComputed = grossPay.minus(employeeDeductions);
+        const netPay = netPayComputed.lessThan(0) ? new Prisma.Decimal(0) : netPayComputed;
         const netPayRounded = this.roundUpToNearestThousand(netPay);
         const roundingDifference = netPayRounded.minus(netPay);
         const netPayWithAdvance = netPayRounded;
+        const netPayFlooredAmount = netPayComputed.lessThan(0)
+          ? netPayComputed.negated()
+          : new Prisma.Decimal(0);
 
         // Anomalies
         const anomalies: string[] = [];
@@ -2471,11 +2525,21 @@ export class PayrollService {
           anomalies.push('No attendance records in selected period');
         }
 
-        if (penaltiesTotal.greaterThan(0)) {
-          anomalies.push(`Penalties applied: ${penaltiesTotal.toFixed(2)}`);
+        if (
+          input?.penaltyAmount !== null &&
+          input?.penaltyAmount !== undefined &&
+          !penaltyAmountFinal.equals(penaltiesTotal)
+        ) {
+          anomalies.push(
+            `Penalties overridden: recorded ${penaltiesTotal.toFixed(2)} → applied ${penaltyAmountFinal.toFixed(2)}`,
+          );
         }
         if (absenceDays > 0) {
-          anomalies.push(`Absence days deducted: ${absenceDays}`);
+          // أيام الغياب ليست خصماً مستقلاً — تُخصم ضمناً عبر تنقيص الراتب
+          // المكتسب (presentDays). الرسالة توضيحية فقط حتى لا تُفسَّر كخصم مزدوج.
+          anomalies.push(
+            `Absence days reflected in prorated earned salary: ${absenceDays}`,
+          );
         }
         if (latePenalty.greaterThan(0)) {
           anomalies.push(`Late penalty applied: ${latePenalty.toFixed(2)}`);
@@ -2510,8 +2574,10 @@ export class PayrollService {
             `Early-leave minutes (already netted in attendance salary): ${earlyLeaveMinutesForPeriod}`,
           );
         }
-        if (netPay.lessThan(0)) {
-          anomalies.push('Net pay is negative after deductions');
+        if (netPayFlooredAmount.greaterThan(0)) {
+          anomalies.push(
+            `Net pay floored to zero: deductions exceeded gross by ${netPayFlooredAmount.toFixed(2)}; no negative balance carried`,
+          );
         }
 
         totalGross = totalGross.plus(grossPay);

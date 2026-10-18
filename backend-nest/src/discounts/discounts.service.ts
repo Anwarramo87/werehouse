@@ -4,6 +4,7 @@ import { AdvancesService } from '../advances/advances.service';
 import { BonusesService } from '../bonuses/bonuses.service';
 import { PenaltiesService } from '../penalties/penalties.service';
 import { ShortCacheService } from '../common/cache/short-cache.service';
+import { currentTenant } from '../common/tenant/tenant-context';
 import { CreateDiscountDto, DiscountKind } from './dto/create-discount.dto';
 import { AdvanceType } from '../advances/dto/create-advance.dto';
 
@@ -32,6 +33,17 @@ export class DiscountsService {
     if (value instanceof Prisma.Decimal) return Number(value);
     return Number(value || 0);
   }
+
+  /**
+   * The employees stats cache key is scoped to the caller factory, so the
+   * invalidation has to be scoped too: a global prefix matches no key and the
+   * stale entry lingers for its full TTL.
+   */
+  private async invalidateEmployeeStats() {
+    const scope = currentTenant()?.tenantId ?? 'global';
+    await this.shortCache.invalidatePrefix(`employees:stats:${scope}`);
+  }
+
 
   private resolveKind(dto: CreateDiscountDto): DiscountKind {
     if (dto.kind) return dto.kind;
@@ -122,7 +134,7 @@ export class DiscountsService {
         issueDate: dto.date,
       });
 
-      await this.shortCache.invalidatePrefix('employees:stats');
+      await this.invalidateEmployeeStats();
 
       return {
         id: result.id,
@@ -149,7 +161,7 @@ export class DiscountsService {
         period,
       });
 
-      await this.shortCache.invalidatePrefix('employees:stats');
+      await this.invalidateEmployeeStats();
 
       return {
         id: result.id,
@@ -177,7 +189,7 @@ export class DiscountsService {
         throw new BadRequestException(result.message || 'No reward record was created');
       }
 
-      await this.shortCache.invalidatePrefix('employees:stats');
+      await this.invalidateEmployeeStats();
 
       return {
         id: result.id,
@@ -204,7 +216,7 @@ export class DiscountsService {
       throw new BadRequestException(result.message || 'No discount record was created');
     }
 
-    await this.shortCache.invalidatePrefix('employees:stats');
+    await this.invalidateEmployeeStats();
 
     return {
       id: result.id,
@@ -232,7 +244,7 @@ export class DiscountsService {
       const penalty = await this.penaltiesService.getById(id).catch(() => null);
       if (penalty) {
         const result = await this.penaltiesService.remove(id, deletedBy);
-        await this.shortCache.invalidatePrefix('employees:stats');
+        await this.invalidateEmployeeStats();
         return result;
       }
       
@@ -241,7 +253,7 @@ export class DiscountsService {
 
     if (kind === 'penalty') {
       const result = await this.penaltiesService.remove(id, deletedBy);
-      await this.shortCache.invalidatePrefix('employees:stats');
+      await this.invalidateEmployeeStats();
       return result;
     }
 
@@ -251,7 +263,7 @@ export class DiscountsService {
     
     if (kind === DiscountKind.ASSISTANCE || kind === DiscountKind.REWARD) {
       const result = await this.bonusesService.remove(id, deletedBy);
-      await this.shortCache.invalidatePrefix('employees:stats');
+      await this.invalidateEmployeeStats();
       return result;
     }
 

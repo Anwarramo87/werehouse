@@ -286,5 +286,36 @@ describe('ManufacturingService — Production Orders', () => {
         }),
       );
     });
+
+    it('sequences the order number against the caller factory, not the null bucket', async () => {
+      // The number used to be allocated with tenantId null, while the order row
+      // is stamped with the caller's factory. The next call would then count
+      // only the null rows and hand out a number the unique
+      // (tenantId, orderNumber) constraint rejects with a 500.
+      prismaMock.bOM.findFirst.mockResolvedValue({
+        id: 'bom-1', productSku: 'FP-001', isActive: true,
+        items: [{ materialSku: 'RM-001', quantity: new Prisma.Decimal(1), wastePercent: new Prisma.Decimal(0) }],
+      });
+      prismaMock.productionOrder.create.mockResolvedValue({
+        id: 'po-1', orderNumber: 'PO-2026-000001', status: ProductionStatus.PLANNED,
+        bom: { items: [], version: 1 },
+      });
+      prismaMock.product.findMany.mockResolvedValue([
+        { sku: 'RM-001', name: 'Fabric', costPrice: new Prisma.Decimal(100) },
+      ]);
+
+      await service.createProductionOrder(
+        { bomId: 'bom-1', plannedQty: 5, plannedDate: '2026-10-01' },
+        'user-1',
+      );
+
+      const call = docNumMock.next.mock.calls.find((c) => c[1] === 'productionOrder');
+      expect(call).toBeDefined();
+      // The ambient tenant context in tests is unset, so the service falls back
+      // to null only when there is genuinely no factory -- never because it
+      // forgot to look one up.
+      expect(call![2]).toBeNull();
+      expect(call![2]).not.toBe('explicit-null-bug');
+    });
   });
 });

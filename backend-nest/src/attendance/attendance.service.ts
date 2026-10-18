@@ -7,6 +7,7 @@ import * as ExcelJS from 'exceljs';
 import { PrismaService } from '../prisma/prisma.service';
 import { paginationMeta, resolvePagination } from '../common/utils/pagination.util';
 import { CreateAttendanceDto } from './dto/create-attendance.dto';
+import { BulkAttendanceItemDto } from './dto/bulk-attendance.dto';
 import { UpdateAttendanceDto } from './dto/update-attendance.dto';
 import { AttendanceListQueryDto } from './dto/attendance-list-query.dto';
 import { ShortCacheService } from '../common/cache/short-cache.service';
@@ -16,6 +17,7 @@ import { AttendanceAggregationService } from './attendance-aggregation.service';
 import { WORK_HOURS_PER_DAY } from '../common/constants/payroll.constants';
 import { isFridayDateKey, toFactoryDateKey } from '../common/utils/timezone.util';
 import { resolveSalary } from '../common/utils/salary-resolution.util';
+import { currentTenant } from '../common/tenant/tenant-context';
 
 type ShiftPair = {
   inRecordId?: string;
@@ -152,13 +154,27 @@ export class AttendanceService {
   ) {}
 
   private async invalidateAttendanceDashboardCaches() {
+    // Scope matters as much as the prefix does: without it, one factory's
+    // write evicts another factory's entries -- harmless but noisy -- and more
+    // importantly the keys themselves must carry the factory so a read never
+    // crosses factories (see cacheScope()).
+    const scope = currentTenant()?.tenantId ?? 'global';
     await Promise.all([
-      this.shortCache.invalidatePrefix('attendance:stats:'),
-      this.shortCache.invalidatePrefix('attendance:anomalies:'),
-      this.shortCache.invalidatePrefix('attendance:alerts:'),
-      this.shortCache.invalidatePrefix('attendance:deductions:'),
+      this.shortCache.invalidatePrefix(`attendance:stats:${scope}`),
+      this.shortCache.invalidatePrefix(`attendance:anomalies:${scope}`),
+      this.shortCache.invalidatePrefix(`attendance:alerts:${scope}`),
+      this.shortCache.invalidatePrefix(`attendance:deductions:${scope}`),
       this.shortCache.invalidatePrefix('dashboard:home-stats:'),
     ]);
+  }
+
+  /**
+   * The factory every cached attendance aggregate belongs to. The Prisma
+   * extension narrows the queries; this is what keeps the cache in front of
+   * them from defeating it. A super admin lands under a fixed segment.
+   */
+  private cacheScope(): string {
+    return currentTenant()?.tenantId ?? 'global';
   }
 
   private toTimeHHmm(value: Date) {
@@ -666,6 +682,217 @@ export class AttendanceService {
     return { message: 'Attendance record created successfully', record, warning: warning ?? undefined };
   }
 
+  /**
+   * Bulk create — مسجّل بصمات شهري: 52+ طلباً متسلسلاً كان يبطّئ الواجهة.
+   * يتعامل مع دفعة كاملة في استعلامات محدودة:
+   *  - تحقق من وجود الموظفين دفعة واحدة
+   *  - فحص تعارض الإجازات + آخر بصمة لكل موظف/تاريخ دفعة واحدة
+   *  - إدراج دفعة واحدة (createMany) ثم إبطال الكاش وإعادة الحساب مرة لكل (موظف، يوم)
+   */
+  async bulkCreate(items: BulkAttendanceItemDto[], userId?: string) {
+    if (!Array.isArray(items) || items.length === 0) {
+      throw new BadRequestException('No attendance records provided');
+    }
+
+    const errors: Array<{ index: number; employeeId: string; error: string }> = [];
+    const valid: Array<{
+      index: number;
+      employeeId: string;
+      type: 'IN' | 'OUT';
+      eventDate: Date;
+      date: string;
+      deviceId?: string;
+      notes?: string;
+      location?: string;
+      userId?: string;
+      confidence?: number;
+      source?: string;
+    }> = [];
+
+    // ── 1) تحقق أساسي + استخراج الأيام (بدون أي استعلام) ──
+    const employeeIds = new Set<string>();
+    for (let index = 0; index < items.length; index += 1) {
+      const item = items[index];
+      const eventDate = new Date(item.timestamp);
+      if (Number.isNaN(eventDate.getTime())) {
+        errors.push({ index, employeeId: item.employeeId, error: 'Invalid timestamp' });
+        continue;
+      }
+      const type = (item.type ?? 'IN').toUpperCase() as 'IN' | 'OUT';
+      if (type !== 'IN' && type !== 'OUT') {
+        errors.push({ index, employeeId: item.employeeId, error: 'Attendance type must be IN or OUT' });
+        continue;
+      }
+      employeeIds.add(item.employeeId);
+      valid.push({
+        index,
+        employeeId: item.employeeId,
+        type,
+        eventDate,
+        date: '', // يُملأ بعد resolveAttendanceDate
+        deviceId: item.deviceId,
+        notes: item.notes,
+        location: item.location,
+        userId: item.userId,
+        confidence: item.confidence,
+        source: item.source,
+      });
+    }
+
+    if (valid.length > 0) {
+      // ── 2) تحقق وجود الموظفين دفعة واحدة ──
+      const existingEmployees = await this.prisma.employee.findMany({
+        where: { employeeId: { in: Array.from(employeeIds) } },
+        select: { employeeId: true },
+      });
+      const known = new Set(existingEmployees.map((e) => e.employeeId));
+      for (const v of valid) {
+        if (!known.has(v.employeeId)) {
+          errors.push({ index: v.index, employeeId: v.employeeId, error: 'Employee not found' });
+        }
+      }
+      const okEmployees = valid.filter((v) => known.has(v.employeeId));
+
+      // ── 3) حل تاريخ الحضور لكل سجل ──
+      const resolved: typeof okEmployees = [];
+      for (const v of okEmployees) {
+        try {
+          const date = await this.resolveAttendanceDate(v.employeeId, v.type, v.eventDate);
+          resolved.push({ ...v, date });
+        } catch (err) {
+          errors.push({
+            index: v.index,
+            employeeId: v.employeeId,
+            error: err instanceof Error ? err.message : 'Failed to resolve date',
+          });
+        }
+      }
+
+      // ── 4) فحص تعارض الإجازات لكل (موظف، يوم) بشكل غير متسلسل ──
+      const uniqueKeys = Array.from(new Set(resolved.map((r) => `${r.employeeId}|${r.date}`)));
+      const conflicts = new Map<string, string>();
+      await Promise.all(
+        uniqueKeys.map(async (key) => {
+          const [empId, date] = key.split('|');
+          try {
+            await checkLeaveConflictForAttendance(this.prisma, empId, date);
+          } catch (err) {
+            conflicts.set(key, err instanceof Error ? err.message : 'Leave conflict');
+          }
+        }),
+      );
+
+      // ── 5) فحص التسلسل المنطقي + البصمات المكررة ──
+      const lastRecords = await this.prisma.attendanceRecord.findMany({
+        where: {
+          OR: resolved.map((r) => ({ employeeId: r.employeeId, date: r.date })),
+        },
+        orderBy: { timestamp: 'desc' },
+        select: { employeeId: true, date: true, type: true, timestamp: true },
+      });
+      const lastByKey = new Map<string, { type: string; timestamp: Date }>();
+      for (const rec of lastRecords) {
+        const key = `${rec.employeeId}|${rec.date}`;
+        if (!lastByKey.has(key)) lastByKey.set(key, { type: rec.type, timestamp: rec.timestamp });
+      }
+
+      const dupKeys = new Set<string>();
+      const toInsert: Array<{
+        employeeId: string;
+        date: string;
+        type: 'IN' | 'OUT';
+        timestamp: Date;
+        source: string;
+        deviceId?: string;
+        userId?: string;
+        location?: string;
+        notes?: string;
+        confidence?: number;
+        verified: boolean;
+      }> = [];
+
+      for (const v of resolved) {
+        const conflict = conflicts.get(`${v.employeeId}|${v.date}`);
+        if (conflict) {
+          errors.push({ index: v.index, employeeId: v.employeeId, error: conflict });
+          continue;
+        }
+
+        const last = lastByKey.get(`${v.employeeId}|${v.date}`);
+        if (last && last.type.toUpperCase() === v.type) {
+          const diffMinutes = Math.abs(v.eventDate.getTime() - last.timestamp.getTime()) / 60000;
+          if (diffMinutes < 30) {
+            const typeLabel = v.type === 'IN' ? 'دخول' : 'خروج';
+            errors.push({
+              index: v.index,
+              employeeId: v.employeeId,
+              error: `تحذير: آخر بصمة ${typeLabel} كانت قبل ${Math.round(diffMinutes)} دقيقة فقط — يُرجى تسجيل ${v.type === 'IN' ? 'خروج' : 'دخول'} أولاً`,
+            });
+            continue;
+          }
+        }
+
+        // منع التكرار داخل الدفعة نفسها: نفس الموظف/يوم/نوع/طابع زمني
+        const dupKey = `${v.employeeId}|${v.date}|${v.type}|${v.eventDate.getTime()}`;
+        if (dupKeys.has(dupKey)) continue;
+        dupKeys.add(dupKey);
+
+        toInsert.push({
+          employeeId: v.employeeId,
+          date: v.date,
+          type: v.type,
+          timestamp: v.eventDate,
+          source: v.source ?? 'manual',
+          deviceId: v.deviceId,
+          location: v.location,
+          notes: v.notes,
+          verified: true,
+        });
+      }
+
+      // ── 6) إدراج دفعة واحدة (skipDuplicates يتجاهل البصمات المكررة) ──
+      if (toInsert.length > 0) {
+        const created = await this.prisma.attendanceRecord.createMany({
+          data: toInsert,
+          skipDuplicates: true,
+        });
+
+        // تحديث أقصى طابع زمني لكل (موظف، يوم) لتسلسل البيانات في الجلب
+        const affectedKeys = Array.from(new Set(toInsert.map((r) => `${r.employeeId}|${r.date}`)));
+        await Promise.all(
+          affectedKeys.map(async (key) => {
+            const [empId, date] = key.split('|');
+            try {
+              await this.aggregationService.aggregateEmployeeDay(empId, date);
+            } catch (err) {
+              this.logger.error(
+                `⚠️ Real-time aggregation failed (bulk) for ${empId} ${date}: ${
+                  err instanceof Error ? err.message : String(err)
+                }`,
+              );
+            }
+          }),
+        );
+
+        await this.invalidateAttendanceDashboardCaches();
+
+        return {
+          message: `Bulk attendance processed: ${created.count} created, ${errors.length} rejected`,
+          created: created.count,
+          total: items.length,
+          errors,
+        };
+      }
+    }
+
+    return {
+      message: `Bulk attendance processed: 0 created, ${errors.length} rejected`,
+      created: 0,
+      total: items.length,
+      errors,
+    };
+  }
+
   async upload(file: Express.Multer.File, userId?: string) {
     const rows = await this.extractAttendanceRows(file);
     if (rows.length === 0) {
@@ -1019,7 +1246,7 @@ export class AttendanceService {
     const range = this.resolveRange(startDate, endDate);
 
     return this.shortCache.getOrSetJson(
-      `attendance:stats:${range.startDate}:${range.endDate}`,
+      `attendance:stats:${this.cacheScope()}:${range.startDate}:${range.endDate}`,
       20,
       async () => {
         const records = await this.prisma.attendanceRecord.findMany({
@@ -1099,7 +1326,7 @@ export class AttendanceService {
     const range = this.resolveRange(startDate, endDate);
 
     return this.shortCache.getOrSetJson(
-      `attendance:anomalies:${range.startDate}:${range.endDate}`,
+      `attendance:anomalies:${this.cacheScope()}:${range.startDate}:${range.endDate}`,
       20,
       async () => {
         const candidates = await this.prisma.attendanceRecord.findMany({
@@ -1156,7 +1383,7 @@ export class AttendanceService {
       : DEFAULT_LATE_THRESHOLD_MINUTES;
 
     return this.shortCache.getOrSetJson(
-      `attendance:alerts:${targetDate}:${threshold}`,
+      `attendance:alerts:${this.cacheScope()}:${targetDate}:${threshold}`,
       15,
       async () => {
         const [activeEmployees, records] = await Promise.all([
@@ -1539,7 +1766,7 @@ export class AttendanceService {
     // underlying data only changes on explicit attendance edits. A 30-second
     // TTL eliminates redundant full-table scans when the frontend's React
     // Query refetches overlap with navigation-triggered calls.
-    const dedupeKey = `attendance:deductions:${periodStart}:${periodEnd}:${employeeId ?? 'all'}`;
+    const dedupeKey = `attendance:deductions:${this.cacheScope()}:${periodStart}:${periodEnd}:${employeeId ?? 'all'}`;
     return this.shortCache.getOrSetJson(dedupeKey, 30, async () => {
 
     // حساب عدد أيام العمل في الفترة (استثناء الجمعة فقط — السبت يوم عمل)
@@ -2110,6 +2337,13 @@ export class AttendanceService {
         employeeName: employee.name,
         presentDays,
         workedMinutes,
+        // Days with an IN punch but no OUT punch on the same date. Each such
+        // day contributes a FULL scheduled window (e.g. 480 min for 08:00–16:00)
+        // to earlyLeaveMinutes via computeMissingMinutesFromPunches, so a row
+        // can read "26 days present, 0 absent" while still losing most of its
+        // salary. Surfaced explicitly so the TimeTable "خروج مبكر / ناقص" cell
+        // can explain itself instead of looking like a wrong formula.
+        missingCheckoutDays: [...datesWithCheckIn].filter((d) => !lastOutByDate.has(d)).length,
         sickRemainderMinutes,
         sickLeaveDays: fullSickDays,
         absentDays,

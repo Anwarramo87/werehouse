@@ -9,6 +9,7 @@ import { Prisma, ProductionStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { CostingService } from '../common/wms/costing.service';
 import { DocumentNumberService } from '../common/wms/document-number.service';
+import { currentTenant } from '../common/tenant/tenant-context';
 import {
   CreateBOMDto,
   UpdateBOMDto,
@@ -253,8 +254,15 @@ export class ManufacturingService {
     });
     if (!bom) throw new NotFoundException('BOM غير موجودة أو غير نشطة');
 
+    // The number is sequenced per factory: passing null here would allocate
+    // under "tenantId IS NULL", while the order row below is stamped with the
+    // caller's factory. The next allocation then counts only the null rows and
+    // hands out a number the unique (tenantId, orderNumber) constraint rejects
+    // with a 500.
+    const tenantId = currentTenant()?.tenantId ?? null;
+
     const orderNumber = await this.prisma.$transaction(async (tx) => {
-      return this.docNum.next(tx, 'productionOrder', null);
+      return this.docNum.next(tx, 'productionOrder', tenantId);
     });
 
     const order = await this.prisma.productionOrder.create({
@@ -570,8 +578,11 @@ export class ManufacturingService {
         select: { batchTracked: true },
       });
       if (finishedProduct?.batchTracked) {
+        // Same reason as the order number above: the sequence is per factory,
+        // and a null tenant here would allocate a number the unique
+        // (tenantId, batchNumber) constraint rejects on the row itself.
         const batchNumber =
-          dto.batchNumber && dto.batchNumber.trim() ? dto.batchNumber.trim() : await this.docNum.next(tx, 'productBatch', null);
+          dto.batchNumber && dto.batchNumber.trim() ? dto.batchNumber.trim() : await this.docNum.next(tx, 'productBatch', currentTenant()?.tenantId ?? null);
         const created = await tx.productBatch.create({
           data: {
             sku: order.productSku,

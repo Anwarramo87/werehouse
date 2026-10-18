@@ -1,4 +1,5 @@
 import { BadRequestException, NotFoundException } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 
 const TEST_TENANT_ID = '11111111-1111-1111-1111-111111111111';
 
@@ -50,6 +51,9 @@ describe('InventoryService stock mutations', () => {
     $transaction: jest.fn(async (callback: (tx: unknown) => unknown) => callback(txMock)),
     product: {
       findFirst: productFindFirst,
+      findUnique: jest.fn(),
+      create: jest.fn(),
+      update: jest.fn(),
     },
     stockLevel: {
       findFirst: stockLevelFindFirst,
@@ -140,8 +144,11 @@ describe('InventoryService stock mutations', () => {
       expect(prismaMock.stockLevel.findFirst).not.toHaveBeenCalled();
       expect(result.stockLevel.reserved).toBe(6);
       expect(result.stockLevel.available).toBe(4);
-      expect(shortCacheMock.invalidatePrefix).toHaveBeenCalledWith('inventory:stats');
-      expect(shortCacheMock.invalidatePrefix).toHaveBeenCalledWith('inventory:alerts:low-stock');
+      // The prefixes are scoped to the caller factory: a global key would let
+      // one factory's write evict another's entries, and before the scoping fix
+      // it also let one factory read another's cached page.
+      expect(shortCacheMock.invalidatePrefix).toHaveBeenCalledWith(`inventory:stats:${TEST_TENANT_ID}`);
+      expect(shortCacheMock.invalidatePrefix).toHaveBeenCalledWith(`inventory:alerts:low-stock:${TEST_TENANT_ID}`);
     });
 
     it('throws NotFoundException when stock level does not exist', async () => {
@@ -276,6 +283,64 @@ describe('InventoryService stock mutations', () => {
           reason: 'sell',
         }),
       ).rejects.toBeInstanceOf(BadRequestException);
+    });
+  });
+
+  // Product create/edit are catalogue writes. They must never move stock on
+  // their own -- stock changes only through a goods receipt, a manufacturing
+  // completion, a sale, or a documented inventory count.
+  describe('product create/update never touch stock', () => {
+    it('createProduct writes only a product row', async () => {
+      prismaMock.product.findFirst.mockResolvedValue(null);
+      prismaMock.product.create.mockResolvedValue({
+        id: 'product-1',
+        sku: 'SKU-NEW',
+        name: 'صنف جديد',
+        costPrice: new Prisma.Decimal(0),
+        unitPrice: new Prisma.Decimal(0),
+        profitPercent: new Prisma.Decimal(0),
+      });
+
+      await service.createProduct({
+        sku: 'SKU-NEW',
+        name: 'صنف جديد',
+        category: 'خامات',
+        reorderLevel: 10,
+        unit: 'قطعة',
+      });
+
+      expect(prismaMock.product.create).toHaveBeenCalledTimes(1);
+      expect(prismaMock.$transaction).not.toHaveBeenCalled();
+      expect(prismaMock.$queryRaw).not.toHaveBeenCalled();
+      expect(txMock.$queryRaw).not.toHaveBeenCalled();
+      expect(movementCreate).not.toHaveBeenCalled();
+      expect(prismaMock.stockLevel.findFirst).not.toHaveBeenCalled();
+    });
+
+    it('updateProduct writes only a product row', async () => {
+      prismaMock.product.findUnique.mockResolvedValue({
+        id: 'product-1',
+        sku: 'SKU-NEW',
+        costPrice: new Prisma.Decimal(10),
+        unitPrice: new Prisma.Decimal(12),
+        profitPercent: new Prisma.Decimal(20),
+      });
+      prismaMock.product.update.mockResolvedValue({
+        id: 'product-1',
+        sku: 'SKU-NEW',
+        costPrice: new Prisma.Decimal(10),
+        unitPrice: new Prisma.Decimal(12),
+        profitPercent: new Prisma.Decimal(20),
+      });
+
+      await service.updateProduct('product-1', { name: 'اسم محدّث' });
+
+      expect(prismaMock.product.update).toHaveBeenCalledTimes(1);
+      expect(prismaMock.$transaction).not.toHaveBeenCalled();
+      expect(prismaMock.$queryRaw).not.toHaveBeenCalled();
+      expect(txMock.$queryRaw).not.toHaveBeenCalled();
+      expect(movementCreate).not.toHaveBeenCalled();
+      expect(prismaMock.stockLevel.findFirst).not.toHaveBeenCalled();
     });
   });
 });

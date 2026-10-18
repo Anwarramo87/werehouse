@@ -8,7 +8,9 @@ import { GroqClient } from './llm/groq.client';
 import { LLM_PROVIDER, LlmProvider } from './llm/llm.provider';
 import { HrTools } from './tools/hr.tools';
 import { InventoryTools } from './tools/inventory.tools';
+import { ManufacturingTools } from './tools/manufacturing.tools';
 import { NavigationTools } from './tools/navigation.tools';
+import { PurchasingTools } from './tools/purchasing.tools';
 import { SalesTools } from './tools/sales.tools';
 import { ToolRegistry } from './tools/registry';
 
@@ -59,6 +61,8 @@ export function selectProvider(
     HrTools,
     InventoryTools,
     SalesTools,
+    ManufacturingTools,
+    PurchasingTools,
     NavigationTools,
     AnthropicClient,
     GeminiClient,
