@@ -18,6 +18,7 @@ import { UpdateProductDto } from './dto/update-product.dto';
 import { StockMovementQueryDto } from './dto/stock-movement-query.dto';
 import { CreateWarehouseDto } from './dto/create-warehouse.dto';
 import { UpdateWarehouseDto } from './dto/update-warehouse.dto';
+import { WarehouseDetails } from './dto/warehouse-details.dto';
 
 @ApiTags('inventory')
 @ApiCookieAuth()
@@ -145,7 +146,20 @@ export class InventoryController {
     return this.inventoryService.stats();
   }
 
+  @Get('products/finished')
+  @RequiresPage('inventory.products.finished')
+  @Permissions('view_inventory')
+  listFinishedProducts(@Query() query: InventoryProductsQueryDto) {
+    return this.inventoryService.listProductsByProductType('FINISHED', query);
+  }
+
   // --------------------------------------------------------------- warehouses
+
+  @Get('warehouses/next-code')
+  @Permissions('view_inventory')
+  async getNextWarehouseCode() {
+    return this.inventoryService.getNextWarehouseCode();
+  }
 
   @Get('warehouses')
   @Permissions('view_inventory')
@@ -153,8 +167,14 @@ export class InventoryController {
     return this.inventoryService.listWarehouses();
   }
 
+  @Get('warehouses/:warehouseId')
+  @Permissions('view_inventory')
+  getWarehouse(@Param('warehouseId') warehouseId: string) {
+    return this.inventoryService.getWarehouseDetails(warehouseId);
+  }
+
   @Post('warehouses')
-  @RequiresPage('inventory.warehouses') // management actions are page-specific; the shared read stays under inventory.products
+  @RequiresPage('inventory.warehouses')
   @Permissions('edit_inventory')
   createWarehouse(
     @Body() dto: CreateWarehouseDto,

@@ -1,10 +1,10 @@
 import { IsIn, IsNotEmpty, IsNumber, IsOptional, IsString, MaxLength } from 'class-validator';
 
 export class CreateProductDto {
+  @IsOptional()
   @IsString()
-  @IsNotEmpty()
   @MaxLength(64)
-  sku: string;
+  sku?: string;
 
   @IsString()
   @IsNotEmpty()
@@ -48,4 +48,24 @@ export class CreateProductDto {
 
   @IsOptional()
   batchTracked?: boolean;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  size?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  feature?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(200)
+  barcode?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  description?: string;
 }

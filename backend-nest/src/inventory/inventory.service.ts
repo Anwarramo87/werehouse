@@ -196,8 +196,9 @@ export class InventoryService {
   async listProducts(query: InventoryProductsQueryDto) {
     return this.shortCache.getOrSetJson(this.productsCacheKey(query), 15, async () => {
       const { page, limit, skip } = resolvePagination(query, { defaultLimit: 50, maxLimit: 200 });
+      const tenantId = this.requireTenantId('Product list');
 
-      const where: Prisma.ProductWhereInput = {};
+      const where: Prisma.ProductWhereInput = { tenantId };
       if (query.category) where.category = query.category;
       if (query.status) where.status = query.status;
       if (query.productType) where.productType = query.productType as 'RAW_MATERIAL' | 'SEMI_FINISHED' | 'FINISHED';
@@ -236,6 +237,45 @@ export class InventoryService {
       });
 
       return paginatedResponse(enriched, page, limit, total);
+     });
+  }
+
+  async listProductsByProductType(productType: string, query: InventoryProductsQueryDto) {
+    return this.shortCache.getOrSetJson(this.productsCacheKey({ ...query, productType }), 15, async () => {
+      const { page, limit, skip } = resolvePagination(query, { defaultLimit: 50, maxLimit: 200 });
+      const tenantId = this.requireTenantId('Product list by type');
+
+      const where: Prisma.ProductWhereInput = { tenantId, productType: productType as 'RAW_MATERIAL' | 'SEMI_FINISHED' | 'FINISHED' };
+      if (query.category) where.category = query.category;
+      if (query.status) where.status = query.status;
+      if (query.search) {
+        where.OR = [
+          { sku: { contains: query.search, mode: 'insensitive' } },
+          { name: { contains: query.search, mode: 'insensitive' } },
+        ];
+      }
+
+      const orderBy: Prisma.ProductOrderByWithRelationInput = query.sortBy
+        ? { [query.sortBy]: query.sortDir ?? 'asc' }
+        : { createdAt: 'desc' };
+
+      const [products, total, stockMap] = await Promise.all([
+        this.prisma.product.findMany({ where, orderBy, skip, take: limit }),
+        this.prisma.product.count({ where }),
+        this.stockSummaryBySku(),
+      ]);
+
+      const enriched = products.map((product) => {
+        const stock = stockMap.get(product.sku) ?? { quantity: 0, reserved: 0, available: 0 };
+        return {
+          ...this.withMargin(product),
+          totalQuantity: stock.quantity,
+          totalReserved: stock.reserved,
+          totalAvailable: stock.available,
+        };
+      });
+
+      return paginatedResponse(enriched, page, limit, total);
     });
   }
 
@@ -258,8 +298,12 @@ export class InventoryService {
   }
 
   async createProduct(dto: CreateProductDto, actor?: Actor, req?: Request) {
-    const existing = await this.prisma.product.findFirst({ where: { sku: dto.sku } });
-    if (existing) throw new ConflictException('SKU already exists');
+    const tenantId = this.requireTenantId('Product create');
+    const sku = dto.sku ?? `SKU-${Date.now()}`;
+    if (dto.sku) {
+      const existing = await this.prisma.product.findFirst({ where: { tenantId, sku: dto.sku } });
+      if (existing) throw new ConflictException('SKU already exists');
+    }
 
     const costPrice = new Prisma.Decimal(dto.costPrice ?? 0);
     const pricing = this.resolvePricing(
@@ -270,7 +314,7 @@ export class InventoryService {
 
     const product = await this.prisma.product.create({
       data: {
-        sku: dto.sku,
+        sku,
         name: dto.name,
         category: dto.category,
         costPrice,
@@ -279,14 +323,19 @@ export class InventoryService {
         reorderLevel: dto.reorderLevel ?? 10,
         unit: dto.unit,
         photo: dto.photo,
-        productType: dto.productType ?? 'FINISHED',
+        productType: dto.productType ?? 'RAW_MATERIAL',
         batchTracked: dto.batchTracked ?? false,
+        size: dto.size,
+        feature: dto.feature,
+        barcode: dto.barcode,
+        description: dto.description,
         status: 'active',
+        tenantId,
       },
     });
 
     await this.invalidateInventoryCaches();
-    this.audit('inventory.product.create', 'product', product.id, { sku: product.sku, name: product.name }, actor, req);
+    this.audit('inventory.product.create', 'product', product.id, { sku, name: product.name }, actor, req);
 
     return { message: 'Product created successfully', product: this.withMargin(product) };
   }
@@ -810,12 +859,53 @@ export class InventoryService {
     });
   }
 
+  async getNextWarehouseCode() {
+    const tenantId = this.requireTenantId('Warehouse code');
+    const warehouses = await this.prisma.warehouse.findMany({
+      where: { tenantId },
+      select: { code: true },
+      orderBy: { code: 'asc' as const },
+    });
+    const prefix = 'WH-';
+    let maxNum = 0;
+    for (const wh of warehouses) {
+      const num = parseInt(wh.code.replace(prefix, ''), 10);
+      if (!isNaN(num) && num > maxNum) maxNum = num;
+    }
+    return `${prefix}${String(maxNum + 1).padStart(2, '0')}`;
+  }
+
+  async getWarehouseDetails(warehouseId: string) {
+    const tenantId = this.requireTenantId('Warehouse details');
+    const [warehouse, stockSummary] = await Promise.all([
+      this.prisma.warehouse.findFirst({
+        where: { id: warehouseId, tenantId },
+        select: { id: true, name: true, code: true, address: true, status: true, createdAt: true, updatedAt: true },
+      }),
+      this.prisma.stockLevel.aggregate({
+        where: { tenantId, location: warehouseId },
+        _sum: { quantity: true, available: true, reserved: true },
+        _count: { id: true },
+      }),
+    ]);
+    if (!warehouse) throw new NotFoundException('Warehouse not found');
+    return {
+      ...warehouse,
+      totalQuantity: stockSummary._sum.quantity ?? 0,
+      totalAvailable: stockSummary._sum.available ?? 0,
+      totalReserved: stockSummary._sum.reserved ?? 0,
+      stockRecordCount: stockSummary._count.id,
+    };
+  }
+
   async createWarehouse(dto: CreateWarehouseDto, actor?: Actor, req?: Request) {
-    const existing = await this.prisma.warehouse.findFirst({ where: { code: dto.code } });
+    const tenantId = this.requireTenantId('Warehouse create');
+    const code = dto.code ?? await this.getNextWarehouseCode();
+    const existing = await this.prisma.warehouse.findFirst({ where: { tenantId, code } });
     if (existing) throw new ConflictException('Warehouse code already exists');
 
     const warehouse = await this.prisma.warehouse.create({
-      data: { name: dto.name, code: dto.code, address: dto.address, status: 'active' },
+      data: { name: dto.name, code, address: dto.address, status: 'active', tenantId },
     });
 
     await this.invalidateInventoryCaches();
@@ -824,12 +914,36 @@ export class InventoryService {
     return { message: 'Warehouse created successfully', warehouse };
   }
 
+  async removeWarehouse(warehouseId: string, actor?: Actor, req?: Request) {
+    const tenantId = this.requireTenantId('Warehouse delete');
+    const warehouse = await this.prisma.warehouse.findFirst({
+      where: { id: warehouseId, tenantId },
+    });
+    if (!warehouse) throw new NotFoundException('Warehouse not found');
+
+    const stockSummary = await this.prisma.stockLevel.aggregate({
+      where: { tenantId, location: warehouseId },
+      _sum: { quantity: true },
+    });
+    const totalQuantity = stockSummary._sum.quantity ?? 0;
+    if (totalQuantity > 0) {
+      throw new BadRequestException(`Cannot delete warehouse: total quantity is ${totalQuantity}. Remove all stock first.`);
+    }
+
+    await this.prisma.warehouse.delete({ where: { id: warehouseId } });
+    await this.invalidateInventoryCaches();
+    this.audit('inventory.warehouse.delete', 'warehouse', warehouseId, { name: warehouse.name }, actor, req);
+
+    return { message: 'Warehouse deleted successfully' };
+  }
+
   async updateWarehouse(warehouseId: string, dto: UpdateWarehouseDto, actor?: Actor, req?: Request) {
-    const existing = await this.prisma.warehouse.findUnique({ where: { id: warehouseId } });
+    const tenantId = this.requireTenantId('Warehouse update');
+    const existing = await this.prisma.warehouse.findFirst({ where: { id: warehouseId, tenantId } });
     if (!existing) throw new NotFoundException('Warehouse not found');
 
     if (dto.code && dto.code !== existing.code) {
-      const collision = await this.prisma.warehouse.findFirst({ where: { code: dto.code } });
+      const collision = await this.prisma.warehouse.findFirst({ where: { tenantId, code: dto.code } });
       if (collision) throw new ConflictException('Warehouse code already exists');
     }
 
@@ -847,16 +961,5 @@ export class InventoryService {
     this.audit('inventory.warehouse.update', 'warehouse', warehouse.id, { name: warehouse.name }, actor, req);
 
     return { message: 'Warehouse updated successfully', warehouse };
-  }
-
-  async removeWarehouse(warehouseId: string, actor?: Actor, req?: Request) {
-    const warehouse = await this.prisma.warehouse.findUnique({ where: { id: warehouseId } });
-    if (!warehouse) throw new NotFoundException('Warehouse not found');
-
-    await this.prisma.warehouse.delete({ where: { id: warehouseId } });
-    await this.invalidateInventoryCaches();
-    this.audit('inventory.warehouse.delete', 'warehouse', warehouseId, { name: warehouse.name }, actor, req);
-
-    return { message: 'Warehouse deleted successfully' };
   }
 }

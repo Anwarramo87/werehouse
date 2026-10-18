@@ -6,10 +6,10 @@ export class CreateWarehouseDto {
   @MaxLength(200)
   name: string;
 
+  @IsOptional()
   @IsString()
-  @IsNotEmpty()
   @MaxLength(32)
-  code: string;
+  code?: string;
 
   @IsOptional()
   @IsString()

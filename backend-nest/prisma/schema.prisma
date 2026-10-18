@@ -637,6 +637,12 @@ model Product {
   /// نوع المنتج: مادة خام، منتج نهائي، أو نصف مصنّع
   productType   ProductType @default(FINISHED)
 
+  /// حجم المادة الخام (مثال: 10x20 سم، 50kg)
+  size        String?
+
+  /// الخصائص أو اللون
+  feature     String?
+
   /// وصف المنتج
   description   String?
 
@@ -707,6 +713,13 @@ enum StockMovementType {
   ADJUSTMENT
   RESERVE
   RELEASE
+  PURCHASE_RECEIPT
+  PRODUCTION_OUTPUT
+  RETURN_TO_STOCK
+  SALES_SHIPMENT
+  PRODUCTION_CONSUMPTION
+  DAMAGE_LOSS
+  WAREHOUSE_TRANSFER
 }
 
 model StockMovement {
@@ -715,7 +728,7 @@ model StockMovement {
   tenant    Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   sku           String?
   type          StockMovementType
-  quantity      Int // signed delta: +IN / -OUT / +-ADJUSTMENT / +RESERVE / -RELEASE
+  quantity      Int // signed delta: +IN/+PURCHASE_RECEIPT/+PRODUCTION_OUTPUT/+RETURN_TO_STOCK / -OUT/-SALES_SHIPMENT/-PRODUCTION_CONSUMPTION/-DAMAGE_LOSS / +-TRANSFER
   location      String
   reason        String?
   referenceType String? // sales_order | purchase_order | manual
@@ -961,7 +974,7 @@ model SalesOrderItem {
   tenantId  String?  @db.Uuid
   tenant    Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   salesOrderId  String     @db.Uuid
-  sku           String
+  sku          String
   quantity      Int
   unitPrice     Decimal    @db.Decimal(12, 2)
 
