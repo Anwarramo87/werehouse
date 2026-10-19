@@ -79,11 +79,9 @@ async function main() {
   const deadline = Date.now() + 60_000;
   let ready = false;
   while (Date.now() < deadline) {
-    const r = spawnSync(
-      'docker',
-      ['exec', 'warehouse_postgres', 'pg_isready', '-U', pgUser, '-d', pgDb],
-      { stdio: 'pipe' },
-    );
+    const r = sh('docker', ['exec', 'warehouse_postgres', 'pg_isready', '-U', pgUser, '-d', pgDb], {
+      capture: true,
+    });
     if (r.status === 0) {
       ready = true;
       break;

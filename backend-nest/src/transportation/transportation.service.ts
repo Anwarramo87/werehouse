@@ -602,19 +602,9 @@ export class TransportationService {
     }
 
     const { passenger, employeeTerminationDate } = entry;
-    // End date for proration: subscription termination, or the employee's own
-    // termination when they resigned this month but the subscription record
-    // was left active.
-    const effectiveTerminationDate = passenger.terminationDate ?? employeeTerminationDate;
-
-    const activeWorkingDays = this.getActiveWorkingDays(
-      passenger.subscriptionDate,
-      targetMonth,
-      effectiveTerminationDate,
-    );
-
-    const finalDeduction = (baseShare / 26) * activeWorkingDays;
-    return Math.round(finalDeduction * 100) / 100;
+    // لا تجزئة: كل مشترك يدفع الحصة الكاملة بالتساوي سواء داوم أو استقال أو غاب.
+    // الالتزام بالاشتراك شهري وثابت — لا يعتمد على الحضور.
+    return Math.round(baseShare * 100) / 100;
   }
 
   /**
@@ -674,21 +664,8 @@ export class TransportationService {
       if (!requestedSet.has(empId)) continue;
 
       const { passenger, employeeTerminationDate } = entry;
-      // During a provisional settlement (termination preview) the passenger is
-      // still active with terminationDate=null, so we must use the preview's
-      // terminationDate to prorate correctly for the employee's last work day.
-      const effectiveTerminationDate =
-        options?.isProvisional && options?.terminationDate
-          ? options.terminationDate
-          : (passenger.terminationDate ?? employeeTerminationDate);
-
-      const activeWorkingDays = this.getActiveWorkingDays(
-        passenger.subscriptionDate,
-        targetMonth,
-        effectiveTerminationDate,
-      );
-
-      const finalDeduction = (baseShare / 26) * activeWorkingDays;
+      // لا تجزئة: الحصة الكاملة بالتساوي لكل مشترك بغض النظر عن الحضور أو الاستقالة.
+      const finalDeduction = baseShare;
       if (finalDeduction > 0) {
         result.set(empId, Math.round(finalDeduction * 100) / 100);
       }

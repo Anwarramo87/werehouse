@@ -611,6 +611,9 @@ export class AuthService {
 
   async ensureAdminBootstrap() {
     return runUnscoped('bootstrap-admin', async () => {
+    if ((await this.prisma.user.count()) > 0) {
+      return null;
+    }
     const defaultTenant = await this.ensureDefaultTenant();
     const existingAdminRole = await this.prisma.role.findUnique({ where: { name: 'admin' } });
     const adminRole = existingAdminRole

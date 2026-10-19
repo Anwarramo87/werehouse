@@ -17,6 +17,11 @@ export class InventoryProductsQueryDto extends PaginationQueryDto {
   @MaxLength(120)
   search?: string;
 
+  @IsOptional()
+  @IsString()
+  @MaxLength(120)
+  location?: string;
+
   /**
    * Filter by product type — RAW_MATERIAL | SEMI_FINISHED | FINISHED
    * Used by the manufacturing module to list only raw materials or finished products.

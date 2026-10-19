@@ -99,6 +99,8 @@ export class InventoryService {
       search = '',
       category = '',
       status = '',
+      productType = '',
+      location = '',
       sortBy = '',
       sortDir = '',
     } = query;
@@ -110,7 +112,7 @@ export class InventoryService {
     // it: without the factory in the key, factory B's request hits factory A's
     // cached page and the narrowing never runs. The two factories then see each
     // other's inventory.
-    return `inventory:products:${this.cacheScope()}:${page}:${limit}:${search}:${category}:${status}:${sortBy}:${sortDir}`;
+    return `inventory:products:${this.cacheScope()}:${page}:${limit}:${search}:${category}:${status}:${productType}:${location}:${sortBy}:${sortDir}`;
   }
 
   private movementsCacheKey(query: StockMovementQueryDto) {
@@ -134,9 +136,10 @@ export class InventoryService {
     await this.invalidateInventoryCaches();
   }
 
-  private async stockSummaryBySku() {
+  private async stockSummaryBySku(location?: string) {
     const grouped = await this.prisma.stockLevel.groupBy({
       by: ['sku'],
+      ...(location ? { where: { location } } : {}),
       _sum: { quantity: true, reserved: true, available: true },
     });
     return new Map(
@@ -223,7 +226,7 @@ export class InventoryService {
           take: limit,
         }),
         this.prisma.product.count({ where }),
-        this.stockSummaryBySku(),
+        this.stockSummaryBySku(query.location),
       ]);
 
       const enriched = products.map((product) => {
@@ -262,7 +265,7 @@ export class InventoryService {
       const [products, total, stockMap] = await Promise.all([
         this.prisma.product.findMany({ where, orderBy, skip, take: limit }),
         this.prisma.product.count({ where }),
-        this.stockSummaryBySku(),
+        this.stockSummaryBySku(query.location),
       ]);
 
       const enriched = products.map((product) => {

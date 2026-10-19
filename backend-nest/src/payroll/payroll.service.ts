@@ -138,11 +138,15 @@ export class PayrollService {
   }
 
   private roundUpToNearestThousand(value: Prisma.Decimal) {
-    const numeric = value.toNumber();
-    if (!Number.isFinite(numeric) || numeric === 0) {
+    if (value.isZero()) {
       return new Prisma.Decimal(0);
     }
-    return new Prisma.Decimal(Math.ceil(numeric / PAYROLL_ROUNDING_UNIT) * PAYROLL_ROUNDING_UNIT);
+    // تمركز بواسطة Decimal (بلا أخطاء float): تقريب الراتب لأقرب ألف للأعلى
+    return value
+      .toDecimalPlaces(2, Prisma.Decimal.ROUND_HALF_UP)
+      .div(PAYROLL_ROUNDING_UNIT)
+      .toDecimalPlaces(0, Prisma.Decimal.ROUND_CEIL)
+      .mul(PAYROLL_ROUNDING_UNIT);
   }
 
   private resolveAttendanceValue(
@@ -365,8 +369,8 @@ export class PayrollService {
    * Multipliers strictly applied:
    *   - Morning Delay penalty:  1.5× minuteWage per late minute
    *   - Early Leave penalty:    1.0× minuteWage per early-leave minute
-   *   - Normal Overtime bonus:  1.5× minuteWage per weekday overtime minute
-   *   - Weekend Overtime bonus: 2.0× dailyWage per Friday overtime day
+   *   - Normal Overtime bonus:  1.0× minuteWage per weekday overtime minute
+   *   - Weekend Overtime bonus: 2.0× dailyWage per Friday/Saturday overtime day
    *
    * Returns the net earned salary (prorated base + overtime bonuses − attendance penalties).
    */
@@ -642,7 +646,7 @@ export class PayrollService {
     }
     const presentDaysRaw = uniqueInDates.filter((dateStr) => {
       const dow = new Date(dateStr).getDay();
-      if (dow === 5) return false;            // Friday
+      if (dow === 5 || dow === 6) return false; // Friday + Saturday
       if (approvedLeaveDateSet.has(dateStr)) return false; // on approved leave
       return true;
     }).length;
@@ -709,8 +713,8 @@ export class PayrollService {
     for (const [dateStr, outTs] of lastOutByDate) {
       const dow = new Date(`${dateStr}T00:00:00Z`).getUTCDay();
       const localOutMin = toLocalMinutesFromTimestamp(outTs);
-      if (dow === 5) {
-        // الجمعة: كل دقيقة فعلية من أول IN حتى آخر OUT تُحسب بـ 1.5×
+      if (dow === 5 || dow === 6) {
+        // الجمعة والسبت: كل دقيقة فعلية من أول IN حتى آخر OUT تُحسب بـ 2×
         const firstInTs = firstInByDate.get(dateStr);
         if (firstInTs) {
           const localInMin = toLocalMinutesFromTimestamp(firstInTs);
@@ -794,7 +798,7 @@ export class PayrollService {
     // ── Earned salary (formula matches frontend calcEarnedSalaryHourly) ─────
     // workedPay = minuteRate × contractualWorkedMinutes
     // + sickRemainderPay, fullSickPay, paidLeavePay
-    // + overtime (1.5×), weekend OT (1.5×)
+    // + overtime (1.0×), weekend OT (2.0×)
     // − late deduction (1.5×), early-leave deduction (1.0×)
     //
     // Manual overrides (from زر تعديل المجاميع) replace the automatic
@@ -827,9 +831,9 @@ export class PayrollService {
     const earnedBase = workedPay.plus(sickRemainderPay).plus(fullSickPay).plus(paidLeavePay);
 
     const overtimePay = minuteWage
-      .times(new Prisma.Decimal(1.5))
+      .times(MULTIPLIER_OVERTIME)
       .times(this.toDecimal(effectiveWeekdayOvertime));
-    // الجمعة: كل دقيقة فعلية × 1.5
+    // الجمعة والسبت: كل دقيقة فعلية × WEEKEND_MULTIPLIER (2.0×)
     const weekendOvertimePay = minuteWage
       .times(new Prisma.Decimal(WEEKEND_MULTIPLIER))
       .times(this.toDecimal(effectiveWeekendOvertime));

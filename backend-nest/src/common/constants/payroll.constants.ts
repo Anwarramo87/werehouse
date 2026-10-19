@@ -12,14 +12,14 @@ export const WORK_HOURS_PER_DAY = 8;
 /** عدد دقائق الساعة */
 export const MINUTES_PER_HOUR = 60;
 
-/** معامل تضخيم الإضافي والتأخير (1.5×) */
+/** معامل الإضافي العادي: كل دقيقة إضافي تُدفع بمعدل دقيقة ونصف (1.5×) — حسب كشف الرواتب */
 export const OVERTIME_MULTIPLIER = 1.5;
 
 /** معامل خصم الإجازة المرضية (50% من اليوم) */
 export const SICK_LEAVE_DEDUCTION_RATIO = 0.5;
 
-/** معامل أجر الجمعة: كل دقيقة عمل فعلية تُدفع بمعدل دقيقة ونصف. */
-export const WEEKEND_MULTIPLIER = 1.5;
+/** معامل أجر الجمعة: كل دقيقة عمل فعلية تُدفع بمعدل دقيقتين (2.0×) */
+export const WEEKEND_MULTIPLIER = 2.0;
 
 /** نسبة بدل المسؤولية من فرق الراتب (50%) */
 export const RESPONSIBILITY_ALLOWANCE_RATIO = 0.50;
