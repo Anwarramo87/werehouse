@@ -12,6 +12,7 @@ import { Client, ClientConfig, Pool } from 'pg';
 import { MetricsService } from '../common/metrics/metrics.service';
 import { tenantExtension } from '../common/tenant/tenant-extension';
 import { isTenantScoped } from '../common/tenant/tenant-models';
+import { deletionTombstoneExtension } from '../common/prisma/deletion-tombstones';
 
 // Runs the session-level statement timeout BEFORE the pool considers a new
 // connection ready for use. Doing it in the pool's `connect` event leaves the
@@ -124,7 +125,18 @@ export class PrismaService
     // the unextended client and would silently skip every tenant filter).
     // Everything else -- lifecycle hooks, pool helpers, `role`/`tenant`, raw
     // queries -- stays on `this`.
-    const scoped = this.$extends(tenantExtension()) as unknown as Record<string, unknown>;
+    //
+    // The deletion tombstones are layered on top so that deletes made from
+    // either the factory or the cloud are replayable by the offline sync
+    // worker. The callback writes through `this` (the unextended client), which
+    // is what stops the hook from observing its own inserts.
+    const scoped = this.$extends(tenantExtension()).$extends(
+      deletionTombstoneExtension((model, rowIds, node) =>
+        this.syncDeletion
+          .createMany({ data: rowIds.map((rowId) => ({ model, rowId, node })) })
+          .then(() => undefined),
+      ),
+    ) as unknown as Record<string, unknown>;
     return new Proxy(this, {
       get(target, prop, receiver) {
         if (typeof prop === 'string' && (prop === '$transaction' || isTenantScoped(prop))) {

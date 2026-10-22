@@ -21,7 +21,15 @@ import { CreateProductDto } from '../inventory/dto/create-product.dto';
 @ApiCookieAuth()
 @Controller('purchasing')
 @UseGuards(JwtAuthGuard, SubscriptionGuard, PermissionsGuard, PageAccessGuard)
-@RequiresPage('purchasing.orders')
+/**
+ * The purchasing area.
+ *
+ * Two page keys, because the area is reachable by two routes: `/purchasing`
+ * (فاتورة شراء) and `/purchasing/invoices` (فواتير الشراء). Holding EITHER
+ * grants access — a factory sold the legacy `purchasing.orders` page keeps
+ * working, and one sold `purchasing.invoices` gains it.
+ */
+@RequiresPage(['purchasing.orders', 'purchasing.invoices'])
 export class PurchasingController {
   constructor(private readonly purchasingService: PurchasingService) {}
 

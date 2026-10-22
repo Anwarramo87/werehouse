@@ -1,5 +1,14 @@
 import { Type } from 'class-transformer';
-import { IsArray, IsDateString, IsOptional, IsString, MaxLength, ValidateNested } from 'class-validator';
+import {
+  IsArray,
+  IsDateString,
+  IsNumber,
+  IsOptional,
+  IsString,
+  MaxLength,
+  Min,
+  ValidateNested,
+} from 'class-validator';
 import { PurchaseInvoiceItemDto } from './create-purchase-invoice.dto';
 
 export class UpdatePurchaseInvoiceDto {
@@ -15,6 +24,23 @@ export class UpdatePurchaseInvoiceDto {
   @IsOptional()
   @IsDateString()
   dueDate?: string;
+
+  /** العملة الأصلية للفاتورة */
+  @IsOptional()
+  @IsString()
+  @MaxLength(8)
+  currency?: string;
+
+  /** سعر الصرف المعتمد — مطلوب عندما تكون العملة أصلاً غير الليرة */
+  @IsOptional()
+  @IsNumber()
+  @Min(0.0001)
+  exchangeRate?: number;
+
+  /** تاريخ سعر الصرف المعتمد */
+  @IsOptional()
+  @IsDateString()
+  exchangeRateDate?: string;
 
   @IsOptional()
   @IsString()

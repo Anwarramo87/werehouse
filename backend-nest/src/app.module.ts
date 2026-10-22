@@ -49,6 +49,7 @@ import { MetricsModule } from './common/metrics/metrics.module';
 import { EntitlementsModule } from './common/entitlements/entitlements.module';
 import { FactoryScopeInterceptor } from './common/tenant/factory-scope.interceptor';
 import { AuditLogModule } from './audit/audit-log.module';
+import { SyncModule } from './sync/sync.module';
 // --- WMS extension ---
 import { WmsCommonModule } from './common/wms/wms-common.module';
 import { BatchesModule } from './batches/batches.module';
@@ -66,6 +67,7 @@ import { WmsSetupModule } from './wms-setup/wms-setup.module';
 import { SettingsModule } from './settings/settings.module';
 import { RepresentativesModule } from './representatives/representatives.module';
 import { CustomizationModule } from './customization/customization.module';
+import { PermissionsModule } from './common/permissions/permissions.module';
 
 function parseBooleanEnv(value: string | undefined): boolean | undefined {
   if (value === undefined) {
@@ -233,6 +235,11 @@ const queueInfraModules = queuesEnabled
           then: Joi.boolean().default(true),
           otherwise: Joi.boolean().default(false),
         }),
+        // Offline replication (factory <-> cloud). Off unless explicitly enabled.
+        SYNC_ENABLED: Joi.boolean().default(false),
+        SYNC_NODE_NAME: Joi.string().default('local'),
+        SYNC_INTERVAL_MS: Joi.number().min(15_000).default(60_000),
+        CLOUD_DATABASE_URL: Joi.string().allow('').default(''),
         CACHE_ENABLED: Joi.when('NODE_ENV', {
           is: 'test',
           then: Joi.boolean().default(false),
@@ -313,9 +320,11 @@ const queueInfraModules = queuesEnabled
     DepartmentsModule,
     LeavesModule,
     TrashModule,
+    SyncModule,
     BackupModule,
     NotificationsModule,
     AuditLogModule,
+    PermissionsModule,
   ],
   providers: [
     {

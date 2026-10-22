@@ -46,6 +46,19 @@ export class CreateBusDto {
   @Type(() => Number)
   totalCost: number;
 
+  /**
+   * التكلفة اليومية (ل.س) — الافتراضي 200,000.
+   *
+   * هذه تكلفة الباص ليوم واحد. تُستخدم في احتساب التكلفة الشهرية
+   * (تكلفة يومية × أيام العمل × عدد الأيام التي اشترك فيها فعلاً) وتُوزَّع
+   * بالتساوي على المشتركين، مع حسم الشركة أولاً.
+   */
+  @IsOptional()
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0)
+  @Type(() => Number)
+  dailyCost?: number;
+
   /** حسم الشركة بالنسبة المئوية (0-100) */
   @IsNumber({ maxDecimalPlaces: 2 })
   @Min(0)

@@ -10,19 +10,181 @@ import { PrismaService } from '../prisma/prisma.service';
 import { CreateBusDto } from './dto/create-bus.dto';
 import { UpdateBusDto } from './dto/update-bus.dto';
 import { AddPassengerDto } from './dto/add-passenger.dto';
+import { RecordBusAttendanceDto } from './dto/bus-attendance.dto';
+import { TransactionAuditService } from '../common/audit/transaction-audit.service';
+import { currentTenant } from '../common/tenant/tenant-context';
 import { randomBytes } from 'crypto';
+
+/**
+ * The default daily cost of one bus, in Syrian pounds.
+ *
+ * A factory can change it per bus (the `dailyCost` column) and can change the
+ * fallback for buses that never had one set, from the transportation page.
+ */
+export const DEFAULT_BUS_DAILY_COST = 200000;
+
+/** Working days used to turn a daily cost into a monthly one. */
+export const DEFAULT_WORKING_DAYS_PER_MONTH = 26;
+
+/**
+ * The per-factory transportation settings.
+ *
+ * They live in `SystemSettings.settings` (a JSON column) rather than in a
+ * table of their own: there are two of them, they are read on one page, and
+ * the settings table is already the place the product keeps "the factory's
+ * knobs". A missing key means "use the default", so a factory that never
+ * touched the page behaves exactly as it did before.
+ */
+export interface TransportationSettings {
+  defaultDailyCost: number;
+  workingDaysPerMonth: number;
+}
 
 @Injectable()
 export class TransportationService {
   private readonly logger = new Logger(TransportationService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly audit: TransactionAuditService,
+  ) {}
 
   private generateBusId(): string {
     return `BUS${randomBytes(3).toString('hex').toUpperCase()}`;
   }
 
-  private async hasApprovedPayrollForCurrentMonth(): Promise<boolean> {
+  // ─── settings ─────────────────────────────────────────────────────────────
+
+  /** The factory's transportation settings, with the defaults filled in. */
+  async getSettings(): Promise<TransportationSettings> {
+    const row = await this.prisma.systemSettings.findFirst({
+      select: { settings: true },
+    });
+
+    const raw = (row?.settings ?? {}) as Record<string, unknown>;
+    const transportation = (raw.transportation ?? {}) as Record<string, unknown>;
+
+    const dailyCost = Number(transportation.defaultDailyCost);
+    const workingDays = Number(transportation.workingDaysPerMonth);
+
+    return {
+      defaultDailyCost:
+        Number.isFinite(dailyCost) && dailyCost >= 0
+          ? dailyCost
+          : DEFAULT_BUS_DAILY_COST,
+      workingDaysPerMonth:
+        Number.isFinite(workingDays) && workingDays >= 1 && workingDays <= 31
+          ? Math.trunc(workingDays)
+          : DEFAULT_WORKING_DAYS_PER_MONTH,
+    };
+  }
+
+  /** Writes the factory's transportation settings, keeping the other knobs. */
+  async updateSettings(
+    input: { defaultDailyCost?: number; workingDaysPerMonth?: number },
+    actorId?: string,
+  ) {
+    const current = await this.getSettings();
+    const next: TransportationSettings = {
+      defaultDailyCost:
+        input.defaultDailyCost !== undefined
+          ? input.defaultDailyCost
+          : current.defaultDailyCost,
+      workingDaysPerMonth:
+        input.workingDaysPerMonth !== undefined
+          ? input.workingDaysPerMonth
+          : current.workingDaysPerMonth,
+    };
+
+    const row = await this.prisma.systemSettings.findFirst({
+      select: { id: true, settings: true },
+    });
+
+    const raw = (row?.settings ?? {}) as Record<string, unknown>;
+    const merged = {
+      ...raw,
+      transportation: { ...next },
+    } as unknown as Prisma.InputJsonValue;
+
+    if (row) {
+      await this.prisma.systemSettings.update({
+        where: { id: row.id },
+        data: { settings: merged },
+      });
+    } else {
+      // A factory that never opened the settings page has no row yet. The
+      // row is per-tenant, so it needs the caller's factory explicitly.
+      const tenantId = currentTenant()?.tenantId;
+      if (!tenantId) {
+        throw new BadRequestException(
+          'لا يمكن حفظ إعدادات النقل بدون مصنع محدد',
+        );
+      }
+      await this.prisma.systemSettings.create({
+        data: { tenantId, settings: merged },
+      });
+    }
+
+    await this.audit.record({
+      entityType: 'transportation_settings',
+      entityId: 'factory',
+      action: 'update',
+      oldValues: current,
+      newValues: next,
+      actorId,
+    });
+
+    return next;
+  }
+
+  // ─── monthly cost model ───────────────────────────────────────────────────
+
+  /**
+   * The monthly cost of one bus, from its own daily cost.
+   *
+   * ── The model ─────────────────────────────────────────────────────────────
+   *   monthlyCost = dailyCost × workingDays
+   *
+   * The bus's `totalCost` column is what the factory entered as "the cost of
+   * this bus"; it is kept and reported, but the MONTHLY figure that the
+   * deduction is computed from is derived from the daily cost, because the
+   * brief defines the transport cost as a daily figure (200,000 per day)
+   * that multiplies by the working days of the month. When a bus has no
+   * explicit `dailyCost`, the factory default applies.
+   *
+   * ── Attendance does NOT change the cost ──────────────────────────────────
+   * The number of days the bus actually ran is recorded and reported, but it
+   * does not reduce the monthly cost. The subscription is a monthly
+   * commitment: a bus that did not run on some days still has to be paid for,
+   * and the cost is spread equally across the people who subscribed. This is
+   * what the brief asks for ("تثبيت الحصة الشهرية لكل موظف ... حتى عند غياب
+   * الباص في بعض الأيام"), and it is why the deduction no longer prorates by
+   * days worked.
+   */
+  private monthlyCostFor(bus: { dailyCost: Prisma.Decimal | null }, workingDays: number): number {
+    const daily = Number(bus.dailyCost ?? 0);
+    if (daily <= 0) return 0;
+    return this.round2(daily * workingDays);
+  }
+
+  /** The net cost after the company deduction — what the employees share. */
+  private netCostFor(
+    bus: { dailyCost: Prisma.Decimal | null; companyDeductionPct: Prisma.Decimal },
+    workingDays: number,
+  ): { monthlyCost: number; companyDeduction: number; netCost: number } {
+    const monthlyCost = this.monthlyCostFor(bus, workingDays);
+    const pct = Number(bus.companyDeductionPct ?? 0);
+    const companyDeduction = this.round2(monthlyCost * (pct / 100));
+    return {
+      monthlyCost,
+      companyDeduction,
+      netCost: this.round2(monthlyCost - companyDeduction),
+    };
+  }
+
+  // ─── buses ────────────────────────────────────────────────────────────────
+
+  async hasApprovedPayrollForCurrentMonth(): Promise<boolean> {
     const now = new Date();
     const monthStart = new Date(Date.UTC(now.getFullYear(), now.getMonth(), 1));
     const monthEnd = new Date(Date.UTC(now.getFullYear(), now.getMonth() + 1, 0));
@@ -39,24 +201,32 @@ export class TransportationService {
     return !!approvedRun;
   }
 
-  // ─── Buses ────────────────────────────────────────────────────────────────
-
+  /**
+   * Every bus with the numbers the summary card shows.
+   *
+   * ── Separate accounts, never merged ──────────────────────────────────────
+   * Each bus reports its own cost, its own company contribution and its own
+   * share per employee. Nothing here sums across buses: the fleet totals are
+   * computed in `summary()`, and even there each bus keeps its own line so
+   * the card can drill into it. A factory running a Damascus bus and a rural
+   * bus must never see a blended figure that hides which bus owes what.
+   */
   async listBuses() {
+    const settings = await this.getSettings();
+
     const buses = await this.prisma.bus.findMany({
       orderBy: { createdAt: 'desc' },
       include: {
         passengers: {
-          // يشمل النشطين + من انسحب هذا الشهر فقط (مطابق لمنطق الرواتب)
-          where: {
-            OR: [{ status: 'active' }],
-          },
+          where: { status: 'active' },
           select: { employeeId: true },
         },
       },
     });
 
-    // التحقق من حالة الموظف نفسه: الموظف المستقيل الذي ما زال سجل اشتراكه
-    // 'active' لا يُعد مشتركاً فعلياً — حتى تتطابق الواجهة مع حسابات الرواتب.
+    // The employee-level check: a resigned employee whose subscription record
+    // is still 'active' is not a subscriber. Without this the card would
+    // show a passenger count the payroll does not charge.
     const passengerEmployeeIds = [
       ...new Set(buses.flatMap((bus) => bus.passengers.map((p) => p.employeeId))),
     ];
@@ -70,22 +240,40 @@ export class TransportationService {
       employees.filter((e) => e.status === 'active').map((e) => e.employeeId),
     );
 
+    // The per-bus share needs the fleet-wide subscriber count, because the
+    // cost of every bus is shared equally across everyone who rides any bus.
+    const subscribers = await this.eligibleSubscribers(new Date());
+    const subscriberCount = subscribers.size;
+
     return buses.map((bus) => {
       const activePassengers = bus.passengers.filter((p) =>
         activeEmployeeIds.has(p.employeeId),
       ).length;
 
+      const costs = this.netCostFor(bus, settings.workingDaysPerMonth);
+      const perEmployeeShare =
+        subscriberCount > 0 ? this.round2(costs.netCost / subscriberCount) : 0;
+
       return {
-        ...bus,
-        passengers: undefined,
+        id: bus.id,
+        busId: bus.busId,
+        route: bus.route,
+        plateNumber: bus.plateNumber,
+        driverName: bus.driverName,
+        driverPhone: bus.driverPhone,
+        status: bus.status,
+        capacity: bus.capacity,
+        totalCost: Number(bus.totalCost),
+        dailyCost: Number(bus.dailyCost ?? settings.defaultDailyCost),
+        companyDeductionPct: Number(bus.companyDeductionPct),
+        employeeDeductionPct: Number(bus.employeeDeductionPct),
         activePassengers,
-        // حساب حسم الشركة كمبلغ
-        companyDeductionAmount: Number(
-          new Prisma.Decimal(bus.totalCost.toString())
-            .times(new Prisma.Decimal(bus.companyDeductionPct.toString()))
-            .div(100)
-            .toFixed(2),
-        ),
+        monthlyCost: costs.monthlyCost,
+        companyDeduction: costs.companyDeduction,
+        netCost: costs.netCost,
+        perEmployeeShare,
+        createdAt: bus.createdAt,
+        updatedAt: bus.updatedAt,
       };
     });
   }
@@ -101,30 +289,192 @@ export class TransportationService {
         },
       },
     });
-
     if (!bus) throw new NotFoundException(`Bus not found: ${busId}`);
 
+    const settings = await this.getSettings();
+    const subscribers = await this.eligibleSubscribers(new Date());
+    const subscriberCount = subscribers.size;
+    const costs = this.netCostFor(bus, settings.workingDaysPerMonth);
+
     return {
-      ...bus,
-      // عرض المشتركين الفعليين فقط: الموظف المستقيل بسجل اشتراك قديم لا يُعرض
-      // كمشترك — حتى تتطابق أرقام النافذة مع الواجهة الرئيسية وحسابات الرواتب.
+      id: bus.id,
+      busId: bus.busId,
+      route: bus.route,
+      plateNumber: bus.plateNumber,
+      driverName: bus.driverName,
+      driverPhone: bus.driverPhone,
+      status: bus.status,
+      capacity: bus.capacity,
+      totalCost: Number(bus.totalCost),
+      dailyCost: Number(bus.dailyCost ?? settings.defaultDailyCost),
+      companyDeductionPct: Number(bus.companyDeductionPct),
+      employeeDeductionPct: Number(bus.employeeDeductionPct),
+      monthlyCost: costs.monthlyCost,
+      companyDeduction: costs.companyDeduction,
+      netCost: costs.netCost,
+      perEmployeeShare:
+        subscriberCount > 0 ? this.round2(costs.netCost / subscriberCount) : 0,
       passengers: bus.passengers
         .filter((p) => p.employee?.status === 'active')
         .map((p) => ({
-          ...p,
+          id: p.id,
+          employeeId: p.employeeId,
           name: p.employee?.name || p.name,
+          subscriptionDate: p.subscriptionDate,
+          terminationDate: p.terminationDate,
+          status: p.status,
         })),
-      companyDeductionAmount: Number(
-        new Prisma.Decimal(bus.totalCost.toString())
-          .times(new Prisma.Decimal(bus.companyDeductionPct.toString()))
-          .div(100)
-          .toFixed(2),
-      ),
+    };
+  }
+
+  /**
+   * The detail window behind the summary card.
+   *
+   * Everything the card summarises, in one payload: the cost breakdown, the
+   * number of beneficiaries, the individual share, the company's
+   * contribution, the deductions, and the daily attendance record.
+   */
+  async getBusDetail(busId: string, query: { from?: string; to?: string } = {}) {
+    const bus = await this.prisma.bus.findFirst({
+      where: { OR: [{ id: busId }, { busId }] },
+      include: {
+        passengers: {
+          orderBy: { subscriptionDate: 'asc' },
+          include: { employee: { select: { name: true, status: true } } },
+        },
+      },
+    });
+    if (!bus) throw new NotFoundException(`Bus not found: ${busId}`);
+
+    const settings = await this.getSettings();
+    const subscribers = await this.eligibleSubscribers(new Date());
+    const subscriberCount = subscribers.size;
+    const costs = this.netCostFor(bus, settings.workingDaysPerMonth);
+    const perEmployeeShare =
+      subscriberCount > 0 ? this.round2(costs.netCost / subscriberCount) : 0;
+
+    const from = query.from ? new Date(query.from) : null;
+    const to = query.to ? new Date(query.to) : null;
+
+    const attendance = await this.prisma.busDailyAttendance.findMany({
+      where: {
+        busId: bus.id,
+        ...(from || to
+          ? {
+              attendDate: {
+                ...(from ? { gte: from } : {}),
+                ...(to ? { lte: to } : {}),
+              },
+            }
+          : {}),
+      },
+      orderBy: { attendDate: 'desc' },
+    });
+
+    const attendedDays = attendance.filter((a) => a.attended).length;
+    const absentDays = attendance.length - attendedDays;
+
+    // The passengers this bus actually carries, with the share each one pays.
+    // The share is identical for everyone — that is the whole point of the
+    // equal distribution — and it does NOT shrink when a bus misses a day.
+    const passengers = bus.passengers
+      .filter((p) => p.status === 'active' && p.employee?.status === 'active')
+      .map((p) => ({
+        id: p.id,
+        employeeId: p.employeeId,
+        name: p.employee?.name || p.name,
+        subscriptionDate: p.subscriptionDate,
+        status: p.status,
+        monthlyShare: perEmployeeShare,
+      }));
+
+    const totalDeducted = this.round2(perEmployeeShare * passengers.length);
+
+    return {
+      bus: {
+        id: bus.id,
+        busId: bus.busId,
+        route: bus.route,
+        plateNumber: bus.plateNumber,
+        driverName: bus.driverName,
+        driverPhone: bus.driverPhone,
+        status: bus.status,
+        capacity: bus.capacity,
+        dailyCost: Number(bus.dailyCost ?? settings.defaultDailyCost),
+        totalCost: Number(bus.totalCost),
+        companyDeductionPct: Number(bus.companyDeductionPct),
+      },
+      workingDaysPerMonth: settings.workingDaysPerMonth,
+      cost: {
+        monthlyCost: costs.monthlyCost,
+        companyDeduction: costs.companyDeduction,
+        netCost: costs.netCost,
+        beneficiaryCount: passengers.length,
+        totalSubscribers: subscriberCount,
+        perEmployeeShare,
+        totalDeducted,
+      },
+      passengers,
+      attendance: {
+        recordedDays: attendance.length,
+        attendedDays,
+        absentDays,
+        records: attendance.map((a) => ({
+          id: a.id,
+          attendDate: a.attendDate.toISOString().slice(0, 10),
+          attended: a.attended,
+          notes: a.notes,
+          recordedBy: a.recordedBy,
+          createdAt: a.createdAt,
+        })),
+      },
+    };
+  }
+
+  /**
+   * The summary card: totals and per-bus lines.
+   *
+   * The fleet totals are shown, but every bus keeps its own line beneath them
+   * so nothing is merged away — the user can always see which bus produced
+   * which number.
+   */
+  async summary() {
+    const buses = await this.listBuses();
+    const settings = await this.getSettings();
+
+    const activeBuses = buses.filter((b) => b.status === 'active');
+    const totalPassengers = activeBuses.reduce(
+      (sum, b) => sum + b.activePassengers,
+      0,
+    );
+    const totalMonthlyCost = this.round2(
+      activeBuses.reduce((sum, b) => sum + b.monthlyCost, 0),
+    );
+    const totalCompanyDeduction = this.round2(
+      activeBuses.reduce((sum, b) => sum + b.companyDeduction, 0),
+    );
+    const totalNetCost = this.round2(
+      activeBuses.reduce((sum, b) => sum + b.netCost, 0),
+    );
+    const totalDeducted = this.round2(
+      activeBuses.reduce((sum, b) => sum + b.perEmployeeShare * b.activePassengers, 0),
+    );
+
+    return {
+      totalBuses: buses.length,
+      activeBuses: activeBuses.length,
+      totalPassengers,
+      totalMonthlyCost,
+      totalCompanyDeduction,
+      totalNetCost,
+      totalDeducted,
+      defaultDailyCost: settings.defaultDailyCost,
+      workingDaysPerMonth: settings.workingDaysPerMonth,
+      buses,
     };
   }
 
   async createBus(dto: CreateBusDto) {
-    // تحقق من عدم تكرار رقم اللوحة
     const existing = await this.prisma.bus.findFirst({
       where: { plateNumber: dto.plateNumber },
     });
@@ -132,6 +482,7 @@ export class TransportationService {
       throw new ConflictException(`Plate number already exists: ${dto.plateNumber}`);
     }
 
+    const settings = await this.getSettings();
     const busId = this.generateBusId();
 
     return this.prisma.bus.create({
@@ -142,6 +493,9 @@ export class TransportationService {
         driverName: dto.driverName,
         driverPhone: dto.driverPhone,
         totalCost: new Prisma.Decimal(dto.totalCost.toString()),
+        dailyCost: new Prisma.Decimal(
+          (dto.dailyCost ?? settings.defaultDailyCost).toString(),
+        ),
         companyDeductionPct: new Prisma.Decimal(dto.companyDeductionPct.toString()),
         employeeDeductionPct:
           dto.employeeDeductionPct !== undefined
@@ -152,13 +506,12 @@ export class TransportationService {
     });
   }
 
-  async updateBus(busId: string, dto: UpdateBusDto) {
+  async updateBus(busId: string, dto: UpdateBusDto, actorId?: string) {
     const bus = await this.prisma.bus.findFirst({
       where: { OR: [{ id: busId }, { busId }] },
     });
     if (!bus) throw new NotFoundException(`Bus not found: ${busId}`);
 
-    // تحقق من عدم تكرار رقم اللوحة عند التعديل
     if (dto.plateNumber && dto.plateNumber !== bus.plateNumber) {
       const conflict = await this.prisma.bus.findFirst({
         where: { plateNumber: dto.plateNumber },
@@ -174,6 +527,8 @@ export class TransportationService {
     if (dto.driverName !== undefined) data.driverName = dto.driverName;
     if (dto.driverPhone !== undefined) data.driverPhone = dto.driverPhone;
     if (dto.totalCost !== undefined) data.totalCost = new Prisma.Decimal(dto.totalCost.toString());
+    if (dto.dailyCost !== undefined)
+      data.dailyCost = new Prisma.Decimal(dto.dailyCost.toString());
     if (dto.companyDeductionPct !== undefined)
       data.companyDeductionPct = new Prisma.Decimal(dto.companyDeductionPct.toString());
     if (dto.capacity !== undefined) data.capacity = dto.capacity;
@@ -181,16 +536,39 @@ export class TransportationService {
       data.employeeDeductionPct = new Prisma.Decimal(dto.employeeDeductionPct.toString());
     if (dto.status !== undefined) data.status = dto.status;
 
-    if (
-      (dto.totalCost !== undefined || dto.companyDeductionPct !== undefined) &&
-      (await this.hasApprovedPayrollForCurrentMonth())
-    ) {
+    const costChanged =
+      dto.totalCost !== undefined ||
+      dto.dailyCost !== undefined ||
+      dto.companyDeductionPct !== undefined;
+
+    if (costChanged && (await this.hasApprovedPayrollForCurrentMonth())) {
       this.logger.warn(
         `Fleet cost or company deduction changed for bus ${bus.busId} while an approved payroll exists for the current month. Bus deductions will be stale until payroll is re-run.`,
       );
     }
 
-    return this.prisma.bus.update({ where: { id: bus.id }, data });
+    const updated = await this.prisma.bus.update({ where: { id: bus.id }, data });
+
+    if (costChanged) {
+      await this.audit.record({
+        entityType: 'bus',
+        entityId: bus.id,
+        action: 'update',
+        oldValues: {
+          totalCost: Number(bus.totalCost),
+          dailyCost: Number(bus.dailyCost ?? 0),
+          companyDeductionPct: Number(bus.companyDeductionPct),
+        },
+        newValues: {
+          totalCost: Number(updated.totalCost),
+          dailyCost: Number(updated.dailyCost ?? 0),
+          companyDeductionPct: Number(updated.companyDeductionPct),
+        },
+        actorId,
+      });
+    }
+
+    return updated;
   }
 
   async deleteBus(busId: string) {
@@ -203,11 +581,144 @@ export class TransportationService {
     return { message: 'Bus deleted successfully' };
   }
 
-  // ─── Passengers ───────────────────────────────────────────────────────────
+  // ─── daily attendance ─────────────────────────────────────────────────────
 
-  /** Returns a map of employeeId → bus route for actually-active bus subscriptions.
-   * Employees who resigned/terminated (with a stale 'active' subscription
-   * record) are excluded so the profile page never shows a phantom subscription. */
+  /**
+   * Records one day of attendance for a bus.
+   *
+   * Re-recording the same day UPDATES the row rather than adding a second
+   * one — the unique index on (tenantId, busId, attendDate) is the guarantee.
+   * This is what stops a day's record from turning into "attended twice" when
+   * the same day is submitted twice.
+   */
+  async recordAttendance(
+    busId: string,
+    dto: RecordBusAttendanceDto,
+    actorId?: string,
+  ) {
+    const bus = await this.prisma.bus.findFirst({
+      where: { OR: [{ id: busId }, { busId }] },
+    });
+    if (!bus) throw new NotFoundException(`Bus not found: ${busId}`);
+
+    const attendDate = this.toDateOnly(dto.attendDate);
+
+    const existing = await this.prisma.busDailyAttendance.findFirst({
+      where: { busId: bus.id, attendDate },
+    });
+
+    const record = existing
+      ? await this.prisma.busDailyAttendance.update({
+          where: { id: existing.id },
+          data: {
+            attended: dto.attended,
+            notes: dto.notes ?? null,
+            recordedBy: actorId ?? null,
+          },
+        })
+      : await this.prisma.busDailyAttendance.create({
+          data: {
+            busId: bus.id,
+            attendDate,
+            attended: dto.attended,
+            notes: dto.notes ?? null,
+            recordedBy: actorId ?? null,
+          },
+        });
+
+    await this.audit.record({
+      entityType: 'bus_attendance',
+      entityId: record.id,
+      action: existing ? 'update' : 'create',
+      oldValues: existing
+        ? { attended: existing.attended, notes: existing.notes }
+        : undefined,
+      newValues: { attended: dto.attended, notes: dto.notes ?? null },
+      actorId,
+    });
+
+    return {
+      id: record.id,
+      busId: bus.id,
+      attendDate: record.attendDate.toISOString().slice(0, 10),
+      attended: record.attended,
+      notes: record.notes,
+      updated: !!existing,
+    };
+  }
+
+  /** Records many days at once — the "settle the whole month" action. */
+  async recordAttendanceBatch(
+    busId: string,
+    entries: RecordBusAttendanceDto[],
+    actorId?: string,
+  ) {
+    const bus = await this.prisma.bus.findFirst({
+      where: { OR: [{ id: busId }, { busId }] },
+    });
+    if (!bus) throw new NotFoundException(`Bus not found: ${busId}`);
+
+    if (entries.length === 0) {
+      throw new BadRequestException('لا توجد أيام لتسجيلها');
+    }
+
+    const results = [];
+    for (const entry of entries) {
+      results.push(await this.recordAttendance(bus.id, entry, actorId));
+    }
+
+    return { message: `تم تسجيل ${results.length} يوم`, data: results };
+  }
+
+  /** The attendance record of one bus over a period. */
+  async listAttendance(
+    busId: string,
+    query: { from?: string; to?: string } = {},
+  ) {
+    const bus = await this.prisma.bus.findFirst({
+      where: { OR: [{ id: busId }, { busId }] },
+    });
+    if (!bus) throw new NotFoundException(`Bus not found: ${busId}`);
+
+    const from = query.from ? new Date(query.from) : null;
+    const to = query.to ? new Date(query.to) : null;
+
+    const rows = await this.prisma.busDailyAttendance.findMany({
+      where: {
+        busId: bus.id,
+        ...(from || to
+          ? {
+              attendDate: {
+                ...(from ? { gte: from } : {}),
+                ...(to ? { lte: to } : {}),
+              },
+            }
+          : {}),
+      },
+      orderBy: { attendDate: 'desc' },
+    });
+
+    return {
+      data: rows.map((r) => ({
+        id: r.id,
+        busId: r.busId,
+        attendDate: r.attendDate.toISOString().slice(0, 10),
+        attended: r.attended,
+        notes: r.notes,
+        recordedBy: r.recordedBy,
+        createdAt: r.createdAt,
+      })),
+      summary: {
+        recordedDays: rows.length,
+        attendedDays: rows.filter((r) => r.attended).length,
+        absentDays: rows.filter((r) => !r.attended).length,
+      },
+    };
+  }
+
+  // ─── passengers ───────────────────────────────────────────────────────────
+
+  /** Returns a map of employeeId → bus route for actually-active bus subscriptions. */
   async getActiveSubscribers() {
     const activePassengers = await this.prisma.busPassenger.findMany({
       where: { status: 'active' },
@@ -217,7 +728,6 @@ export class TransportationService {
       },
     });
 
-    // Employee-level validation: only employees who are still active count.
     const employeeIds = [...new Set(activePassengers.map((p) => p.employeeId))];
     const employees = employeeIds.length
       ? await this.prisma.employee.findMany({
@@ -229,7 +739,6 @@ export class TransportationService {
       employees.filter((e) => e.status === 'active').map((e) => e.employeeId),
     );
 
-    // Build a map: employeeId → { route, plateNumber }
     const map = new Map<string, { route: string; plateNumber: string }>();
     for (const p of activePassengers) {
       if (!activeEmployeeIds.has(p.employeeId)) continue;
@@ -249,7 +758,6 @@ export class TransportationService {
     });
     if (!bus) throw new NotFoundException(`Bus not found: ${busId}`);
 
-    // تحقق من وجود الموظف
     const employee = await this.prisma.employee.findFirst({
       where: { employeeId: dto.employeeId },
     });
@@ -257,12 +765,10 @@ export class TransportationService {
       throw new NotFoundException(`Employee not found: ${dto.employeeId}`);
     }
 
-    // منع تعديل الركاب بعد اعتماد الرواتب للشهر الحالي
     if (await this.hasApprovedPayrollForCurrentMonth()) {
       throw new BadRequestException('لا يمكن تعديل ركاب الباص بعد اعتماد الرواتب لهذا الشهر');
     }
 
-    // تحقق من أن الموظف غير مشترك بباص آخر نشط
     const activeOnOtherBus = await this.prisma.busPassenger.findFirst({
       where: {
         employeeId: dto.employeeId,
@@ -277,13 +783,9 @@ export class TransportationService {
       );
     }
 
-    // تحقق السعة + إضافة الراكب داخل transaction مع قفل صفّي على الباص
-    // (SELECT ... FOR UPDATE). القفل يجبر الطلبات المتزامنة على التسلسل خلف
-    // بعضها بدل التعارض، فيُمنع تجاوز السعة (race condition) نهائياً ودون فشل
-    // بأخطاء serialization. أي طلب لاحق ينتظر القفل ثم يعيد عدّ الركاب الفعلي.
-    let isNewPassenger = false;
+    // Capacity check under a row lock, so two concurrent adds cannot both see
+    // "one seat left" and both take it.
     const passenger = await this.prisma.$transaction(async (tx) => {
-      // قفل صف الباص لتسلسل الإضافات المتزامنة
       await tx.$queryRaw`SELECT id FROM "buses" WHERE id = ${bus.id} FOR UPDATE`;
 
       const activeCount = await tx.busPassenger.count({
@@ -294,7 +796,6 @@ export class TransportationService {
         where: { busId: bus.id, employeeId: dto.employeeId },
       });
 
-      // الراكب النشط الموجود مسبقاً لا يزيد العدد؛ غير ذلك نتحقق من السعة
       const willIncreaseCount = !existing || existing.status !== 'active';
       if (willIncreaseCount && activeCount >= bus.capacity) {
         throw new BadRequestException(`Bus is at full capacity (${bus.capacity} passengers)`);
@@ -304,7 +805,6 @@ export class TransportationService {
         if (existing.status === 'active') {
           throw new ConflictException(`Employee ${dto.employeeId} is already on this bus`);
         }
-        isNewPassenger = true;
         return tx.busPassenger.update({
           where: { id: existing.id },
           data: {
@@ -315,7 +815,6 @@ export class TransportationService {
         });
       }
 
-      isNewPassenger = true;
       return tx.busPassenger.create({
         data: {
           busId: bus.id,
@@ -326,13 +825,10 @@ export class TransportationService {
       });
     });
 
-    // ملاحظة: لا نحسب أو نخزّن أي خصم هنا عمداً. حصة المشترك تُحسب لحظياً
-    // وقت الرواتب عبر calculateProratedBusDeduction / calculateBatchBusDeductions
-    // بالمعادلة الصحيحة العالمية: (مجموع تكاليف كل الباصات بعد خصم الشركة)
-    // مقسوماً على إجمالي عدد المشتركين في كل الباصات (بالتساوي). هكذا أي إضافة
-    // أو انسحاب تعيد توزيع المبلغ تلقائياً على الباقين دون أرقام مخزّنة قديمة.
-    void isNewPassenger;
-
+    // No stored deduction: the share is computed at payroll time from the
+    // live fleet cost and the live subscriber count, so adding or removing a
+    // passenger re-spreads the amount automatically. See
+    // calculateBatchBusDeductions.
     return passenger;
   }
 
@@ -342,7 +838,6 @@ export class TransportationService {
     });
     if (!bus) throw new NotFoundException(`Bus not found: ${busId}`);
 
-    // منع تعديل الركاب بعد اعتماد الرواتب للشهر الحالي
     if (await this.hasApprovedPayrollForCurrentMonth()) {
       throw new BadRequestException('لا يمكن تعديل ركاب الباص بعد اعتماد الرواتب لهذا الشهر');
     }
@@ -354,14 +849,9 @@ export class TransportationService {
       throw new NotFoundException(`Passenger ${employeeId} not found on this bus`);
     }
 
-    // إيقاف اشتراك الموظف (soft delete) مع تعيين تاريخ الانتهاء
-    // لا نحذف الصف حتى نحتفظ بالسجل لحساب الرواتب
     await this.prisma.busPassenger.update({
       where: { id: passenger.id },
-      data: {
-        status: 'inactive',
-        terminationDate: new Date(),
-      },
+      data: { status: 'inactive', terminationDate: new Date() },
     });
 
     return { message: 'Passenger removed successfully' };
@@ -373,7 +863,6 @@ export class TransportationService {
     });
     if (!bus) throw new NotFoundException(`Bus not found: ${busId}`);
 
-    // Include active + recently deactivated (this month) for display
     const now = new Date();
     const monthStart = new Date(Date.UTC(now.getFullYear(), now.getMonth(), 1));
     const monthEnd = new Date(Date.UTC(now.getFullYear(), now.getMonth() + 1, 0));
@@ -399,59 +888,42 @@ export class TransportationService {
     }));
   }
 
-  // ─── Summary ──────────────────────────────────────────────────────────────
-
-  async summary() {
-    const [totalBuses, activeBuses, totalPassengers] = await Promise.all([
-      this.prisma.bus.count(),
-      this.prisma.bus.count({ where: { status: 'active' } }),
-      this.prisma.busPassenger.count({ where: { status: 'active' } }),
-    ]);
-
-    const buses = await this.prisma.bus.findMany({
-      where: { status: 'active' },
-      select: { totalCost: true, companyDeductionPct: true },
-    });
-
-    const totalMonthlyCost = buses.reduce((sum, b) => sum + Number(b.totalCost), 0);
-    const totalCompanyDeduction = buses.reduce(
-      (sum, b) =>
-        sum +
-        Number(
-          new Prisma.Decimal(b.totalCost.toString())
-            .times(b.companyDeductionPct.toString())
-            .div(100),
-        ),
-      0,
-    );
-
-    return {
-      totalBuses,
-      activeBuses,
-      totalPassengers,
-      totalMonthlyCost: Number(totalMonthlyCost.toFixed(2)),
-      totalCompanyDeduction: Number(totalCompanyDeduction.toFixed(2)),
-    };
-  }
-
-  // ─── Payroll Calculation Logic ────────────────────────────────────────────
+  // ─── payroll calculation logic ────────────────────────────────────────────
 
   /**
-   * Eligible bus subscriptions for a payroll month — the single source of truth
-   * for both the per-employee share denominator and who actually gets charged.
+   * Eligible bus subscriptions for a payroll month — the single source of
+   * truth for both the per-employee share denominator and who is charged.
    *
    * A passenger qualifies only when ALL of the following hold:
    *  1. The bus itself is `active` (a cancelled bus's passengers pay nothing).
-   *  2. The subscription is `active`, or ended during the target month (the
-   *     departing employee pays a prorated share for the days they rode).
+   *  2. The subscription is `active`, or ended during the target month.
    *  3. The employee is still `active`, OR resigned/terminated during the
    *     target month. A resigned employee with a stale `active` subscription
-   *     record is excluded ENTIRELY — never counted in the per-employee share
-   *     and never charged a deduction.
+   *     record is excluded ENTIRELY.
    *
    * Only the latest subscription per employee is kept.
    */
-  private async getEligibleSubscriptions(targetMonth: Date) {
+  private async eligibleSubscribers(targetMonth: Date): Promise<
+    Map<
+      string,
+      {
+        passenger: {
+          id: string;
+          tenantId: string | null;
+          busId: string;
+          employeeId: string;
+          name: string | null;
+          subscriptionDate: Date;
+          terminationDate: Date | null;
+          status: string;
+          createdAt: Date;
+          updatedAt: Date;
+          bus: { status: string } | null;
+        };
+        employeeTerminationDate: Date | null;
+      }
+    >
+  > {
     const year = targetMonth.getFullYear();
     const monthIdx = targetMonth.getMonth();
     const monthStart = new Date(Date.UTC(year, monthIdx, 1));
@@ -467,10 +939,8 @@ export class TransportationService {
       include: { bus: { select: { status: true } } },
     });
 
-    // 1. Active buses only.
     const onActiveBuses = candidates.filter((p) => p.bus?.status === 'active');
 
-    // Latest subscription per employee.
     const latest = new Map<string, (typeof candidates)[number]>();
     for (const p of [...onActiveBuses].sort(
       (a, b) => b.subscriptionDate.getTime() - a.subscriptionDate.getTime(),
@@ -478,7 +948,6 @@ export class TransportationService {
       if (!latest.has(p.employeeId)) latest.set(p.employeeId, p);
     }
 
-    // 3. Employee-level validation (resigned/terminated employees are out).
     const employeeIds = [...latest.keys()];
     const employees = employeeIds.length
       ? await this.prisma.employee.findMany({
@@ -494,7 +963,6 @@ export class TransportationService {
     >();
     for (const [empId, passenger] of latest) {
       const employee = byEmployeeId.get(empId);
-      // No matching employee row (orphaned subscription) → never charged.
       if (!employee) continue;
 
       const employeeIsActive = employee.status === 'active';
@@ -512,88 +980,52 @@ export class TransportationService {
       }
     }
 
-    return { subscribers };
+    return subscribers;
   }
 
-  /** Fleet-wide net cost (after company deduction) across active buses. */
-  private async getActiveFleetNetCost(): Promise<number> {
+  /**
+   * The fleet-wide net cost (after company deduction) across active buses.
+   *
+   * This is the amount the employees of the WHOLE factory share, which is what
+   * makes the distribution equal: a rider on the rural bus pays the same as a
+   * rider on the Damascus bus, because both are part of one pool.
+   */
+  private async activeFleetNetCost(): Promise<{
+    netCost: number;
+    monthlyCost: number;
+    companyDeduction: number;
+  }> {
+    const settings = await this.getSettings();
     const activeBuses = await this.prisma.bus.findMany({
       where: { status: 'active' },
-      select: { totalCost: true, companyDeductionPct: true },
+      select: { totalCost: true, dailyCost: true, companyDeductionPct: true },
     });
 
+    let monthlyCost = 0;
+    let companyDeduction = 0;
     let netCost = 0;
     for (const bus of activeBuses) {
-      const cost = Number(bus.totalCost);
-      const pct = Number(bus.companyDeductionPct);
-      netCost += cost * (1 - pct / 100);
-    }
-    return netCost;
-  }
-
-  private getActiveWorkingDays(
-    subscriptionDate: Date,
-    targetMonth: Date,
-    terminationDate?: Date | null,
-  ): number {
-    const subYear = subscriptionDate.getFullYear();
-    const subMonth = subscriptionDate.getMonth();
-    const targetYear = targetMonth.getFullYear();
-    const targetMonthIdx = targetMonth.getMonth();
-
-    // If subscription is in a future month, 0 days
-    if (subYear > targetYear || (subYear === targetYear && subMonth > targetMonthIdx)) {
-      return 0;
+      const costs = this.netCostFor(bus, settings.workingDaysPerMonth);
+      monthlyCost += costs.monthlyCost;
+      companyDeduction += costs.companyDeduction;
+      netCost += costs.netCost;
     }
 
-    // If subscription is in a past month and no termination in target month, full month (26 days)
-    const isSubInTargetMonth = subYear === targetYear && subMonth === targetMonthIdx;
-
-    // If termination is provided and in target month, clamp end to termination date
-    let endDate = new Date(Date.UTC(targetYear, targetMonthIdx + 1, 0)); // end of month
-    if (terminationDate) {
-      const termYear = terminationDate.getFullYear();
-      const termMonth = terminationDate.getMonth();
-      if (termYear === targetYear && termMonth === targetMonthIdx) {
-        endDate = new Date(Date.UTC(termYear, termMonth, terminationDate.getUTCDate()));
-      } else if (termYear < targetYear || (termYear === targetYear && termMonth < targetMonthIdx)) {
-        // Termination was in a past month — this passenger shouldn't be counted at all
-        return 0;
-      }
-    }
-
-    // Determine the effective start date
-    let startDate: Date;
-    if (isSubInTargetMonth) {
-      startDate = new Date(Date.UTC(targetYear, targetMonthIdx, subscriptionDate.getUTCDate()));
-    } else if (subYear < targetYear || (subYear === targetYear && subMonth < targetMonthIdx)) {
-      // Subscription in a past month — full month from day 1 (unless terminated)
-      startDate = new Date(Date.UTC(targetYear, targetMonthIdx, 1));
-    } else {
-      return 0;
-    }
-
-    let activeWorkingDays = 0;
-    const cur = new Date(startDate);
-    while (cur <= endDate) {
-      const dow = cur.getUTCDay();
-      if (dow !== 5 && dow !== 6) activeWorkingDays++;
-      cur.setUTCDate(cur.getUTCDate() + 1);
-    }
-
-    return Math.min(26, activeWorkingDays);
+    return {
+      netCost: this.round2(netCost),
+      monthlyCost: this.round2(monthlyCost),
+      companyDeduction: this.round2(companyDeduction),
+    };
   }
 
   async calculateProratedBusDeduction(employeeId: string, targetMonth: Date) {
-    const netCost = await this.getActiveFleetNetCost();
-
-    const { subscribers } = await this.getEligibleSubscriptions(targetMonth);
+    const subscribers = await this.eligibleSubscribers(targetMonth);
     const totalSubscribedEmployees = subscribers.size;
     if (totalSubscribedEmployees === 0) {
       return 0;
     }
 
-    // المعادلة الموحدة: (صافي تكلفة الخطوط بعد حسم الشركة / عدد المشتركين الفعليين النشطين)
+    const { netCost } = await this.activeFleetNetCost();
     const baseShare = netCost / totalSubscribedEmployees;
 
     const entry = subscribers.get(employeeId);
@@ -601,46 +1033,32 @@ export class TransportationService {
       return 0;
     }
 
-    const { passenger, employeeTerminationDate } = entry;
     // لا تجزئة: كل مشترك يدفع الحصة الكاملة بالتساوي سواء داوم أو استقال أو غاب.
     // الالتزام بالاشتراك شهري وثابت — لا يعتمد على الحضور.
-    return Math.round(baseShare * 100) / 100;
+    return this.round2(baseShare);
   }
 
   /**
-   * Batch-calculate bus subscription deductions for multiple employees in a given month.
-   * Returns: Map<employeeId, deductionAmount>
+   * Batch-calculate bus subscription deductions for multiple employees.
+   *
+   * ── The rule ──────────────────────────────────────────────────────────────
+   * Every eligible subscriber pays the SAME amount:
+   *
+   *   baseShare = (Σ net cost of every active bus) ÷ (number of subscribers)
+   *
+   * with the company's own contribution removed from each bus's cost FIRST.
+   * There is no proration by days worked and no proration by bus attendance:
+   * a rider who resigned mid-month, or whose bus did not run that day, still
+   * pays the full monthly share. The factory does not carry the cost of
+   * someone's half-finished month.
+   *
+   * ── Why it is computed, not stored ────────────────────────────────────────
+   * The share depends on the live fleet cost and the live subscriber count.
+   * Storing it would leave stale numbers behind after every bus is added,
+   * removed, or re-priced; recomputing it here means a re-run of the payroll
+   * produces the same answer and never double-charges, because no charge is
+   * ever accumulated on the passenger row.
    */
-  private getWorkingDaysInRange(startDate: Date, endDate: Date): number {
-    let count = 0;
-    const current = new Date(startDate);
-    current.setUTCHours(0, 0, 0, 0); // Normalize to start of day
-
-    const end = new Date(endDate);
-    end.setUTCHours(0, 0, 0, 0); // Normalize to start of day
-
-    if (current > end) {
-      return 0;
-    }
-
-    if (current.getTime() === end.getTime()) {
-      const dayOfWeek = current.getDay();
-      // Assuming 0 = Sunday, 1 = Monday, ..., 6 = Saturday
-      // Weekends are Friday (5) and Saturday (6)
-      return dayOfWeek !== 5 && dayOfWeek !== 6 ? 1 : 0;
-    }
-
-    while (current <= end) {
-      const dayOfWeek = current.getDay();
-      // Not Friday (5) or Saturday (6)
-      if (dayOfWeek !== 5 && dayOfWeek !== 6) {
-        count++;
-      }
-      current.setDate(current.getDate() + 1);
-    }
-    return count;
-  }
-
   async calculateBatchBusDeductions(
     employeeIds: string[],
     targetMonth: Date,
@@ -649,25 +1067,21 @@ export class TransportationService {
     const result = new Map<string, number>();
     if (employeeIds.length === 0) return result;
 
-    // المعادلة الموحدة: (صافي تكلفة الخطوط بعد حسم الشركة / عدد المشتركين
-    // الفعليين النشطين). المستقيلون والمنسحبون بسجل اشتراك قديم لا يُحسبون
-    // في المقام ولا يُخصم عليهم شيء.
-    const netCost = await this.getActiveFleetNetCost();
-    const { subscribers } = await this.getEligibleSubscriptions(targetMonth);
+    const subscribers = await this.eligibleSubscribers(targetMonth);
     const totalSubscribedEmployees = subscribers.size;
     if (totalSubscribedEmployees === 0) return result;
 
+    const { netCost } = await this.activeFleetNetCost();
     const baseShare = netCost / totalSubscribedEmployees;
-    const requestedSet = new Set(employeeIds);
 
-    for (const [empId, entry] of subscribers) {
+    const requestedSet = new Set(employeeIds);
+    for (const empId of subscribers.keys()) {
       if (!requestedSet.has(empId)) continue;
 
-      const { passenger, employeeTerminationDate } = entry;
       // لا تجزئة: الحصة الكاملة بالتساوي لكل مشترك بغض النظر عن الحضور أو الاستقالة.
       const finalDeduction = baseShare;
       if (finalDeduction > 0) {
-        result.set(empId, Math.round(finalDeduction * 100) / 100);
+        result.set(empId, this.round2(finalDeduction));
       }
     }
 
@@ -686,7 +1100,6 @@ export class TransportationService {
     const monthStart = new Date(Date.UTC(targetYear, targetMonthIdx, 1));
     const monthEnd = new Date(Date.UTC(targetYear, targetMonthIdx + 1, 0));
 
-    // الحصول على الركاب (الموظفين في الحافلات — نشطين + منغادرین هذا الشهر)
     const statusFilter = {
       OR: [
         { status: 'active' },
@@ -717,14 +1130,15 @@ export class TransportationService {
       };
     }
 
-    const breakdowns: any[] = [];
+    const breakdowns: Array<Record<string, unknown>> = [];
     let totalTransportationDeduction = 0;
 
-    // تجميع التكاليف حسب الموظف — فقط المشتركين الفعليين النشطين
-    const { subscribers } = await this.getEligibleSubscriptions(targetMonth);
+    const subscribers = await this.eligibleSubscribers(targetMonth);
+    const { netCost } = await this.activeFleetNetCost();
+    const baseShare = subscribers.size > 0 ? netCost / subscribers.size : 0;
 
     for (const empId of subscribers.keys()) {
-      const cost = await this.calculateProratedBusDeduction(empId, targetMonth);
+      const cost = this.round2(baseShare);
       if (cost > 0) {
         const passenger = passengers.find((p) => p.employeeId === empId);
         if (passenger) {
@@ -745,8 +1159,116 @@ export class TransportationService {
       data: breakdowns,
       summary: {
         totalEmployeesAffected: breakdowns.length,
-        totalTransportationDeduction: Math.round(totalTransportationDeduction * 100) / 100,
+        totalTransportationDeduction: this.round2(totalTransportationDeduction),
       },
     };
+  }
+
+  // ─── print / export ───────────────────────────────────────────────────────
+
+  /**
+   * The printable/exportable transportation report.
+   *
+   * One row per bus, with its own cost, its own company contribution and its
+   * own share — never a blended figure. The daily attendance is broken out
+   * per bus so a printed sheet answers "which bus did not run, and when".
+   */
+  async printReport(query: { from?: string; to?: string } = {}) {
+    const buses = await this.listBuses();
+    const settings = await this.getSettings();
+
+    const from = query.from ? new Date(query.from) : null;
+    const to = query.to ? new Date(query.to) : null;
+
+    const attendance = await this.prisma.busDailyAttendance.findMany({
+      where: {
+        ...(from || to
+          ? {
+              attendDate: {
+                ...(from ? { gte: from } : {}),
+                ...(to ? { lte: to } : {}),
+              },
+            }
+          : {}),
+      },
+      orderBy: { attendDate: 'desc' },
+    });
+
+    const byBus = new Map<string, typeof attendance>();
+    for (const row of attendance) {
+      const list = byBus.get(row.busId) ?? [];
+      list.push(row);
+      byBus.set(row.busId, list);
+    }
+
+    const rows = buses.map((bus) => {
+      const records = byBus.get(bus.id) ?? [];
+      return {
+        busId: bus.busId,
+        route: bus.route,
+        plateNumber: bus.plateNumber,
+        driverName: bus.driverName,
+        status: bus.status,
+        dailyCost: bus.dailyCost,
+        monthlyCost: bus.monthlyCost,
+        companyDeductionPct: bus.companyDeductionPct,
+        companyDeduction: bus.companyDeduction,
+        netCost: bus.netCost,
+        beneficiaryCount: bus.activePassengers,
+        perEmployeeShare: bus.perEmployeeShare,
+        totalDeducted: this.round2(bus.perEmployeeShare * bus.activePassengers),
+        recordedDays: records.length,
+        attendedDays: records.filter((r) => r.attended).length,
+        absentDays: records.filter((r) => !r.attended).length,
+        attendance: records.map((r) => ({
+          attendDate: r.attendDate.toISOString().slice(0, 10),
+          attended: r.attended,
+          notes: r.notes,
+        })),
+      };
+    });
+
+    return {
+      title: 'تقرير النقل والمواصلات',
+      generatedAt: new Date().toISOString(),
+      currency: 'SYP',
+      workingDaysPerMonth: settings.workingDaysPerMonth,
+      defaultDailyCost: settings.defaultDailyCost,
+      rows,
+      totals: {
+        buses: rows.length,
+        activeBuses: rows.filter((r) => r.status === 'active').length,
+        monthlyCost: this.round2(rows.reduce((s, r) => s + r.monthlyCost, 0)),
+        companyDeduction: this.round2(
+          rows.reduce((s, r) => s + r.companyDeduction, 0),
+        ),
+        netCost: this.round2(rows.reduce((s, r) => s + r.netCost, 0)),
+        totalDeducted: this.round2(rows.reduce((s, r) => s + r.totalDeducted, 0)),
+      },
+    };
+  }
+
+  // ─── helpers ──────────────────────────────────────────────────────────────
+
+  private round2(value: number): number {
+    return Math.round((value + Number.EPSILON) * 100) / 100;
+  }
+
+  /** Midnight UTC of the given day — the DATE column's canonical form. */
+  private toDateOnly(value: string | Date): Date {
+    if (value instanceof Date) {
+      return new Date(
+        Date.UTC(value.getUTCFullYear(), value.getUTCMonth(), value.getUTCDate()),
+      );
+    }
+    const text = (value ?? '').trim();
+    const iso = text.length <= 10 ? `${text}T00:00:00.000Z` : text;
+    const date = new Date(iso);
+    if (Number.isNaN(date.getTime())) {
+      throw new BadRequestException(`تاريخ غير صالح: ${value}`);
+    }
+    return new Date(
+      Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()),
+    );
   }
 }

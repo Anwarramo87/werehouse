@@ -7,8 +7,11 @@ import { BackupController } from './backup.controller';
 import { BackupService } from './backup.service';
 import { SnapshotService } from './snapshot.service';
 import { RestoreService } from './restore.service';
+import { PrismaModule } from '../prisma/prisma.module';
+import { NotificationsModule } from '../notifications/notifications.module';
 
 @Module({
+  imports: [PrismaModule, NotificationsModule],
   controllers: [BackupController],
   providers: [
     BackupService,

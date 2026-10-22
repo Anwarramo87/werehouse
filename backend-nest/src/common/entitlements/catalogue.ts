@@ -52,6 +52,7 @@ export const MODULES: ModuleDefinition[] = [
       { key: 'hr.attendance', route: '/attendance', label: 'سجل الحضور' },
       { key: 'hr.biometric', route: '/attendance/biometric', label: 'أجهزة البصمة' },
       { key: 'hr.transportation', route: '/Transportation', label: 'الباص' },
+      { key: 'hr.bus-attendance', route: '/Transportation/attendance', label: 'حضور الباص اليومي' },
     ],
   },
   {
@@ -81,6 +82,7 @@ export const MODULES: ModuleDefinition[] = [
        { key: 'inventory.ledger', route: '/inventory/ledger', label: 'الدفتر الأستاذ' },
        { key: 'inventory.take', route: '/inventory/take', label: 'جرد سريع' },
        { key: 'inventory.locations', route: '/inventory/locations', label: 'المواقع والخانات' },
+     { key: 'inventory.stock-transfers', route: '/inventory/stock-transfers', label: 'نقل المخزون بين المستودعات' },
       { key: 'inventory.counts', route: '/inventory/counts', label: 'الجرد الدوري' },
       { key: 'inventory.quality', route: '/inventory/quality', label: 'فحص الجودة' },
       { key: 'inventory.analytics', route: '/wms/analytics', label: 'مؤشرات المخزن' },
@@ -89,9 +91,14 @@ export const MODULES: ModuleDefinition[] = [
   {
     key: 'purchasing',
     label: 'المشتريات',
-    description: 'أوامر الشراء وفواتير الشراء والموردون.',
+    description: 'فاتورة الشراء وفواتير الشراء والموردون.',
     pages: [
-      { key: 'purchasing.orders', route: '/purchasing', label: 'أوامر الشراء' },
+      // The KEY is the legacy `purchasing.orders` and the ROUTE is unchanged —
+      // only the LABEL was renamed, exactly as the brief asks. Keeping the
+      // key means a factory that was already sold this page keeps it: a
+      // renamed key with a new name would silently strip the entitlement
+      // from every existing factory and blank the page.
+      { key: 'purchasing.orders', route: '/purchasing', label: 'فاتورة شراء' },
       { key: 'purchasing.invoices', route: '/purchasing/invoices', label: 'فواتير الشراء' },
     ],
   },
@@ -117,10 +124,12 @@ export const MODULES: ModuleDefinition[] = [
   {
     key: 'production',
     label: 'الإنتاج والتصنيع',
-    description: 'أوامر الإنتاج وقوائم المواد (BOM) وحساب تكاليف الإنتاج.',
+    description: 'أوامر الإنتاج وقوائم المواد (BOM) وحساب تكاليف الإنتاج ومراحل التصنيع.',
     pages: [
       { key: 'production.orders', route: '/wms/production', label: 'أوامر الإنتاج' },
       { key: 'production.bom', route: '/wms/production/bom', label: 'قوائم المواد (BOM)' },
+      { key: 'production.stages', route: '/wms/production/stages', label: 'مراحل الإنتاج' },
+      { key: 'production.warehouses', route: '/wms/production/warehouses', label: 'مستودعات الإنتاج' },
     ],
   },
   {
@@ -155,6 +164,7 @@ export const MODULES: ModuleDefinition[] = [
       { key: 'admin.settings', route: '/settings', label: 'الإعدادات' },
       { key: 'admin.integrations', route: '/settings/integrations', label: 'الربط والتكامل' },
       { key: 'admin.trash', route: '/trash', label: 'سلة المهملات' },
+      { key: 'accounting.exchange-rates', route: '/accounting/exchange-rates', label: 'أسعار الصرف' },
     ],
   },
 ];
@@ -173,10 +183,20 @@ export const ALL_PAGE_KEYS: string[] = MODULES.flatMap((m) => m.pages.map((p) =>
 export const BACKFILL_PAGE_KEYS: string[] = [
   'production.orders',
   'production.bom',
+  'production.stages',
+  'production.warehouses',
   'reps.management',
   'reps.workspace',
   'wms.setup',
   'imports.files',
+  'hr.bus-attendance',
+  'hr.transportation',
+  'accounting.exchange-rates',
+  'inventory.stock-transfers',
+  // The purchasing key kept its name through the rename; the page behind it
+  // is now called "فاتورة شراء".
+  'purchasing.orders',
+  'purchasing.invoices',
 ];
 
 const PAGES_BY_KEY = new Map<string, PageDefinition>(

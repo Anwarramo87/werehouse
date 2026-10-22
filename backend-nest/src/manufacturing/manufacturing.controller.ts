@@ -16,6 +16,8 @@ import { PageAccessGuard } from '../common/entitlements/page-access.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { AuthenticatedUser } from '../common/types/authenticated-user.types';
 import { RequiresPage } from '../common/entitlements/requires-page.decorator';
+import { PermissionsGuard } from '../common/guards/permissions.guard';
+import { Permissions } from '../common/decorators/permissions.decorator';
 import {
   CreateBOMDto,
   UpdateBOMDto,
@@ -23,9 +25,16 @@ import {
   CompleteProductionOrderDto,
   ProductionOrderQueryDto,
 } from './dto/manufacturing.dto';
+import {
+  PERM_CREATE_PRODUCTION,
+  PERM_DELETE_PRODUCTION,
+  PERM_EDIT_PRODUCTION,
+  PERM_POST_PRODUCTION,
+  PERM_VIEW_PRODUCTION,
+} from '../common/permissions/permission.constants';
 
 @Controller('manufacturing')
-@UseGuards(JwtAuthGuard, PageAccessGuard)
+@UseGuards(JwtAuthGuard, PermissionsGuard, PageAccessGuard)
 @RequiresPage('production.orders')
 export class ManufacturingController {
   constructor(private readonly manufacturing: ManufacturingService) {}
@@ -38,6 +47,7 @@ export class ManufacturingController {
 
   @Post('bom')
   @RequiresPage('production.bom')
+  @Permissions(PERM_CREATE_PRODUCTION)
   createBOM(@Body() dto: CreateBOMDto, @CurrentUser() user: AuthenticatedUser) {
     return this.manufacturing.createBOM(dto, user.userId);
   }
@@ -45,6 +55,7 @@ export class ManufacturingController {
   /** Static route — must come before :sku to prevent "list" being caught as a sku */
   @Get('bom/list/active')
   @RequiresPage('production.bom')
+  @Permissions(PERM_VIEW_PRODUCTION)
   listActiveBOMs() {
     return this.manufacturing.listActiveBOMs();
   }
@@ -52,18 +63,21 @@ export class ManufacturingController {
   /** Parameterized — matches any sku EXCEPT "list" (already caught above) */
   @Get('bom/:sku')
   @RequiresPage('production.bom')
+  @Permissions(PERM_VIEW_PRODUCTION)
   getBOMForProduct(@Param('sku') sku: string) {
     return this.manufacturing.getBOMForProduct(sku);
   }
 
   @Get('bom/:sku/history')
   @RequiresPage('production.bom')
+  @Permissions(PERM_VIEW_PRODUCTION)
   listBOMsForProduct(@Param('sku') sku: string) {
     return this.manufacturing.listBOMsForProduct(sku);
   }
 
   @Put('bom/:id')
   @RequiresPage('production.bom')
+  @Permissions(PERM_EDIT_PRODUCTION)
   updateBOM(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateBOMDto,
@@ -74,6 +88,7 @@ export class ManufacturingController {
   /** Cost calculation — uses BOM UUID not sku */
   @Get('bom/cost/:id')
   @RequiresPage('production.bom')
+  @Permissions(PERM_VIEW_PRODUCTION)
   calculateBOMCost(@Param('id', ParseUUIDPipe) id: string) {
     return this.manufacturing.calculateBOMCost(id);
   }
@@ -83,6 +98,7 @@ export class ManufacturingController {
   // -------------------------------------------------------------------------
 
   @Post('orders')
+  @Permissions(PERM_CREATE_PRODUCTION)
   createOrder(
     @Body() dto: CreateProductionOrderDto,
     @CurrentUser() user: AuthenticatedUser,
@@ -91,21 +107,25 @@ export class ManufacturingController {
   }
 
   @Get('orders')
+  @Permissions(PERM_VIEW_PRODUCTION)
   listOrders(@Query() query: ProductionOrderQueryDto) {
     return this.manufacturing.listProductionOrders(query);
   }
 
   @Get('summary')
+  @Permissions(PERM_VIEW_PRODUCTION)
   summary() {
     return this.manufacturing.getManufacturingSummary();
   }
 
   @Get('orders/:id')
+  @Permissions(PERM_VIEW_PRODUCTION)
   getOrder(@Param('id', ParseUUIDPipe) id: string) {
     return this.manufacturing.getProductionOrder(id);
   }
 
   @Patch('orders/:id/start')
+  @Permissions(PERM_EDIT_PRODUCTION)
   startOrder(
     @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() user: AuthenticatedUser,
@@ -114,6 +134,7 @@ export class ManufacturingController {
   }
 
   @Patch('orders/:id/complete')
+  @Permissions(PERM_POST_PRODUCTION)
   completeOrder(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: CompleteProductionOrderDto,
@@ -123,6 +144,7 @@ export class ManufacturingController {
   }
 
   @Patch('orders/:id/cancel')
+  @Permissions(PERM_DELETE_PRODUCTION)
   cancelOrder(
     @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() user: AuthenticatedUser,

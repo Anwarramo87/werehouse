@@ -95,6 +95,24 @@ export class CreatePurchaseInvoiceDto {
   @MaxLength(8)
   currency?: string;
 
+  /**
+   * سعر الصرف المعتمد — REQUIRED when the currency is not the base currency.
+   *
+   * The user must state the rate that was adopted, and the date it applies
+   * to. A rate is never looked up silently for the user: an invoice is a
+   * statement of what was agreed on a specific day, and a rate that drifts
+   * after the fact must not rewrite it.
+   */
+  @IsOptional()
+  @IsNumber()
+  @Min(0.0001)
+  exchangeRate?: number;
+
+  /** تاريخ سعر الصرف المعتمد */
+  @IsOptional()
+  @IsDateString()
+  exchangeRateDate?: string;
+
   @IsOptional()
   @IsString()
   @MaxLength(1000)

@@ -96,8 +96,14 @@ describe('InventoryService cache-key tenant isolation', () => {
 
   it('scopes the product list cache key to the caller factory', async () => {
     await service.listProducts({ page: 1, limit: 50 });
-    // Empty filters still emit their separators, so the key is fully positional.
-    expect(requestedKeys).toContain(`inventory:products:${FACTORY_A}:1:50:::::`);
+    // The factory is the third segment of the key. Asserting the SEGMENT
+    // rather than the whole string is deliberate: the key is positional and
+    // every filter adds a slot, so counting separators would break whenever
+    // a filter is added — while the property this test exists to protect,
+    // that the factory is IN the key, stays true.
+    const key = requestedKeys.find((k) => k.startsWith('inventory:products:'));
+    expect(key).toBeDefined();
+    expect(key!.split(':')[2]).toBe(FACTORY_A);
   });
 
   it('does not serve one factory its cached page under another factory key', async () => {

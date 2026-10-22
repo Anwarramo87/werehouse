@@ -23,6 +23,8 @@ import { AddLandedCostDto } from './dto/add-landed-cost.dto';
 import { CreatePurchasePaymentDto } from './dto/create-purchase-payment.dto';
 import { WebhookDispatchService } from '../common/wms/webhook-dispatch.service';
 import { LedgerPostingService } from '../common/wms/ledger-posting.service';
+import { ExchangeRateService } from '../accounting/exchange-rate.service';
+import { TransactionAuditService } from '../common/audit/transaction-audit.service';
 
 type Actor = Pick<AuthenticatedUser, 'userId' | 'username'> | undefined;
 
@@ -43,6 +45,8 @@ export class PurchaseInvoicesService {
     private readonly auditService: AuditService,
     private readonly webhooks: WebhookDispatchService,
     private readonly ledger: LedgerPostingService,
+    private readonly exchangeRates: ExchangeRateService,
+    private readonly transactionAudit: TransactionAuditService,
   ) {}
 
   private audit(
@@ -156,6 +160,16 @@ export class PurchaseInvoicesService {
 
     await this.assertProductsExist(dto.items.map((i) => i.sku));
 
+    // A dollar invoice must carry its own rate and the date that rate applies
+    // to. Refusing here — rather than looking one up — is what stops a
+    // historical invoice from being re-priced by a later rate change.
+    const currency = (dto.currency ?? 'SYP').toUpperCase();
+    await this.exchangeRates.assertRateProvided({
+      currency,
+      exchangeRate: dto.exchangeRate,
+      exchangeRateDate: dto.exchangeRateDate,
+    });
+
     const invoice = await this.prisma.$transaction(async (tx) => {
       const invoiceNumber = await this.documentNumbers.next(tx, 'purchaseInvoice', tenantId);
 
@@ -168,7 +182,9 @@ export class PurchaseInvoicesService {
           goodsReceiptId: dto.goodsReceiptId ?? null,
           invoiceDate: new Date(dto.invoiceDate),
           dueDate: dto.dueDate ? new Date(dto.dueDate) : null,
-          currency: dto.currency ?? 'SYP',
+          currency,
+          exchangeRate: dto.exchangeRate !== undefined ? D(dto.exchangeRate) : D(0),
+          exchangeRateDate: dto.exchangeRateDate ? new Date(dto.exchangeRateDate) : null,
           notes: dto.notes ?? null,
           createdBy: actor?.userId ?? dto.supplierId,
           items: {
@@ -200,6 +216,20 @@ export class PurchaseInvoicesService {
     });
 
     this.audit('purchase_invoice.create', invoice.id, { invoiceNumber: invoice.invoiceNumber }, actor, req);
+    await this.transactionAudit.record({
+      entityType: 'purchase_invoice',
+      entityId: invoice.id,
+      action: 'create',
+      newValues: {
+        invoiceNumber: invoice.invoiceNumber,
+        currency,
+        exchangeRate: dto.exchangeRate ?? null,
+        exchangeRateDate: dto.exchangeRateDate ?? null,
+        totalAmount: invoice.totalAmount.toString(),
+      },
+      actorId: actor?.userId,
+      actorName: actor?.username,
+    });
     return invoice;
   }
 
@@ -248,6 +278,15 @@ export class PurchaseInvoicesService {
   async update(invoiceId: string, dto: UpdatePurchaseInvoiceDto, actor: Actor, req?: Request) {
     const invoice = await this.requireDraft(invoiceId);
 
+    const currency = (dto.currency ?? invoice.currency ?? 'SYP').toUpperCase();
+    if (dto.currency !== undefined || dto.exchangeRate !== undefined || dto.exchangeRateDate !== undefined) {
+      await this.exchangeRates.assertRateProvided({
+        currency,
+        exchangeRate: dto.exchangeRate ?? (invoice.exchangeRate ? Number(invoice.exchangeRate) : null),
+        exchangeRateDate: dto.exchangeRateDate ?? (invoice.exchangeRateDate ?? null),
+      });
+    }
+
     const updated = await this.prisma.$transaction(async (tx) => {
       await tx.purchaseInvoice.update({
         where: { id: invoiceId },
@@ -255,6 +294,13 @@ export class PurchaseInvoicesService {
           supplierInvoiceNumber: dto.supplierInvoiceNumber,
           invoiceDate: dto.invoiceDate ? new Date(dto.invoiceDate) : undefined,
           dueDate: dto.dueDate ? new Date(dto.dueDate) : undefined,
+          currency: dto.currency !== undefined ? currency : undefined,
+          exchangeRate:
+            dto.exchangeRate !== undefined ? D(dto.exchangeRate) : undefined,
+          exchangeRateDate:
+            dto.exchangeRateDate !== undefined
+              ? new Date(dto.exchangeRateDate)
+              : undefined,
           notes: dto.notes,
         },
       });
@@ -366,6 +412,24 @@ export class PurchaseInvoicesService {
 
     const result = await this.prisma.$transaction(
       async (tx) => {
+        // Row lock on the invoice. The status check above happens BEFORE the
+        // transaction opens, so two concurrent retries of the same "post"
+        // request would both read DRAFT and both move stock — the second
+        // posting the goods twice. Taking the row lock here forces the second
+        // request to wait, re-read the (now POSTED) row, and stop.
+        await tx.$queryRaw`SELECT id FROM "purchase_invoices" WHERE id = ${invoiceId} FOR UPDATE`;
+
+        const fresh = await tx.purchaseInvoice.findFirst({
+          where: { id: invoiceId },
+          select: { status: true },
+        });
+        if (!fresh) throw new NotFoundException('Purchase invoice not found');
+        if (fresh.status !== DocumentStatus.DRAFT) {
+          throw new ConflictException(
+            `Only draft invoices can be posted (current: ${fresh.status})`,
+          );
+        }
+
         // Landed costs are allocated first: a batch's unit cost has to include
         // freight from the moment it exists, or the first sale off it reports
         // a margin that is quietly too high.
@@ -520,6 +584,24 @@ export class PurchaseInvoicesService {
       actor,
       req,
     );
+    await this.transactionAudit.record({
+      entityType: 'purchase_invoice',
+      entityId: invoiceId,
+      action: 'post',
+      oldValues: { status: DocumentStatus.DRAFT },
+      newValues: {
+        status: DocumentStatus.POSTED,
+        invoiceNumber: invoice.invoiceNumber,
+        currency: invoice.currency,
+        exchangeRate: Number(invoice.exchangeRate ?? 0),
+        exchangeRateDate: invoice.exchangeRateDate
+          ? invoice.exchangeRateDate.toISOString().slice(0, 10)
+          : null,
+        lines: invoice.items.length,
+      },
+      actorId: actor?.userId,
+      actorName: actor?.username,
+    });
 
     return { message: 'Purchase invoice posted — stock, batches and cost updated', invoice: result };
   }
@@ -626,6 +708,15 @@ export class PurchaseInvoicesService {
     });
 
     this.audit('purchase_invoice.cancel', invoiceId, { reason, reversed: true }, actor, req);
+    await this.transactionAudit.record({
+      entityType: 'purchase_invoice',
+      entityId: invoiceId,
+      action: 'cancel',
+      oldValues: { status: invoice.status },
+      newValues: { status: DocumentStatus.CANCELLED, reason },
+      actorId: actor?.userId,
+      actorName: actor?.username,
+    });
     return { message: 'Posted invoice reversed and cancelled' };
   }
 
@@ -667,6 +758,89 @@ export class PurchaseInvoicesService {
   }
 
   // ----------------------------------------------------------------- helpers
+
+  /**
+   * The print/export payload for one invoice.
+   *
+   * Every money field carries its currency. When the invoice is not in the
+   * base currency the original amount, the rate and the rate's date travel
+   * with it, so a printed invoice states what it was priced at rather than
+   * showing a bare converted number nobody can reproduce.
+   */
+  async printPayload(invoiceId: string) {
+    const invoice = await this.prisma.purchaseInvoice.findFirst({
+      where: { id: invoiceId },
+      include: {
+        supplier: { select: { name: true, phone: true, address: true } },
+        items: { orderBy: { createdAt: 'asc' } },
+        landedCosts: true,
+        payments: { orderBy: { createdAt: 'desc' } },
+      },
+    });
+    if (!invoice) throw new NotFoundException('Purchase invoice not found');
+
+    const isForeign = invoice.currency && invoice.currency !== 'SYP';
+    const rate = Number(invoice.exchangeRate ?? 0);
+    const rateDate = invoice.exchangeRateDate
+      ? invoice.exchangeRateDate.toISOString().slice(0, 10)
+      : null;
+
+    const money = (value: Prisma.Decimal | number | null | undefined) => {
+      const amount = Number(value ?? 0);
+      return {
+        amount: Math.round(amount * 100) / 100,
+        currency: invoice.currency,
+        baseAmount:
+          isForeign && rate > 0
+            ? Math.round(amount * rate * 100) / 100
+            : Math.round(amount * 100) / 100,
+      };
+    };
+
+    return {
+      invoiceNumber: invoice.invoiceNumber,
+      supplierInvoiceNumber: invoice.supplierInvoiceNumber,
+      status: invoice.status,
+      invoiceDate: invoice.invoiceDate.toISOString().slice(0, 10),
+      dueDate: invoice.dueDate ? invoice.dueDate.toISOString().slice(0, 10) : null,
+      supplier: invoice.supplier,
+      currency: invoice.currency,
+      exchangeRate: isForeign ? rate : null,
+      exchangeRateDate: isForeign ? rateDate : null,
+      lines: invoice.items.map((item) => ({
+        sku: item.sku,
+        quantity: item.quantity,
+        unitCost: money(item.unitCost),
+        discountPercent: Number(item.discountPercent),
+        discountAmount: money(item.discountAmount),
+        taxRate: Number(item.taxRate),
+        taxAmount: money(item.taxAmount),
+        lineTotal: money(item.lineTotal),
+        finalUnitCost: money(item.finalUnitCost),
+        location: item.location,
+      })),
+      landedCosts: invoice.landedCosts.map((c) => ({
+        type: c.type,
+        description: c.description,
+        amount: money(c.amount),
+      })),
+      subtotal: money(invoice.subtotal),
+      discountAmount: money(invoice.discountAmount),
+      taxAmount: money(invoice.taxAmount),
+      landedCostTotal: money(invoice.landedCostTotal),
+      totalAmount: money(invoice.totalAmount),
+      paidAmount: money(invoice.paidAmount),
+      balance: money(D(invoice.totalAmount).minus(D(invoice.paidAmount))),
+      payments: invoice.payments.map((p) => ({
+        amount: money(p.amount),
+        method: p.method,
+        paidAt: p.createdAt.toISOString().slice(0, 10),
+        notes: p.notes,
+      })),
+      notes: invoice.notes,
+      generatedAt: new Date().toISOString(),
+    };
+  }
 
   /** Line arithmetic in one place, so create and update cannot disagree. */
   private lineTotals(item: {

@@ -11,6 +11,7 @@ import {
   SUPERADMIN_ONLY_PERMISSIONS,
   SUPERADMIN_ROLE,
 } from '../tenant/tenant.constants';
+import { hasPermission } from '../permissions/permission.constants';
 
 @Injectable()
 export class PermissionsGuard implements CanActivate {
@@ -59,11 +60,15 @@ export class PermissionsGuard implements CanActivate {
     if (wantsSuperadminOnly) {
       throw new ForbiddenException('This operation is restricted to the super admin');
     }
-    const hasPermission = requiredPermissions.some((p) =>
-      userPermissions.includes(p),
+
+    // `hasPermission` honours the `admin_all` wildcard, so a factory Admin
+    // passes every tenant-scoped guard without each endpoint having to
+    // enumerate the wildcard by hand.
+    const hasPermissionGranted = requiredPermissions.some((p) =>
+      hasPermission(userPermissions, p),
     );
 
-    if (!hasPermission) {
+    if (!hasPermissionGranted) {
       throw new ForbiddenException('Insufficient permissions for this operation');
     }
 

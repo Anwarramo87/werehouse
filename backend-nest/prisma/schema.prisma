@@ -89,6 +89,16 @@ model Tenant {
   integrationSyncLogs             IntegrationSyncLog[]
   webhookEndpoints                WebhookEndpoint[]
   accountMappings                 AccountMapping[]
+  exchangeRates          ExchangeRate[]
+  busDailyAttendance     BusDailyAttendance[]
+  productionStages       ProductionStage[]
+  productionWarehouses   ProductionWarehouse[]
+  productionStockLevels  ProductionStockLevel[]
+  stockTransfers         StockTransfer[]
+  productionCostRecords  ProductionCostRecord[]
+  backupRuns            BackupRun[]
+  productionVariants    ProductionVariant[]
+  transactionAudits      TransactionAudit[]
   entitlement                     TenantEntitlement?
   subscription                    TenantSubscription?
   customization                   TenantCustomization?
@@ -326,6 +336,8 @@ model User {
   entitlement          UserEntitlement? // per-admin pages this account may use
   subscription         UserSubscription? // per-admin time window (this account alone)
   representative       Representative?  // إذا كان المستخدم مندوباً
+  productionStages     ProductionStage[] @relation("StageResponsible")
+  stockTransfers       StockTransfer[]  @relation("TransferCreatedBy")
 
 
   // Referenced by tenant-composite foreign keys: Postgres requires the
@@ -401,7 +413,7 @@ model Employee {
   gracePeriodMinutes        Int                   @default(5)
   insuranceAmount           Decimal?              @db.Decimal(14, 2)
   transportAllowanceOverride Decimal?             @db.Decimal(14, 2)
-  photo                     String? // ØµÙˆØ±Ø© Ø§Ù„Ù…ÙˆØ¸Ù (data URL Ø£Ùˆ Ø±Ø§Ø¨Ø·)
+  photo                     String? // ØµÙˆØ±Ø© Ø§Ù„Ù…ÙˆØ¸Ù (data URL Ø£Ùˆ Ø±Ø§Ø¨Ø·)
   attendanceRecords         AttendanceRecord[]
   dailyAttendanceLogs       DailyAttendanceLog[]  @relation("DailyAttendanceLogs")
   advances                  EmployeeAdvance[]
@@ -561,12 +573,12 @@ model AttendanceRecord {
 enum DailyRecordType {
   ABSENCE // ØºÙŠØ§Ø¨
   DELAY_MINUTES // ØªØ£Ø®ÙŠØ± Ø¨Ø§Ù„Ø¯Ù‚Ø§Ø¦Ù‚
-  OVERTIME_MINUTES // Ø¥Ø¶Ø§ÙÙŠ Ø¨Ø§Ù„Ø¯Ù‚Ø§Ø¦Ù‚
-  PAID_LEAVE // Ø¥Ø¬Ø§Ø²Ø© Ù…Ø¯ÙÙˆØ¹Ø©
-  UNPAID_LEAVE // Ø¥Ø¬Ø§Ø²Ø© ØºÙŠØ± Ù…Ø¯ÙÙˆØ¹Ø©
+  OVERTIME_MINUTES // Ø¥Ø¶Ø§ÙÙŠ Ø¨Ø§Ù„Ø¯Ù‚Ø§Ø¦Ù‚
+  PAID_LEAVE // Ø¥Ø¬Ø§Ø²Ø© Ù…Ø¯ÙÙˆØ¹Ø©
+  UNPAID_LEAVE // Ø¥Ø¬Ø§Ø²Ø© ØºÙŠØ± Ù…Ø¯ÙÙˆØ¹Ø©
   SICK_LEAVE // Ø¥Ø¬Ø§Ø²Ø© Ù…Ø±Ø¶ÙŠØ©
   ADMIN_LEAVE // Ø¥Ø¬Ø§Ø²Ø© Ø¥Ø¯Ø§Ø±ÙŠØ©
-  DEATH_LEAVE // Ø¥Ø¬Ø§Ø²Ø© ÙˆÙØ§Ø©
+  DEATH_LEAVE // Ø¥Ø¬Ø§Ø²Ø© ÙˆÙØ§Ø©
   EARLY_LEAVE_MINUTES // Ø®Ø±ÙˆØ¬ Ù…Ø¨ÙƒØ± Ø¨Ø§Ù„Ø¯Ù‚Ø§Ø¦Ù‚
 }
 
@@ -606,7 +618,7 @@ model Product {
   unitPrice    Decimal  @db.Decimal(12, 2)
   costPrice    Decimal  @db.Decimal(12, 2)
 
-  /// نسبة الربح % على التكلفة — مُشتقة تلقائيًا (سعر البيع − التكلفة) ÷ التكلفة × 100
+  /// نسبة الربح % على التكلٝة — مٝشتقة تلقائيًا (سعر البيع − التكلٝة) ÷ التكلٝة × 100
   profitPercent Decimal? @db.Decimal(8, 3)
 
   reorderLevel Int      @default(10)
@@ -614,27 +626,27 @@ model Product {
   unit         String   @default("Ù‚Ø·Ø¹Ø©")
   photo        String? // ØµÙˆØ±Ø© Ø§Ù„Ù…Ù†ØªØ¬ (data URL Ø£Ùˆ Ø±Ø§Ø¨Ø·)
 
-  /// Ø¨Ø§Ø±ÙƒÙˆØ¯ Ø§Ù„Ù…Ù†ØªØ¬ (EAN13 / Code128) â€” ÙŠÙÙ…Ø³Ø­ Ø¨Ø§Ù„Ø¬Ù‡Ø§Ø² Ø§Ù„Ù…Ø­Ù…ÙˆÙ„
+  /// Ø¨Ø§Ø±ÙƒÙˆØ¯ Ø§Ù„Ù…Ù†ØªØ¬ (EAN13 / Code128) â€” ÙŠÙÙ…Ø³Ø­ Ø¨Ø§Ù„Ø¬Ù‡Ø§Ø² Ø§Ù„Ù…Ø­Ù…ÙˆÙ„
   barcode String?
 
-  /// Ù‡Ù„ ÙŠÙØªØªØ¨ÙŽÙ‘Ø¹ Ù‡Ø°Ø§ Ø§Ù„Ù…Ù†ØªØ¬ Ø¨Ø§Ù„Ø¯ÙØ¹Ø§Øª ÙˆØªÙˆØ§Ø±ÙŠØ® Ø§Ù„ØµÙ„Ø§Ø­ÙŠØ©ØŸ
-  /// Ø­ÙŠÙ† ÙŠÙƒÙˆÙ† true ØªØµØ¨Ø­ Ø¨ÙŠØ§Ù†Ø§Øª Ø§Ù„Ø¯ÙØ¹Ø© Ø¥Ù„Ø²Ø§Ù…ÙŠØ© Ø¹Ù†Ø¯ ÙƒÙ„ Ø¥Ø¯Ø®Ø§Ù„ØŒ ÙˆÙŠÙØ·Ø¨ÙŽÙ‘Ù‚ FEFO Ø¹Ù†Ø¯ Ø§Ù„Ø¥Ø®Ø±Ø§Ø¬.
+  /// Ù‡Ù„ ÙŠÙØªØªØ¨ÙŽÙ‘Ø¹ Ù‡Ø°Ø§ Ø§Ù„Ù…Ù†ØªØ¬ Ø¨Ø§Ù„Ø¯ÙØ¹Ø§Øª ÙˆØªÙˆØ§Ø±ÙŠØ® Ø§Ù„ØµÙ„Ø§Ø­ÙŠØ©ØŸ
+  /// Ø­ÙŠÙ† ÙŠÙƒÙˆÙ† true ØªØµØ¨Ø­ Ø¨ÙŠØ§Ù†Ø§Øª Ø§Ù„Ø¯ÙØ¹Ø© Ø¥Ù„Ø²Ø§Ù…ÙŠØ© Ø¹Ù†Ø¯ ÙƒÙ„ Ø¥Ø¯Ø®Ø§Ù„ØŒ ÙˆÙŠÙØ·Ø¨ÙŽÙ‘Ù‚ FEFO Ø¹Ù†Ø¯ Ø§Ù„Ø¥Ø®Ø±Ø§Ø¬.
   batchTracked Boolean @default(false)
-  /// Ø§Ù„Ø¹Ù…Ø± Ø§Ù„Ø§ÙØªØ±Ø§Ø¶ÙŠ Ø¨Ø§Ù„Ø£ÙŠØ§Ù… â€” ÙŠÙØ´ØªÙ‚ Ù…Ù†Ù‡ ØªØ§Ø±ÙŠØ® Ø§Ù„ØµÙ„Ø§Ø­ÙŠØ© Ø¥Ù† Ù„Ù… ÙŠÙØ¯Ø®ÙŽÙ„ ÙŠØ¯ÙˆÙŠØ§Ù‹
+  /// Ø§Ù„Ø¹Ù…Ø± Ø§Ù„Ø§ÙØªØ±Ø§Ø¶ÙŠ Ø¨Ø§Ù„Ø£ÙŠØ§Ù… â€” ÙŠÙØ´ØªÙ‚ Ù…Ù†Ù‡ ØªØ§Ø±ÙŠØ® Ø§Ù„ØµÙ„Ø§Ø­ÙŠØ© Ø¥Ù† Ù„Ù… ÙŠÙØ¯Ø®ÙŽÙ„ ÙŠØ¯ÙˆÙŠØ§Ù‹
   shelfLifeDays Int?
 
   /// Ø£Ø¨Ø¹Ø§Ø¯ ÙˆÙˆØ²Ù† Ø§Ù„ÙˆØ­Ø¯Ø© â€” ÙŠØ³ØªØ®Ø¯Ù…Ù‡Ø§ Ù…Ø­Ø±Ù‘Ùƒ Ø§Ù‚ØªØ±Ø§Ø­ Ø§Ù„ØªØ®Ø²ÙŠÙ† ÙˆØ­Ø³Ø§Ø¨ Ø£ÙˆØ²Ø§Ù† Ø§Ù„Ø·Ø±ÙˆØ¯
   weightKg Decimal? @db.Decimal(10, 3)
   volumeM3 Decimal? @db.Decimal(10, 4)
 
-  /// Ø§Ù„Ø®Ø§Ù†Ø© Ø§Ù„Ø§ÙØªØ±Ø§Ø¶ÙŠØ© Ù„Ù„ØªØ®Ø²ÙŠÙ† (Fixed slotting)
+  /// Ø§Ù„Ø®Ø§Ù†Ø© Ø§Ù„Ø§ÙØªØ±Ø§Ø¶ÙŠØ© Ù„Ù„ØªØ®Ø²ÙŠÙ† (Fixed slotting)
   defaultBinCode String?
-  /// ØªØµÙ†ÙŠÙ ABC Ø­Ø³Ø¨ Ù…Ø¹Ø¯Ù„ Ø§Ù„Ø¯ÙˆØ±Ø§Ù† â€” ÙŠÙ‚ÙˆØ¯ Ø£ÙˆÙ„ÙˆÙŠØ© Ø§Ù„Ø¬Ø±Ø¯ Ø§Ù„Ø¯ÙˆØ±ÙŠ ÙˆÙ‚Ø±Ø¨ Ø§Ù„Ø®Ø§Ù†Ø© Ù…Ù† Ø§Ù„Ø´Ø­Ù†
+  /// ØªØµÙ†ÙŠÙ ABC Ø­Ø³Ø¨ Ù…Ø¹Ø¯Ù„ Ø§Ù„Ø¯ÙˆØ±Ø§Ù† â€” ÙŠÙ‚ÙˆØ¯ Ø£ÙˆÙ„ÙˆÙŠØ© Ø§Ù„Ø¬Ø±Ø¯ Ø§Ù„Ø¯ÙˆØ±ÙŠ ÙˆÙ‚Ø±Ø¨ Ø§Ù„Ø®Ø§Ù†Ø© Ù…Ù† Ø§Ù„Ø´Ø­Ù†
   abcClass String?
 
   costingMethod CostingMethod @default(WEIGHTED_AVERAGE)
 
-  /// نوع المنتج: مادة خام، منتج نهائي، أو نصف مصنّع
+  /// نوع المنتج: مادة خام، منتج نهائي، أو نصٝ مصنّع
   productType   ProductType @default(FINISHED)
 
   /// حجم المادة الخام (مثال: 10x20 سم، 50kg)
@@ -643,7 +655,7 @@ model Product {
   /// الخصائص أو اللون
   feature     String?
 
-  /// وصف المنتج
+  /// وصٝ المنتج
   description   String?
 
   taxRateId String?  @db.Uuid
@@ -736,6 +748,13 @@ model StockMovement {
   createdById   String?           @db.Uuid
   createdAt     DateTime          @default(now())
 
+  /// ?????? ??????? ?????? (SYP ?? USD)
+  currency        String  @default("SYP")
+  /// ??? ????? ???????? ??? ??????
+  exchangeRate    Decimal @default(0) @db.Decimal(12, 4)
+  /// ????? ??? ????? ????????
+  exchangeRateDate DateTime?
+
   @@index([sku])
   @@index([sku, createdAt])
   @@index([location, createdAt])
@@ -816,7 +835,7 @@ model PurchaseOrderItem {
   unitCost         Decimal           @db.Decimal(12, 2)
   receivedQuantity Int               @default(0)
 
-  /// Ø®ØµÙ… ÙˆØ¶Ø±ÙŠØ¨Ø© Ø¹Ù„Ù‰ Ù…Ø³ØªÙˆÙ‰ Ø§Ù„Ø¨Ù†Ø¯ â€” ØªÙØ±Ø­ÙŽÙ‘Ù„ Ø¥Ù„Ù‰ ÙØ§ØªÙˆØ±Ø© Ø§Ù„Ø´Ø±Ø§Ø¡ Ø¹Ù†Ø¯ Ø¥Ù†Ø´Ø§Ø¦Ù‡Ø§ Ù…Ù† Ø§Ù„Ø£Ù…Ø±
+  /// Ø®ØµÙ… ÙˆØ¶Ø±ÙŠØ¨Ø© Ø¹Ù„Ù‰ Ù…Ø³ØªÙˆÙ‰ Ø§Ù„Ø¨Ù†Ø¯ â€” ØªÙØ±Ø­ÙŽÙ‘Ù„ Ø¥Ù„Ù‰ ÙØ§ØªÙˆØ±Ø© Ø§Ù„Ø´Ø±Ø§Ø¡ Ø¹Ù†Ø¯ Ø¥Ù†Ø´Ø§Ø¦Ù‡Ø§ Ù…Ù† Ø§Ù„Ø£Ù…Ø±
   discountPercent Decimal @default(0) @db.Decimal(6, 3)
   taxRate         Decimal @default(0) @db.Decimal(6, 3)
   createdAt        DateTime          @default(now())
@@ -875,13 +894,13 @@ model GoodsReceiptItem {
   location            String
   unitCost            Decimal           @db.Decimal(12, 2)
 
-  /// Ø¨ÙŠØ§Ù†Ø§Øª Ø§Ù„Ø¯ÙØ¹Ø© Ø§Ù„Ù…Ù„ØªÙ‚Ø·Ø© Ø¹Ù†Ø¯ Ø§Ù„Ø§Ø³ØªÙ„Ø§Ù… â€” ØªÙÙ†Ø´Ø¦ ProductBatch Ù…Ø¨Ø§Ø´Ø±Ø©
+  /// Ø¨ÙŠØ§Ù†Ø§Øª Ø§Ù„Ø¯ÙØ¹Ø© Ø§Ù„Ù…Ù„ØªÙ‚Ø·Ø© Ø¹Ù†Ø¯ Ø§Ù„Ø§Ø³ØªÙ„Ø§Ù… â€” ØªÙÙ†Ø´Ø¦ ProductBatch Ù…Ø¨Ø§Ø´Ø±Ø©
   batchId        String?   @db.Uuid
   batchNumber    String?
   productionDate DateTime? @db.Date
   expiryDate     DateTime? @db.Date
 
-  /// ÙØ­Øµ Ø§Ù„Ø¬ÙˆØ¯Ø©: Ø§Ù„Ø¨Ø¶Ø§Ø¹Ø© ØªØ¯Ø®Ù„ Ø§Ù„Ø­Ø¬Ø± Ø­ØªÙ‰ ØªÙØ¹ØªÙ…Ø¯ Ø­ÙŠÙ† ÙŠÙƒÙˆÙ† Ø§Ù„ÙØ­Øµ Ù…Ø·Ù„ÙˆØ¨Ø§Ù‹
+  /// ÙØ­Øµ Ø§Ù„Ø¬ÙˆØ¯Ø©: Ø§Ù„Ø¨Ø¶Ø§Ø¹Ø© ØªØ¯Ø®Ù„ Ø§Ù„Ø­Ø¬Ø± Ø­ØªÙ‰ ØªÙØ¹ØªÙ…Ø¯ Ø­ÙŠÙ† ÙŠÙƒÙˆÙ† Ø§Ù„ÙØ­Øµ Ù…Ø·Ù„ÙˆØ¨Ø§Ù‹
   qcStatus  QcStatus  @default(PASSED)
   qcNotes   String?
   qcBy      String?   @db.Uuid
@@ -911,11 +930,11 @@ model Customer {
   taxNumber String?
   status    String   @default("active") // active | inactive
 
-  /// ÙØ¦Ø© Ø§Ù„ØªØ³Ø¹ÙŠØ± Ø§Ù„Ù…Ø·Ø¨ÙŽÙ‘Ù‚Ø© Ø¹Ù„Ù‰ Ù‡Ø°Ø§ Ø§Ù„Ø¹Ù…ÙŠÙ„ (Ø¬Ù…Ù„Ø© / Ù…ÙØ±Ù‚ / Ø®Ø§Øµ)
+  /// ÙØ¦Ø© Ø§Ù„ØªØ³Ø¹ÙŠØ± Ø§Ù„Ù…Ø·Ø¨ÙŽÙ‘Ù‚Ø© Ø¹Ù„Ù‰ Ù‡Ø°Ø§ Ø§Ù„Ø¹Ù…ÙŠÙ„ (Ø¬Ù…Ù„Ø© / Ù…ÙØ±Ù‚ / Ø®Ø§Øµ)
   priceTierId String?    @db.Uuid
   priceTier   PriceTier? @relation(fields: [priceTierId], references: [id], onDelete: SetNull)
 
-  /// Ø³Ù‚Ù Ø§Ù„Ø§Ø¦ØªÙ…Ø§Ù† â€” ÙŠÙ…Ù†Ø¹ ØªØ±Ø­ÙŠÙ„ ÙØ§ØªÙˆØ±Ø© ØªØªØ¬Ø§ÙˆØ²Ù‡
+  /// Ø³Ù‚Ù Ø§Ù„Ø§Ø¦ØªÙ…Ø§Ù† â€” ÙŠÙ…Ù†Ø¹ ØªØ±Ø­ÙŠÙ„ ÙØ§ØªÙˆØ±Ø© ØªØªØ¬Ø§ÙˆØ²Ù‡
   creditLimit Decimal @default(0) @db.Decimal(14, 2)
 
   createdAt DateTime @default(now())
@@ -978,14 +997,14 @@ model SalesOrderItem {
   quantity      Int
   unitPrice     Decimal    @db.Decimal(12, 2)
 
-  /// Ø®ØµÙ… ÙˆØ¶Ø±ÙŠØ¨Ø© Ø¹Ù„Ù‰ Ù…Ø³ØªÙˆÙ‰ Ø§Ù„Ø¨Ù†Ø¯ â€” ÙŠØ­Ø³Ø¨Ù‡Ù…Ø§ Ù…Ø­Ø±Ù‘Ùƒ Ø§Ù„ØªØ³Ø¹ÙŠØ± Ù…Ù† ÙØ¦Ø© Ø§Ù„Ø¹Ù…ÙŠÙ„
+  /// Ø®ØµÙ… ÙˆØ¶Ø±ÙŠØ¨Ø© Ø¹Ù„Ù‰ Ù…Ø³ØªÙˆÙ‰ Ø§Ù„Ø¨Ù†Ø¯ â€” ÙŠØ­Ø³Ø¨Ù‡Ù…Ø§ Ù…Ø­Ø±Ù‘Ùƒ Ø§Ù„ØªØ³Ø¹ÙŠØ± Ù…Ù† ÙØ¦Ø© Ø§Ù„Ø¹Ù…ÙŠÙ„
   discountPercent Decimal @default(0) @db.Decimal(6, 3)
   discountAmount  Decimal @default(0) @db.Decimal(14, 2)
   taxRate         Decimal @default(0) @db.Decimal(6, 3)
   taxAmount       Decimal @default(0) @db.Decimal(14, 2)
   lineTotal       Decimal @default(0) @db.Decimal(14, 2)
 
-  /// Ø§Ù„Ø¯ÙØ¹Ø© Ø§Ù„Ù…Ø­Ø¬ÙˆØ²Ø© Ù„Ù‡Ø°Ø§ Ø§Ù„Ø¨Ù†Ø¯ â€” ÙŠÙ‚ØªØ±Ø­Ù‡Ø§ FEFO Ø¹Ù†Ø¯ ØªØ£ÙƒÙŠØ¯ Ø§Ù„Ø·Ù„Ø¨
+  /// Ø§Ù„Ø¯ÙØ¹Ø© Ø§Ù„Ù…Ø­Ø¬ÙˆØ²Ø© Ù„Ù‡Ø°Ø§ Ø§Ù„Ø¨Ù†Ø¯ â€” ÙŠÙ‚ØªØ±Ø­Ù‡Ø§ FEFO Ø¹Ù†Ø¯ ØªØ£ÙƒÙŠØ¯ Ø§Ù„Ø·Ù„Ø¨
   batchId String? @db.Uuid
 
   location      String     @default("WH-A")
@@ -1061,7 +1080,7 @@ model JournalEntry {
   /// Ù…Ù† Ø£ÙŠÙ† Ø¬Ø§Ø¡ Ø§Ù„Ù‚ÙŠØ¯: purchase_invoice | sales_invoice | cycle_count | manual
   sourceType  String?
   sourceId    String?             @db.Uuid
-  /// Ù…ÙØªØ§Ø­ ÙØ±ÙŠØ¯ ÙŠÙ…Ù†Ø¹ ØªØ±Ø­ÙŠÙ„ Ù†ÙØ³ Ø§Ù„Ø­Ø¯Ø« Ù…Ø±ØªÙŠÙ†: Ù…Ø«Ù„ purchase_invoice:post:<id>
+  /// Ù…ÙØªØ§Ø­ ÙØ±ÙŠØ¯ ÙŠÙ…Ù†Ø¹ ØªØ±Ø­ÙŠÙ„ Ù†ÙØ³ Ø§Ù„Ø­Ø¯Ø« Ù…Ø±ØªÙŠÙ†: Ù…Ø«Ù„ purchase_invoice:post:<id>
   sourceRef   String?
   /// true Ø¥Ù† Ø£Ù†Ø´Ø£Ù‡ Ø§Ù„Ù†Ø¸Ø§Ù… ØªÙ„Ù‚Ø§Ø¦ÙŠØ§Ù‹ Ù„Ø§ Ù…Ø³ØªØ®Ø¯Ù… ÙŠØ¯ÙˆÙŠØ§Ù‹
   isAutomatic Boolean             @default(false)
@@ -1098,6 +1117,13 @@ model JournalEntryLine {
 
   journalEntry    JournalEntry? @relation(fields: [tenantId, journalEntryId], references: [tenantId, id], onDelete: Cascade)
   account         Account?      @relation(fields: [tenantId, accountId], references: [tenantId, id], onDelete: Restrict)
+
+  /// ?????? ??????? ?????? (SYP ?? USD)
+  currency        String  @default("SYP")
+  /// ??? ????? ???????? ??? ????? (??? ???? ?????? ??? ?????? ????????)
+  exchangeRate    Decimal @default(0) @db.Decimal(12, 4)
+  /// ????? ??? ????? ????????
+  exchangeRateDate DateTime?
 
   @@index([journalEntryId])
   @@index([accountId])
@@ -1153,6 +1179,9 @@ model PayrollRun {
   items           PayrollItem[]
   receipts        PayrollReceipt[]
 
+  // Used by the offline sync engine to detect approval/status changes.
+  updatedAt       DateTime         @default(now()) @updatedAt
+
   // Referenced by tenant-composite foreign keys: Postgres requires the
 
   // referenced columns to carry a unique constraint.
@@ -1189,7 +1218,7 @@ model PayrollItem {
   netPayWithAdvance     Decimal  @default(0) @db.Decimal(14, 2)
   earlyLeaveMinutes     Int      @default(0)
   earlyLeaveDeduction   Decimal  @default(0) @db.Decimal(14, 2)
-  /** Ø®ØµÙ… Ø§Ø´ØªØ±Ø§Ùƒ Ø§Ù„Ø¨Ø§Øµ â€” Ù…Ù†ÙØµÙ„ Ø¹Ù† Ø¨Ø§Ù‚ÙŠ Ø§Ù„Ø®ØµÙˆÙ…Ø§Øª Ù„Ø¹Ø±Ø¶Ù‡ Ø¨Ø§Ù„Ø£Ø²Ø±Ù‚ */
+  /** Ø®ØµÙ… Ø§Ø´ØªØ±Ø§Ùƒ Ø§Ù„Ø¨Ø§Øµ â€” Ù…Ù†ÙØµÙ„ Ø¹Ù† Ø¨Ø§Ù‚ÙŠ Ø§Ù„Ø®ØµÙˆÙ…Ø§Øª Ù„Ø¹Ø±Ø¶Ù‡ Ø¨Ø§Ù„Ø£Ø²Ø±Ù‚ */
   busDeduction          Decimal  @default(0) @db.Decimal(14, 2)
   anomalies             String[] @default([])
   createdAt             DateTime @default(now())
@@ -1279,11 +1308,11 @@ model EmployeeSalary {
   baseSalary              Decimal  @db.Decimal(14, 2)
   lumpSumSalary           Decimal  @default(0) @db.Decimal(14, 2) // Ø§Ù„Ø±Ø§ØªØ¨ Ø§Ù„Ù…Ù‚Ø·ÙˆØ¹
   livingAllowance         Decimal  @default(0) @db.Decimal(14, 2) // Ø¨Ø¯Ù„ ØºÙ„Ø§Ø¡ Ù…Ø¹ÙŠØ´Ø©
-  // Ø§Ù„Ø¨Ø¯Ù„Ø§Øª Ø§Ù„Ù…Ø­Ø³ÙˆØ¨Ø© ØªÙ„Ù‚Ø§Ø¦ÙŠØ§Ù‹ Ù…Ù† Ø§Ù„ÙØ±Ù‚
-  responsibilityAllowance Decimal  @default(0) @db.Decimal(14, 2) // 50% Ù…Ù† Ø§Ù„ÙØ±Ù‚
-  extraEffortAllowance    Decimal  @default(0) @db.Decimal(14, 2) // 30% Ù…Ù† Ø§Ù„ÙØ±Ù‚
-  productionIncentive     Decimal  @default(0) @db.Decimal(14, 2) // 20% Ù…Ù† Ø§Ù„ÙØ±Ù‚
-  // Ø§Ù„ØªØ£Ù…ÙŠÙ†Ø§Øª (ØªÙØ¯Ø®Ù„ ÙŠØ¯ÙˆÙŠØ§Ù‹)
+  // Ø§Ù„Ø¨Ø¯Ù„Ø§Øª Ø§Ù„Ù…Ø­Ø³ÙˆØ¨Ø© ØªÙ„Ù‚Ø§Ø¦ÙŠØ§Ù‹ Ù…Ù† Ø§Ù„ÙØ±Ù‚
+  responsibilityAllowance Decimal  @default(0) @db.Decimal(14, 2) // 50% Ù…Ù† Ø§Ù„ÙØ±Ù‚
+  extraEffortAllowance    Decimal  @default(0) @db.Decimal(14, 2) // 30% Ù…Ù† Ø§Ù„ÙØ±Ù‚
+  productionIncentive     Decimal  @default(0) @db.Decimal(14, 2) // 20% Ù…Ù† Ø§Ù„ÙØ±Ù‚
+  // Ø§Ù„ØªØ£Ù…ÙŠÙ†Ø§Øª (ØªÙØ¯Ø®Ù„ ÙŠØ¯ÙˆÙŠØ§Ù‹)
   insuranceAmount         Decimal  @default(0) @db.Decimal(14, 2)
   transportAllowance      Decimal  @default(0) @db.Decimal(14, 2)
   createdAt               DateTime @default(now())
@@ -1296,7 +1325,7 @@ model EmployeeSalary {
 }
 
 // ---------------------------------------------------------------------------
-// Advances (Ø³Ù„Ù) â€” employee advance/loan records
+// Advances (Ø³Ù„Ù) â€” employee advance/loan records
 // ---------------------------------------------------------------------------
 model EmployeeAdvance {
   id                String   @id @default(uuid()) @db.Uuid
@@ -1499,13 +1528,16 @@ model Bus {
   plateNumber          String // Ø±Ù‚Ù… Ø§Ù„Ù„ÙˆØ­Ø©
   driverName           String // Ø§Ø³Ù… Ø§Ù„Ø³Ø§Ø¦Ù‚
   driverPhone          String // Ø±Ù‚Ù… Ø§Ù„Ø³Ø§Ø¦Ù‚ (10 Ø£Ø±Ù‚Ø§Ù… Ø³ÙˆØ±ÙŠØ©)
-  totalCost            Decimal        @db.Decimal(14, 2) // Ø§Ù„ØªÙƒÙ„ÙØ© Ø§Ù„Ø¥Ø¬Ù…Ø§Ù„ÙŠØ© (Ù„.Ø³)
+  totalCost            Decimal        @db.Decimal(14, 2) // Ø§Ù„ØªÙƒÙ„ÙØ© Ø§Ù„Ø¥Ø¬Ù…Ø§Ù„ÙŠØ© (Ù„.Ø³)
+  /// التكلفة اليومية الافتراضية للباص (ل.س)
+  dailyCost            Decimal        @default(200000) @db.Decimal(14, 2)
   companyDeductionPct  Decimal        @db.Decimal(5, 2) // Ø­Ø³Ù… Ø§Ù„Ø´Ø±ÙƒØ© Ø¨Ø§Ù„Ù†Ø³Ø¨Ø© Ø§Ù„Ù…Ø¦ÙˆÙŠØ©
   capacity             Int // Ø³Ø¹Ø© Ø§Ù„Ø±ÙƒØ§Ø¨
-  // Ù†Ø³Ø¨Ø© Ø®ØµÙ… Ø£Ø¬Ø±Ø© Ø§Ù„Ù†Ù‚Ù„ Ø§Ù„ØªÙŠ ØªÙØ­Ø³Ù… Ù…Ù† Ø±Ø§ØªØ¨ Ø§Ù„Ù…ÙˆØ¸Ù (Ù†Ø³Ø¨Ø© 0-100)
+  // Ù†Ø³Ø¨Ø© Ø®ØµÙ… Ø£Ø¬Ø±Ø© Ø§Ù„Ù†Ù‚Ù„ Ø§Ù„ØªÙŠ ØªÙØ­Ø³Ù… Ù…Ù† Ø±Ø§ØªØ¨ Ø§Ù„Ù…ÙˆØ¸Ù (Ù†Ø³Ø¨Ø© 0-100)
   employeeDeductionPct Decimal        @default(0) @db.Decimal(5, 2)
   status               String         @default("active") // active | inactive
   passengers           BusPassenger[]
+  dailyAttendance      BusDailyAttendance[]
   createdAt            DateTime       @default(now())
   updatedAt            DateTime       @updatedAt
 
@@ -1533,7 +1565,7 @@ model BusPassenger {
   employee         Employee?  @relation(fields: [tenantId, employeeId], references: [tenantId, employeeId], onDelete: Cascade)
   name             String? // optional passenger name for display
   subscriptionDate DateTime  @default(now()) @db.Date
-  terminationDate  DateTime? @db.Date // ØªØ§Ø±ÙŠØ® Ø§Ù†ØªÙ‡Ø§Ø¡ Ø§Ù„Ø§Ø´ØªØ±Ø§Ùƒ (Ø¹Ù†Ø¯ Ø§Ù„Ø§Ø³ØªÙ‚Ø§Ù„Ø©/Ø§Ù„Ø¥ÙŠÙ‚Ø§Ù)
+  terminationDate  DateTime? @db.Date // ØªØ§Ø±ÙŠØ® Ø§Ù†ØªÙ‡Ø§Ø¡ Ø§Ù„Ø§Ø´ØªØ±Ø§Ùƒ (Ø¹Ù†Ø¯ Ø§Ù„Ø§Ø³ØªÙ‚Ø§Ù„Ø©/Ø§Ù„Ø¥ÙŠÙ‚Ø§Ù)
   status           String    @default("active") // active | inactive
   createdAt        DateTime  @default(now())
   updatedAt        DateTime  @updatedAt
@@ -1553,10 +1585,10 @@ model AuditLog {
   tenantId  String?  @db.Uuid
   tenant    Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
-  /// Ù…Ù† Ù†ÙÙ‘Ø° Ø§Ù„Ø¹Ù…Ù„ÙŠØ© (userId)
+  /// Ù…Ù† Ù†ÙÙ‘Ø° Ø§Ù„Ø¹Ù…Ù„ÙŠØ© (userId)
   actorId String?
 
-  /// Ø§Ø³Ù… Ø§Ù„Ù…Ø³ØªØ®Ø¯Ù… Ø§Ù„Ù…Ù†ÙÙÙ‘Ø°
+  /// Ø§Ø³Ù… Ø§Ù„Ù…Ø³ØªØ®Ø¯Ù… Ø§Ù„Ù…Ù†ÙÙÙ‘Ø°
   actorUsername String?
 
   /// Ù†ÙˆØ¹ Ø§Ù„Ø¹Ù…Ù„ÙŠØ©: user.create | employee.update | payroll.run | auth.login ...
@@ -1565,21 +1597,21 @@ model AuditLog {
   /// Ù†ÙˆØ¹ Ø§Ù„ÙƒÙŠØ§Ù† Ø§Ù„Ù…ØªØ£Ø«Ø±: employee | user | payroll | attendance ...
   targetType String?
 
-  /// Ù…Ø¹Ø±Ù‘Ù Ø§Ù„ÙƒÙŠØ§Ù† Ø§Ù„Ù…ØªØ£Ø«Ø±
+  /// Ù…Ø¹Ø±Ù‘Ù Ø§Ù„ÙƒÙŠØ§Ù† Ø§Ù„Ù…ØªØ£Ø«Ø±
   targetId String?
 
   /// Ø¹Ù†ÙˆØ§Ù† Ø§Ù„Ù€ IP
   ipAddress String?
 
-  /// User Agent (Ø§Ù„Ù…ØªØµÙØ­ Ø£Ùˆ Ø§Ù„ØªØ·Ø¨ÙŠÙ‚)
+  /// User Agent (Ø§Ù„Ù…ØªØµÙØ­ Ø£Ùˆ Ø§Ù„ØªØ·Ø¨ÙŠÙ‚)
   userAgent String?
 
-  /// Ø¨ÙŠØ§Ù†Ø§Øª Ø¥Ø¶Ø§ÙÙŠØ© (JSON Ø­Ø±)
+  /// Ø¨ÙŠØ§Ù†Ø§Øª Ø¥Ø¶Ø§ÙÙŠØ© (JSON Ø­Ø±)
   metadata Json?
 
   createdAt DateTime @default(now())
 
-  /// ÙÙ‡Ø±Ø³ Ù„Ù„Ø¨Ø­Ø« Ø¨Ø§Ù„Ù…Ø³ØªØ®Ø¯Ù… ÙˆØ§Ù„ØªØ§Ø±ÙŠØ®
+  /// ÙÙ‡Ø±Ø³ Ù„Ù„Ø¨Ø­Ø« Ø¨Ø§Ù„Ù…Ø³ØªØ®Ø¯Ù… ÙˆØ§Ù„ØªØ§Ø±ÙŠØ®
   @@index([actorId, createdAt])
   @@index([targetType, createdAt])
   @@index([targetId])
@@ -1614,6 +1646,7 @@ enum NotificationType {
   PO_RECEIVED
   INVOICE_DUE
   INTEGRATION_ERROR
+  BACKUP_FAILED
 }
 
 enum NotificationSeverity {
@@ -1635,19 +1668,19 @@ model Notification {
   /// Ù†Øµ Ø§Ù„Ø¥Ø´Ø¹Ø§Ø± (Ø¨Ø§Ù„Ø¹Ø±Ø¨ÙŠØ©)
   message      String
 
-  /// Ø§Ù„Ù…ÙˆØ¸Ù Ø§Ù„Ù…Ø±ØªØ¨Ø· Ø¨Ø§Ù„Ø­Ø¯Ø« (Ø¥Ù† ÙˆØ¬Ø¯)
+  /// Ø§Ù„Ù…ÙˆØ¸Ù Ø§Ù„Ù…Ø±ØªØ¨Ø· Ø¨Ø§Ù„Ø­Ø¯Ø« (Ø¥Ù† ÙˆØ¬Ø¯)
   employeeId   String?
   employeeName String?
 
   /// Ù†ÙˆØ¹ Ø§Ù„ÙƒÙŠØ§Ù† Ø§Ù„Ù…ØµØ¯Ø±: bonus | penalty | advance | leave | attendance | employee
   entityType   String?
-  /// Ù…Ø¹Ø±Ù‘Ù Ø§Ù„Ø³Ø¬Ù„ Ø§Ù„Ù…ØµØ¯Ø±
+  /// Ù…Ø¹Ø±Ù‘Ù Ø§Ù„Ø³Ø¬Ù„ Ø§Ù„Ù…ØµØ¯Ø±
   entityId     String?
 
-  /// Ø¨ÙŠØ§Ù†Ø§Øª Ø¥Ø¶Ø§ÙÙŠØ© Ø­Ø±Ø© (JSON)
+  /// Ø¨ÙŠØ§Ù†Ø§Øª Ø¥Ø¶Ø§ÙÙŠØ© Ø­Ø±Ø© (JSON)
   metadata     Json?
 
-  /// Ù…ÙØªØ§Ø­ Ø¥Ù„ØºØ§Ø¡ Ø§Ù„ØªÙƒØ±Ø§Ø± (ÙŠØ³ØªØ®Ø¯Ù…Ù‡ ØªÙ†Ø¨ÙŠÙ‡ Ø§Ù„ØºÙŠØ§Ø¨ Ù„Ù…Ù†Ø¹ Ø§Ù„ØªÙƒØ±Ø§Ø± ÙÙŠ Ù†ÙØ³ Ø§Ù„ÙŠÙˆÙ…)
+  /// Ù…ÙØªØ§Ø­ Ø¥Ù„ØºØ§Ø¡ Ø§Ù„ØªÙƒØ±Ø§Ø± (ÙŠØ³ØªØ®Ø¯Ù…Ù‡ ØªÙ†Ø¨ÙŠÙ‡ Ø§Ù„ØºÙŠØ§Ø¨ Ù„Ù…Ù†Ø¹ Ø§Ù„ØªÙƒØ±Ø§Ø± ÙÙŠ Ù†ÙØ³ Ø§Ù„ÙŠÙˆÙ…)
   dedupeKey    String?
 
   isRead       Boolean              @default(false)
@@ -1671,12 +1704,12 @@ model Notification {
 }
 
 // ===========================================================================
-// WMS EXTENSION â€” Ø§Ù„Ø¯ÙØ¹Ø§ØªØŒ Ø§Ù„ØµÙ„Ø§Ø­ÙŠØ©ØŒ Ø§Ù„ÙÙˆØ§ØªÙŠØ±ØŒ Ø§Ù„ØªØ³Ø¹ÙŠØ±ØŒ Ø§Ù„Ø¬Ø±Ø¯ØŒ Ø§Ù„ØªØ¬Ù‡ÙŠØ²ØŒ Ø§Ù„Ø´Ø­Ù†
+// WMS EXTENSION â€” Ø§Ù„Ø¯ÙØ¹Ø§ØªØŒ Ø§Ù„ØµÙ„Ø§Ø­ÙŠØ©ØŒ Ø§Ù„ÙÙˆØ§ØªÙŠØ±ØŒ Ø§Ù„ØªØ³Ø¹ÙŠØ±ØŒ Ø§Ù„Ø¬Ø±Ø¯ØŒ Ø§Ù„ØªØ¬Ù‡ÙŠØ²ØŒ Ø§Ù„Ø´Ø­Ù†
 // ---------------------------------------------------------------------------
-// Ù…Ù„Ø§Ø­Ø¸Ø© Ù…Ø¹Ù…Ø§Ø±ÙŠØ©: Ø§Ù„Ø¬Ø¯Ø§ÙˆÙ„ Ø§Ù„Ø¬Ø¯ÙŠØ¯Ø© ØªØ³ØªØ®Ø¯Ù… Ù…ÙØ§ØªÙŠØ­ Ø£Ø¬Ù†Ø¨ÙŠØ© Ø¨Ø³ÙŠØ·Ø© Ø¹Ù„Ù‰ `id` (UUID
-// ÙØ±ÙŠØ¯ Ø¹Ø§Ù„Ù…ÙŠØ§Ù‹) Ø¨Ø¯Ù„ Ø§Ù„Ù…ÙØ§ØªÙŠØ­ Ø§Ù„Ù…Ø±ÙƒÙ‘Ø¨Ø© (tenantId, id) Ø§Ù„Ù…Ø³ØªØ®Ø¯Ù…Ø© ÙÙŠ Ø§Ù„Ø¬Ø¯Ø§ÙˆÙ„
-// Ø§Ù„Ù‚Ø¯ÙŠÙ…Ø©. Ø¹Ø²Ù„ Ø§Ù„Ù…Ø³ØªØ£Ø¬Ø±ÙŠÙ† Ù…Ø­ÙÙˆØ¸ Ø¹Ø¨Ø± tenant-extension Ø§Ù„Ø°ÙŠ ÙŠØ­Ù‚Ù† tenantId ÙÙŠ
-// ÙƒÙ„ Ø§Ø³ØªØ¹Ù„Ø§Ù…ØŒ Ùˆ @@unique([tenantId, ...]) Ø¹Ù„Ù‰ Ø§Ù„Ù…ÙØ§ØªÙŠØ­ Ø§Ù„ØªØ¬Ø§Ø±ÙŠØ©.
+// Ù…Ù„Ø§Ø­Ø¸Ø© Ù…Ø¹Ù…Ø§Ø±ÙŠØ©: Ø§Ù„Ø¬Ø¯Ø§ÙˆÙ„ Ø§Ù„Ø¬Ø¯ÙŠØ¯Ø© ØªØ³ØªØ®Ø¯Ù… Ù…ÙØ§ØªÙŠØ­ Ø£Ø¬Ù†Ø¨ÙŠØ© Ø¨Ø³ÙŠØ·Ø© Ø¹Ù„Ù‰ `id` (UUID
+// ÙØ±ÙŠØ¯ Ø¹Ø§Ù„Ù…ÙŠØ§Ù‹) Ø¨Ø¯Ù„ Ø§Ù„Ù…ÙØ§ØªÙŠØ­ Ø§Ù„Ù…Ø±ÙƒÙ‘Ø¨Ø© (tenantId, id) Ø§Ù„Ù…Ø³ØªØ®Ø¯Ù…Ø© ÙÙŠ Ø§Ù„Ø¬Ø¯Ø§ÙˆÙ„
+// Ø§Ù„Ù‚Ø¯ÙŠÙ…Ø©. Ø¹Ø²Ù„ Ø§Ù„Ù…Ø³ØªØ£Ø¬Ø±ÙŠÙ† Ù…Ø­ÙÙˆØ¸ Ø¹Ø¨Ø± tenant-extension Ø§Ù„Ø°ÙŠ ÙŠØ­Ù‚Ù† tenantId ÙÙŠ
+// ÙƒÙ„ Ø§Ø³ØªØ¹Ù„Ø§Ù…ØŒ Ùˆ @@unique([tenantId, ...]) Ø¹Ù„Ù‰ Ø§Ù„Ù…ÙØ§ØªÙŠØ­ Ø§Ù„ØªØ¬Ø§Ø±ÙŠØ©.
 // ===========================================================================
 
 enum BatchStatus {
@@ -1797,9 +1830,9 @@ enum ZoneType {
   RETURNS
 }
 
-// --------------------------------------------------------------- 1. Ø§Ù„Ø¯ÙØ¹Ø§Øª
+// --------------------------------------------------------------- 1. Ø§Ù„Ø¯ÙØ¹Ø§Øª
 
-/// Ø¯ÙØ¹Ø© Ø¥Ù†ØªØ§Ø¬ (Batch / Lot) Ù„Ù…Ù†ØªØ¬ØŒ Ù…Ø¹ ØªØ§Ø±ÙŠØ®ÙŠ Ø§Ù„Ø¥Ù†ØªØ§Ø¬ ÙˆØ§Ù„ØµÙ„Ø§Ø­ÙŠØ©.
+/// Ø¯ÙØ¹Ø© Ø¥Ù†ØªØ§Ø¬ (Batch / Lot) Ù„Ù…Ù†ØªØ¬ØŒ Ù…Ø¹ ØªØ§Ø±ÙŠØ®ÙŠ Ø§Ù„Ø¥Ù†ØªØ§Ø¬ ÙˆØ§Ù„ØµÙ„Ø§Ø­ÙŠØ©.
 /// Ù‡Ø°Ø§ Ù‡Ùˆ Ø§Ù„ÙƒÙŠØ§Ù† Ø§Ù„Ø°ÙŠ ÙŠØ¬Ø¹Ù„ FIFO / FEFO ÙˆØ§Ù„ØªÙ†Ø¨ÙŠÙ‡Ø§Øª Ø§Ù„Ù…Ø¨ÙƒØ±Ø© Ù…Ù…ÙƒÙ†Ø©.
 model ProductBatch {
   id       String  @id @default(uuid()) @db.Uuid
@@ -1809,7 +1842,7 @@ model ProductBatch {
   sku         String
   batchNumber String
 
-  /// ØªØ§Ø±ÙŠØ® Ø§Ù„Ø¥Ù†ØªØ§Ø¬ â€” Ø¥Ù„Ø²Ø§Ù…ÙŠ Ø¹Ù†Ø¯ Ø§Ù„Ø§Ø³ØªÙ„Ø§Ù… Ù„Ù„Ù…Ù†ØªØ¬Ø§Øª Ø§Ù„Ù…ØªØªØ¨ÙŽÙ‘Ø¹Ø© Ø¨Ø§Ù„Ø¯ÙØ¹Ø§Øª
+  /// ØªØ§Ø±ÙŠØ® Ø§Ù„Ø¥Ù†ØªØ§Ø¬ â€” Ø¥Ù„Ø²Ø§Ù…ÙŠ Ø¹Ù†Ø¯ Ø§Ù„Ø§Ø³ØªÙ„Ø§Ù… Ù„Ù„Ù…Ù†ØªØ¬Ø§Øª Ø§Ù„Ù…ØªØªØ¨ÙŽÙ‘Ø¹Ø© Ø¨Ø§Ù„Ø¯ÙØ¹Ø§Øª
   productionDate DateTime? @db.Date
   /// ØªØ§Ø±ÙŠØ® Ø§Ù†ØªÙ‡Ø§Ø¡ Ø§Ù„ØµÙ„Ø§Ø­ÙŠØ© â€” Ø¹Ù„ÙŠÙ‡ ÙŠÙ‚ÙˆÙ… ÙƒØ§Ù…Ù„ Ù…Ù†Ø·Ù‚ FEFO ÙˆØ§Ù„ØªÙ†Ø¨ÙŠÙ‡Ø§Øª
   expiryDate     DateTime? @db.Date
@@ -1822,10 +1855,10 @@ model ProductBatch {
   quantity        Int @default(0)
   reserved        Int @default(0)
 
-  /// ØªÙƒÙ„ÙØ© Ø§Ù„ÙˆØ­Ø¯Ø© Ù„Ù‡Ø°Ù‡ Ø§Ù„Ø¯ÙØ¹Ø© ØªØ­Ø¯ÙŠØ¯Ø§Ù‹ (ØªØ´Ù…Ù„ Ø­ØµØªÙ‡Ø§ Ù…Ù† Ø§Ù„Ù…ØµØ§Ø±ÙŠÙ Ø§Ù„Ù…Ù„Ø­Ù‚Ø©)
+  /// ØªÙƒÙ„ÙØ© Ø§Ù„ÙˆØ­Ø¯Ø© Ù„Ù‡Ø°Ù‡ Ø§Ù„Ø¯ÙØ¹Ø© ØªØ­Ø¯ÙŠØ¯Ø§Ù‹ (ØªØ´Ù…Ù„ Ø­ØµØªÙ‡Ø§ Ù…Ù† Ø§Ù„Ù…ØµØ§Ø±ÙŠÙ Ø§Ù„Ù…Ù„Ø­Ù‚Ø©)
   unitCost Decimal @default(0) @db.Decimal(12, 4)
 
-  /// Ø¨Ø§Ø±ÙƒÙˆØ¯ Ø§Ù„Ø¯ÙØ¹Ø© â€” ÙŠÙØ·Ø¨Ø¹ Ø¹Ù„Ù‰ Ø§Ù„Ù…Ù„ØµÙ‚ ÙˆÙŠÙÙ…Ø³Ø­ Ø¨Ø§Ù„Ø¬Ù‡Ø§Ø² Ø§Ù„Ù…Ø­Ù…ÙˆÙ„
+  /// Ø¨Ø§Ø±ÙƒÙˆØ¯ Ø§Ù„Ø¯ÙØ¹Ø© â€” ÙŠÙØ·Ø¨Ø¹ Ø¹Ù„Ù‰ Ø§Ù„Ù…Ù„ØµÙ‚ ÙˆÙŠÙÙ…Ø³Ø­ Ø¨Ø§Ù„Ø¬Ù‡Ø§Ø² Ø§Ù„Ù…Ø­Ù…ÙˆÙ„
   barcode String?
 
   supplierId         String? @db.Uuid
@@ -1853,8 +1886,8 @@ model ProductBatch {
   @@map("product_batches")
 }
 
-/// Ø±ØµÙŠØ¯ Ø¯ÙØ¹Ø© Ù…Ø¹ÙŠÙ†Ø© ÙÙŠ Ù…ÙˆÙ‚Ø¹ Ù…Ø¹ÙŠÙ‘Ù† â€” Ø¯ÙØªØ± ÙØ±Ø¹ÙŠ ØªØ­Øª stock_levels.
-/// ÙƒÙ„ Ø­Ø±ÙƒØ© Ù‡Ù†Ø§ ØªÙØ·Ø¨ÙŽÙ‘Ù‚ Ø£ÙŠØ¶Ø§Ù‹ Ø¹Ù„Ù‰ Ø§Ù„Ø±ØµÙŠØ¯ Ø§Ù„Ø¥Ø¬Ù…Ø§Ù„ÙŠ ÙÙŠ Ù†ÙØ³ Ø§Ù„Ù…Ø¹Ø§Ù…Ù„Ø©.
+/// Ø±ØµÙŠØ¯ Ø¯ÙØ¹Ø© Ù…Ø¹ÙŠÙ†Ø© ÙÙŠ Ù…ÙˆÙ‚Ø¹ Ù…Ø¹ÙŠÙ‘Ù† â€” Ø¯ÙØªØ± ÙØ±Ø¹ÙŠ ØªØ­Øª stock_levels.
+/// ÙƒÙ„ Ø­Ø±ÙƒØ© Ù‡Ù†Ø§ ØªÙØ·Ø¨ÙŽÙ‘Ù‚ Ø£ÙŠØ¶Ø§Ù‹ Ø¹Ù„Ù‰ Ø§Ù„Ø±ØµÙŠØ¯ Ø§Ù„Ø¥Ø¬Ù…Ø§Ù„ÙŠ ÙÙŠ Ù†ÙØ³ Ø§Ù„Ù…Ø¹Ø§Ù…Ù„Ø©.
 model BatchStockLevel {
   id       String  @id @default(uuid()) @db.Uuid
   tenantId String? @db.Uuid
@@ -1878,7 +1911,7 @@ model BatchStockLevel {
   @@map("batch_stock_levels")
 }
 
-/// Ù‚Ø§Ø¹Ø¯Ø© ØªÙ†Ø¨ÙŠÙ‡ ØµÙ„Ø§Ø­ÙŠØ© Ù‚Ø§Ø¨Ù„Ø© Ù„Ù„Ø¶Ø¨Ø· Ù„ÙƒÙ„ ÙØ¦Ø©/Ù…Ù†ØªØ¬.
+/// Ù‚Ø§Ø¹Ø¯Ø© ØªÙ†Ø¨ÙŠÙ‡ ØµÙ„Ø§Ø­ÙŠØ© Ù‚Ø§Ø¨Ù„Ø© Ù„Ù„Ø¶Ø¨Ø· Ù„ÙƒÙ„ ÙØ¦Ø©/Ù…Ù†ØªØ¬.
 /// Ù…Ø«Ø§Ù„: Ø·Ø¨ÙŠ â†’ ØªØ­Ø°ÙŠØ± 90 ÙŠÙˆÙ…ØŒ Ø­Ø±Ø¬ 30 ÙŠÙˆÙ…ØŒ Ø­Ø¬Ø± ØªÙ„Ù‚Ø§Ø¦ÙŠ 7 Ø£ÙŠØ§Ù….
 model ExpiryAlertRule {
   id       String  @id @default(uuid()) @db.Uuid
@@ -1887,20 +1920,20 @@ model ExpiryAlertRule {
 
   name String
 
-  /// Ù†Ø·Ø§Ù‚ Ø§Ù„ØªØ·Ø¨ÙŠÙ‚ â€” Ø§Ù„Ø£Ø®Øµ ÙŠÙÙˆØ²: sku Ø«Ù… category Ø«Ù… Ø§Ù„Ù‚Ø§Ø¹Ø¯Ø© Ø§Ù„Ø¹Ø§Ù…Ø©
+  /// Ù†Ø·Ø§Ù‚ Ø§Ù„ØªØ·Ø¨ÙŠÙ‚ â€” Ø§Ù„Ø£Ø®Øµ ÙŠÙÙˆØ²: sku Ø«Ù… category Ø«Ù… Ø§Ù„Ù‚Ø§Ø¹Ø¯Ø© Ø§Ù„Ø¹Ø§Ù…Ø©
   category String?
   sku      String?
 
-  /// Ø¹Ø¯Ø¯ Ø§Ù„Ø£ÙŠØ§Ù… Ù‚Ø¨Ù„ Ø§Ù„Ø§Ù†ØªÙ‡Ø§Ø¡ Ù„Ø¥Ø·Ù„Ø§Ù‚ ØªØ­Ø°ÙŠØ± (Ø£ØµÙØ±)
+  /// Ø¹Ø¯Ø¯ Ø§Ù„Ø£ÙŠØ§Ù… Ù‚Ø¨Ù„ Ø§Ù„Ø§Ù†ØªÙ‡Ø§Ø¡ Ù„Ø¥Ø·Ù„Ø§Ù‚ ØªØ­Ø°ÙŠØ± (Ø£ØµÙØ±)
   warnDays     Int @default(60)
   /// Ø¹Ø¯Ø¯ Ø§Ù„Ø£ÙŠØ§Ù… Ù‚Ø¨Ù„ Ø§Ù„Ø§Ù†ØªÙ‡Ø§Ø¡ Ù„Ø¥Ø·Ù„Ø§Ù‚ Ø¥Ù†Ø°Ø§Ø± Ø­Ø±Ø¬ (Ø£Ø­Ù…Ø±)
   criticalDays Int @default(30)
   /// Ø¹Ø¯Ø¯ Ø§Ù„Ø£ÙŠØ§Ù… Ù‚Ø¨Ù„ Ø§Ù„Ø§Ù†ØªÙ‡Ø§Ø¡ Ù„Ù„Ø­Ø¬Ø± Ø§Ù„ØªÙ„Ù‚Ø§Ø¦ÙŠ ÙˆÙ…Ù†Ø¹ Ø§Ù„Ø¨ÙŠØ¹ â€” 0 = Ù…Ø¹Ø·Ù‘Ù„
   blockDays    Int @default(0)
 
-  /// Ø¨Ø±ÙŠØ¯ Ø¥Ø¶Ø§ÙÙŠ ÙŠÙØ®Ø·ÙŽØ± Ø¹Ù†Ø¯ Ø¥Ø·Ù„Ø§Ù‚ Ø§Ù„ØªÙ†Ø¨ÙŠÙ‡
+  /// Ø¨Ø±ÙŠØ¯ Ø¥Ø¶Ø§ÙÙŠ ÙŠÙØ®Ø·ÙŽØ± Ø¹Ù†Ø¯ Ø¥Ø·Ù„Ø§Ù‚ Ø§Ù„ØªÙ†Ø¨ÙŠÙ‡
   notifyEmails String[] @default([])
-  /// Ø¥Ø®Ø·Ø§Ø± ÙØ±ÙŠÙ‚ Ø§Ù„Ù…Ø¨ÙŠØ¹Ø§Øª Ù„ØªØµØ±ÙŠÙ Ø§Ù„Ø¨Ø¶Ø§Ø¹Ø© Ø¨Ø¹Ø±ÙˆØ¶
+  /// Ø¥Ø®Ø·Ø§Ø± ÙØ±ÙŠÙ‚ Ø§Ù„Ù…Ø¨ÙŠØ¹Ø§Øª Ù„ØªØµØ±ÙŠÙ Ø§Ù„Ø¨Ø¶Ø§Ø¹Ø© Ø¨Ø¹Ø±ÙˆØ¶
   notifySales  Boolean  @default(true)
 
   isActive  Boolean  @default(true)
@@ -1914,7 +1947,7 @@ model ExpiryAlertRule {
 
 // ------------------------------------------------- 2. Ù‡ÙŠÙƒÙ„Ø© Ø§Ù„Ù…ÙˆØ§Ù‚Ø¹ (Slotting)
 
-/// Ù…Ù†Ø·Ù‚Ø© Ø¯Ø§Ø®Ù„ Ø§Ù„Ù…Ø®Ø²Ù† (Ø§Ø³ØªÙ„Ø§Ù…ØŒ Ø§Ù„ØªÙ‚Ø§Ø·ØŒ ØªØ®Ø²ÙŠÙ† ÙƒØ«ÙŠÙØŒ Ø­Ø¬Ø± ØµØ­ÙŠØŒ ØªØºÙ„ÙŠÙØŒ Ø´Ø­Ù†).
+/// Ù…Ù†Ø·Ù‚Ø© Ø¯Ø§Ø®Ù„ Ø§Ù„Ù…Ø®Ø²Ù† (Ø§Ø³ØªÙ„Ø§Ù…ØŒ Ø§Ù„ØªÙ‚Ø§Ø·ØŒ ØªØ®Ø²ÙŠÙ† ÙƒØ«ÙŠÙØŒ Ø­Ø¬Ø± ØµØ­ÙŠØŒ ØªØºÙ„ÙŠÙØŒ Ø´Ø­Ù†).
 model WarehouseZone {
   id       String  @id @default(uuid()) @db.Uuid
   tenantId String? @db.Uuid
@@ -1927,7 +1960,7 @@ model WarehouseZone {
   name String
   type ZoneType @default(PICKING)
 
-  /// Ø£ÙˆÙ„ÙˆÙŠØ© Ø§Ù„Ø§Ù„ØªÙ‚Ø§Ø· â€” Ø§Ù„Ø£Ù‚Ù„ Ø±Ù‚Ù…Ø§Ù‹ ÙŠÙØ²Ø§Ø± Ø£ÙˆÙ„Ø§Ù‹ ÙÙŠ Ù…Ø³Ø§Ø± Ø§Ù„Ø¬ÙˆÙ„Ø©
+  /// Ø£ÙˆÙ„ÙˆÙŠØ© Ø§Ù„Ø§Ù„ØªÙ‚Ø§Ø· â€” Ø§Ù„Ø£Ù‚Ù„ Ø±Ù‚Ù…Ø§Ù‹ ÙŠÙØ²Ø§Ø± Ø£ÙˆÙ„Ø§Ù‹ ÙÙŠ Ù…Ø³Ø§Ø± Ø§Ù„Ø¬ÙˆÙ„Ø©
   pickSequence Int     @default(100)
   isActive     Boolean @default(true)
 
@@ -1942,8 +1975,8 @@ model WarehouseZone {
   @@map("warehouse_zones")
 }
 
-/// Ù…ÙˆÙ‚Ø¹ ØªØ®Ø²ÙŠÙ† Ø°Ø±Ù‘ÙŠ (Ù…Ù…Ø±/Ø±Ù/Ø·Ø§Ø¨Ù‚/Ø®Ø§Ù†Ø©). Ù‚ÙŠÙ…Ø© code Ù‡ÙŠ Ù†ÙØ³Ù‡Ø§ Ø§Ù„Ù…Ø³ØªØ®Ø¯Ù…Ø©
-/// ÙÙŠ stock_levels.location â€” Ø¨Ù‡Ø°Ø§ ØªÙ†Ø¯Ù…Ø¬ Ø§Ù„Ù‡ÙŠÙƒÙ„Ø© Ù…Ø¹ Ø§Ù„Ø¨ÙŠØ§Ù†Ø§Øª Ø§Ù„Ù‚Ø§Ø¦Ù…Ø©.
+/// Ù…ÙˆÙ‚Ø¹ ØªØ®Ø²ÙŠÙ† Ø°Ø±Ù‘ÙŠ (Ù…Ù…Ø±/Ø±Ù/Ø·Ø§Ø¨Ù‚/Ø®Ø§Ù†Ø©). Ù‚ÙŠÙ…Ø© code Ù‡ÙŠ Ù†ÙØ³Ù‡Ø§ Ø§Ù„Ù…Ø³ØªØ®Ø¯Ù…Ø©
+/// ÙÙŠ stock_levels.location â€” Ø¨Ù‡Ø°Ø§ ØªÙ†Ø¯Ù…Ø¬ Ø§Ù„Ù‡ÙŠÙƒÙ„Ø© Ù…Ø¹ Ø§Ù„Ø¨ÙŠØ§Ù†Ø§Øª Ø§Ù„Ù‚Ø§Ø¦Ù…Ø©.
 model StorageBin {
   id       String  @id @default(uuid()) @db.Uuid
   tenantId String? @db.Uuid
@@ -1982,7 +2015,7 @@ model StorageBin {
   @@map("storage_bins")
 }
 
-/// Ù…Ù‡Ù…Ø© ØªØ®Ø²ÙŠÙ†: Ø£ÙŠÙ† ØªÙÙ†Ù‚Ù„ Ø§Ù„Ø¨Ø¶Ø§Ø¹Ø© Ø¨Ø¹Ø¯ Ø§Ù„Ø§Ø³ØªÙ„Ø§Ù…ØŒ Ù…Ø¹ Ø§Ù„Ø®Ø§Ù†Ø© Ø§Ù„Ù…Ù‚ØªØ±Ø­Ø© Ø¢Ù„ÙŠØ§Ù‹.
+/// Ù…Ù‡Ù…Ø© ØªØ®Ø²ÙŠÙ†: Ø£ÙŠÙ† ØªÙÙ†Ù‚Ù„ Ø§Ù„Ø¨Ø¶Ø§Ø¹Ø© Ø¨Ø¹Ø¯ Ø§Ù„Ø§Ø³ØªÙ„Ø§Ù…ØŒ Ù…Ø¹ Ø§Ù„Ø®Ø§Ù†Ø© Ø§Ù„Ù…Ù‚ØªØ±Ø­Ø© Ø¢Ù„ÙŠØ§Ù‹.
 model PutawayTask {
   id       String  @id @default(uuid()) @db.Uuid
   tenantId String? @db.Uuid
@@ -1998,11 +2031,11 @@ model PutawayTask {
   quantity     Int
   fromLocation String
 
-  /// Ø§Ù„Ø®Ø§Ù†Ø© Ø§Ù„ØªÙŠ Ø§Ù‚ØªØ±Ø­Ù‡Ø§ Ø§Ù„Ù…Ø­Ø±Ùƒ + Ø³Ø¨Ø¨ Ø§Ù„Ø§Ù‚ØªØ±Ø§Ø­ (Ù„Ù„Ø´ÙØ§ÙÙŠØ© ÙˆØ§Ù„ØªØ¯Ù‚ÙŠÙ‚)
+  /// Ø§Ù„Ø®Ø§Ù†Ø© Ø§Ù„ØªÙŠ Ø§Ù‚ØªØ±Ø­Ù‡Ø§ Ø§Ù„Ù…Ø­Ø±Ùƒ + Ø³Ø¨Ø¨ Ø§Ù„Ø§Ù‚ØªØ±Ø§Ø­ (Ù„Ù„Ø´ÙØ§ÙÙŠØ© ÙˆØ§Ù„ØªØ¯Ù‚ÙŠÙ‚)
   suggestedBin    String?
   suggestionScore Decimal? @db.Decimal(6, 2)
   suggestionRule  String?
-  /// Ø§Ù„Ø®Ø§Ù†Ø© Ø§Ù„ØªÙŠ Ø§Ø³ØªØ®Ø¯Ù…Ù‡Ø§ Ø§Ù„Ù…ÙˆØ¸Ù ÙØ¹Ù„Ø§Ù‹
+  /// Ø§Ù„Ø®Ø§Ù†Ø© Ø§Ù„ØªÙŠ Ø§Ø³ØªØ®Ø¯Ù…Ù‡Ø§ Ø§Ù„Ù…ÙˆØ¸Ù ÙØ¹Ù„Ø§Ù‹
   actualBin       String?
 
   status     PutawayStatus @default(PENDING)
@@ -2043,7 +2076,7 @@ model TaxRate {
   @@map("tax_rates")
 }
 
-/// ÙØ¦Ø© ØªØ³Ø¹ÙŠØ± (Ø¬Ù…Ù„Ø© / Ù…ÙØ±Ù‚ / Ø¹Ù…ÙŠÙ„ Ù…Ù…ÙŠØ²) â€” ØªÙØ±Ø¨Ø· Ø¨Ø§Ù„Ø¹Ù…ÙŠÙ„ ÙˆØªÙØ·Ø¨ÙŽÙ‘Ù‚ ØªÙ„Ù‚Ø§Ø¦ÙŠØ§Ù‹.
+/// ÙØ¦Ø© ØªØ³Ø¹ÙŠØ± (Ø¬Ù…Ù„Ø© / Ù…ÙØ±Ù‚ / Ø¹Ù…ÙŠÙ„ Ù…Ù…ÙŠØ²) â€” ØªÙØ±Ø¨Ø· Ø¨Ø§Ù„Ø¹Ù…ÙŠÙ„ ÙˆØªÙØ·Ø¨ÙŽÙ‘Ù‚ ØªÙ„Ù‚Ø§Ø¦ÙŠØ§Ù‹.
 model PriceTier {
   id       String  @id @default(uuid()) @db.Uuid
   tenantId String? @db.Uuid
@@ -2052,7 +2085,7 @@ model PriceTier {
   code String
   name String
 
-  /// Ø®ØµÙ… Ø§ÙØªØ±Ø§Ø¶ÙŠ Ø¹Ù„Ù‰ Ø³Ø¹Ø± Ø§Ù„Ù‚Ø§Ø¦Ù…Ø© Ø­ÙŠÙ† Ù„Ø§ ÙŠÙˆØ¬Ø¯ Ø³Ø¹Ø± ØµØ±ÙŠØ­ Ù„Ù„Ù…Ù†ØªØ¬ ÙÙŠ Ù‡Ø°Ù‡ Ø§Ù„ÙØ¦Ø©
+  /// Ø®ØµÙ… Ø§ÙØªØ±Ø§Ø¶ÙŠ Ø¹Ù„Ù‰ Ø³Ø¹Ø± Ø§Ù„Ù‚Ø§Ø¦Ù…Ø© Ø­ÙŠÙ† Ù„Ø§ ÙŠÙˆØ¬Ø¯ Ø³Ø¹Ø± ØµØ±ÙŠØ­ Ù„Ù„Ù…Ù†ØªØ¬ ÙÙŠ Ù‡Ø°Ù‡ Ø§Ù„ÙØ¦Ø©
   discountPercent Decimal @default(0) @db.Decimal(6, 3)
 
   isDefault Boolean @default(false)
@@ -2070,7 +2103,7 @@ model PriceTier {
   @@map("price_tiers")
 }
 
-/// Ø³Ø¹Ø± Ù…Ù†ØªØ¬ Ø¶Ù…Ù† ÙØ¦Ø© ØªØ³Ø¹ÙŠØ±ØŒ Ù…Ø¹ Ø¯Ø¹Ù… Ø³Ø¹Ø± Ø§Ù„ÙƒÙ…ÙŠØ© ÙˆØ§Ù„ØµÙ„Ø§Ø­ÙŠØ© Ø§Ù„Ø²Ù…Ù†ÙŠØ©.
+/// Ø³Ø¹Ø± Ù…Ù†ØªØ¬ Ø¶Ù…Ù† ÙØ¦Ø© ØªØ³Ø¹ÙŠØ±ØŒ Ù…Ø¹ Ø¯Ø¹Ù… Ø³Ø¹Ø± Ø§Ù„ÙƒÙ…ÙŠØ© ÙˆØ§Ù„ØµÙ„Ø§Ø­ÙŠØ© Ø§Ù„Ø²Ù…Ù†ÙŠØ©.
 model ProductPrice {
   id       String  @id @default(uuid()) @db.Uuid
   tenantId String? @db.Uuid
@@ -2095,16 +2128,16 @@ model ProductPrice {
   @@map("product_prices")
 }
 
-// ------------------------------------------------- 4. ÙÙˆØ§ØªÙŠØ± Ø§Ù„Ø´Ø±Ø§Ø¡ ÙˆØ§Ù„ØªÙƒÙ„ÙØ©
+// ------------------------------------------------- 4. ÙÙˆØ§ØªÙŠØ± Ø§Ù„Ø´Ø±Ø§Ø¡ ÙˆØ§Ù„ØªÙƒÙ„ÙØ©
 
 model PurchaseInvoice {
   id       String  @id @default(uuid()) @db.Uuid
   tenantId String? @db.Uuid
   tenant   Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
-  /// Ø§Ù„Ø±Ù‚Ù… Ø§Ù„Ø¯Ø§Ø®Ù„ÙŠ ÙÙŠ Ø§Ù„Ù†Ø¸Ø§Ù…
+  /// Ø§Ù„Ø±Ù‚Ù… Ø§Ù„Ø¯Ø§Ø®Ù„ÙŠ ÙÙŠ Ø§Ù„Ù†Ø¸Ø§Ù…
   invoiceNumber         String
-  /// Ø±Ù‚Ù… Ø§Ù„ÙØ§ØªÙˆØ±Ø© Ø§Ù„Ø£ØµÙ„ÙŠØ© Ø¹Ù†Ø¯ Ø§Ù„Ù…ÙˆØ±Ø¯
+  /// Ø±Ù‚Ù… Ø§Ù„ÙØ§ØªÙˆØ±Ø© Ø§Ù„Ø£ØµÙ„ÙŠØ© Ø¹Ù†Ø¯ Ø§Ù„Ù…ÙˆØ±Ø¯
   supplierInvoiceNumber String?
 
   supplierId String   @db.Uuid
@@ -2127,6 +2160,9 @@ model PurchaseInvoice {
   paidAmount      Decimal @default(0) @db.Decimal(14, 2)
 
   currency String  @default("SYP")
+  exchangeRate    Decimal @default(0) @db.Decimal(12, 4)
+  exchangeRateDate DateTime?
+
   notes    String?
 
   createdBy String    @db.Uuid
@@ -2159,7 +2195,7 @@ model PurchaseInvoiceItem {
   purchaseOrderItemId String? @db.Uuid
   sku                 String
 
-  /// Ø¨ÙŠØ§Ù†Ø§Øª Ø§Ù„Ø¯ÙØ¹Ø© ØªÙÙ„ØªÙ‚Ø· Ù‡Ù†Ø§ ÙˆØªÙÙ†Ø´Ø¦ ProductBatch Ø¹Ù†Ø¯ Ø§Ù„ØªØ±Ø­ÙŠÙ„
+  /// Ø¨ÙŠØ§Ù†Ø§Øª Ø§Ù„Ø¯ÙØ¹Ø© ØªÙÙ„ØªÙ‚Ø· Ù‡Ù†Ø§ ÙˆØªÙÙ†Ø´Ø¦ ProductBatch Ø¹Ù†Ø¯ Ø§Ù„ØªØ±Ø­ÙŠÙ„
   batchNumber    String?
   productionDate DateTime? @db.Date
   expiryDate     DateTime? @db.Date
@@ -2173,9 +2209,9 @@ model PurchaseInvoiceItem {
   taxAmount       Decimal @default(0) @db.Decimal(14, 2)
   lineTotal       Decimal @default(0) @db.Decimal(14, 2)
 
-  /// Ø­ØµØ© Ù‡Ø°Ø§ Ø§Ù„Ø¨Ù†Ø¯ Ù…Ù† Ø§Ù„Ù…ØµØ§Ø±ÙŠÙ Ø§Ù„Ù…Ù„Ø­Ù‚Ø© Ø¨Ø¹Ø¯ Ø§Ù„ØªÙˆØ²ÙŠØ¹
+  /// Ø­ØµØ© Ù‡Ø°Ø§ Ø§Ù„Ø¨Ù†Ø¯ Ù…Ù† Ø§Ù„Ù…ØµØ§Ø±ÙŠÙ Ø§Ù„Ù…Ù„Ø­Ù‚Ø© Ø¨Ø¹Ø¯ Ø§Ù„ØªÙˆØ²ÙŠØ¹
   allocatedLandedCost Decimal @default(0) @db.Decimal(14, 4)
-  /// Ø§Ù„ØªÙƒÙ„ÙØ© Ø§Ù„Ù†Ù‡Ø§Ø¦ÙŠØ© Ù„Ù„ÙˆØ­Ø¯Ø© = unitCost + Ø­ØµØ© Ø§Ù„Ù…ØµØ§Ø±ÙŠÙ
+  /// Ø§Ù„ØªÙƒÙ„ÙØ© Ø§Ù„Ù†Ù‡Ø§Ø¦ÙŠØ© Ù„Ù„ÙˆØ­Ø¯Ø© = unitCost + Ø­ØµØ© Ø§Ù„Ù…ØµØ§Ø±ÙŠÙ
   finalUnitCost       Decimal @default(0) @db.Decimal(12, 4)
 
   location String @default("WH-A")
@@ -2189,7 +2225,7 @@ model PurchaseInvoiceItem {
   @@map("purchase_invoice_items")
 }
 
-/// Ù…ØµØ±ÙˆÙ Ù„ÙˆØ¬Ø³ØªÙŠ Ù…Ù„Ø­Ù‚ (Ø´Ø­Ù†ØŒ Ø¬Ù…Ø§Ø±ÙƒØŒ ØªØ£Ù…ÙŠÙ†ØŒ Ù…Ù†Ø§ÙˆÙ„Ø©) ÙŠÙÙˆØ²ÙŽÙ‘Ø¹ Ø¹Ù„Ù‰ Ø¨Ù†ÙˆØ¯ Ø§Ù„ÙØ§ØªÙˆØ±Ø©.
+/// Ù…ØµØ±ÙˆÙ Ù„ÙˆØ¬Ø³ØªÙŠ Ù…Ù„Ø­Ù‚ (Ø´Ø­Ù†ØŒ Ø¬Ù…Ø§Ø±ÙƒØŒ ØªØ£Ù…ÙŠÙ†ØŒ Ù…Ù†Ø§ÙˆÙ„Ø©) ÙŠÙÙˆØ²ÙŽÙ‘Ø¹ Ø¹Ù„Ù‰ Ø¨Ù†ÙˆØ¯ Ø§Ù„ÙØ§ØªÙˆØ±Ø©.
 model LandedCost {
   id       String  @id @default(uuid()) @db.Uuid
   tenantId String? @db.Uuid
@@ -2233,7 +2269,7 @@ model PurchasePayment {
   @@map("purchase_payments")
 }
 
-/// Ø³Ø¬Ù„ ØªØºÙŠÙ‘Ø± ØªÙƒÙ„ÙØ© Ø§Ù„Ù…Ù†ØªØ¬ â€” ÙƒÙ„ Ø¥Ø¹Ø§Ø¯Ø© Ø­Ø³Ø§Ø¨ Ù„Ù…ØªÙˆØ³Ø· Ø§Ù„ØªÙƒÙ„ÙØ© ØªÙØªØ±Ùƒ Ø£Ø«Ø±Ø§Ù‹ Ù‡Ù†Ø§.
+/// Ø³Ø¬Ù„ ØªØºÙŠÙ‘Ø± ØªÙƒÙ„ÙØ© Ø§Ù„Ù…Ù†ØªØ¬ â€” ÙƒÙ„ Ø¥Ø¹Ø§Ø¯Ø© Ø­Ø³Ø§Ø¨ Ù„Ù…ØªÙˆØ³Ø· Ø§Ù„ØªÙƒÙ„ÙØ© ØªÙØªØ±Ùƒ Ø£Ø«Ø±Ø§Ù‹ Ù‡Ù†Ø§.
 model CostHistory {
   id       String  @id @default(uuid()) @db.Uuid
   tenantId String? @db.Uuid
@@ -2259,7 +2295,7 @@ model CostHistory {
   @@map("cost_history")
 }
 
-// -------------------------------------------------------- 5. ÙÙˆØ§ØªÙŠØ± Ø§Ù„Ø¨ÙŠØ¹
+// -------------------------------------------------------- 5. ÙÙˆØ§ØªÙŠØ± Ø§Ù„Ø¨ÙŠØ¹
 
 model SalesInvoice {
   id       String  @id @default(uuid()) @db.Uuid
@@ -2287,10 +2323,13 @@ model SalesInvoice {
   taxAmount      Decimal @default(0) @db.Decimal(14, 2)
   totalAmount    Decimal @default(0) @db.Decimal(14, 2)
   paidAmount     Decimal @default(0) @db.Decimal(14, 2)
-  /// ØªÙƒÙ„ÙØ© Ø§Ù„Ø¨Ø¶Ø§Ø¹Ø© Ø§Ù„Ù…Ø¨Ø§Ø¹Ø© â€” Ù„Ù‚Ø·Ø© ÙˆÙ‚Øª Ø§Ù„ØªØ±Ø­ÙŠÙ„ Ù„Ø­Ø³Ø§Ø¨ Ù‡Ø§Ù…Ø´ Ø§Ù„Ø±Ø¨Ø­
+  /// ØªÙƒÙ„ÙØ© Ø§Ù„Ø¨Ø¶Ø§Ø¹Ø© Ø§Ù„Ù…Ø¨Ø§Ø¹Ø© â€” Ù„Ù‚Ø·Ø© ÙˆÙ‚Øª Ø§Ù„ØªØ±Ø­ÙŠÙ„ Ù„Ø­Ø³Ø§Ø¨ Ù‡Ø§Ù…Ø´ Ø§Ù„Ø±Ø¨Ø­
   cogsAmount     Decimal @default(0) @db.Decimal(14, 2)
 
   currency String  @default("SYP")
+  exchangeRate    Decimal @default(0) @db.Decimal(12, 4)
+  exchangeRateDate DateTime?
+
   notes    String?
 
   createdBy String    @db.Uuid
@@ -2323,7 +2362,7 @@ model SalesInvoiceItem {
   salesOrderItemId String? @db.Uuid
   sku              String
 
-  /// Ø§Ù„Ø¯ÙØ¹Ø© Ø§Ù„Ù…Ø³Ø­ÙˆØ¨ Ù…Ù†Ù‡Ø§ â€” ÙŠÙ‚ØªØ±Ø­Ù‡Ø§ Ø§Ù„Ù†Ø¸Ø§Ù… ØªÙ„Ù‚Ø§Ø¦ÙŠØ§Ù‹ ÙˆÙÙ‚ FEFO
+  /// Ø§Ù„Ø¯ÙØ¹Ø© Ø§Ù„Ù…Ø³Ø­ÙˆØ¨ Ù…Ù†Ù‡Ø§ â€” ÙŠÙ‚ØªØ±Ø­Ù‡Ø§ Ø§Ù„Ù†Ø¸Ø§Ù… ØªÙ„Ù‚Ø§Ø¦ÙŠØ§Ù‹ ÙˆÙÙ‚ FEFO
   batchId     String?       @db.Uuid
   batch       ProductBatch? @relation(fields: [batchId], references: [id], onDelete: SetNull)
   batchNumber String?
@@ -2338,7 +2377,7 @@ model SalesInvoiceItem {
   taxAmount       Decimal @default(0) @db.Decimal(14, 2)
   lineTotal       Decimal @default(0) @db.Decimal(14, 2)
 
-  /// ØªÙƒÙ„ÙØ© Ø§Ù„ÙˆØ­Ø¯Ø© ÙˆÙ‚Øª Ø§Ù„Ø¨ÙŠØ¹ â€” Ù„Ø§ ØªØªØ£Ø«Ø± Ø¨ØªØºÙŠÙ‘Ø± Ø§Ù„ØªÙƒÙ„ÙØ© Ù„Ø§Ø­Ù‚Ø§Ù‹
+  /// ØªÙƒÙ„ÙØ© Ø§Ù„ÙˆØ­Ø¯Ø© ÙˆÙ‚Øª Ø§Ù„Ø¨ÙŠØ¹ â€” Ù„Ø§ ØªØªØ£Ø«Ø± Ø¨ØªØºÙŠÙ‘Ø± Ø§Ù„ØªÙƒÙ„ÙØ© Ù„Ø§Ø­Ù‚Ø§Ù‹
   unitCost Decimal @default(0) @db.Decimal(12, 4)
 
   location String @default("WH-A")
@@ -2352,7 +2391,7 @@ model SalesInvoiceItem {
   @@map("sales_invoice_items")
 }
 
-/// Ø¥Ø°Ù† Ø®Ø±ÙˆØ¬ / Ø³Ù†Ø¯ ØªØ³Ù„ÙŠÙ… â€” Ø§Ù„ÙˆØ«ÙŠÙ‚Ø© Ø§Ù„ØªÙŠ ØªÙ†Ù‚Ù„ Ø§Ù„Ø¨Ø¶Ø§Ø¹Ø© ÙØ¹Ù„ÙŠØ§Ù‹ Ø®Ø§Ø±Ø¬ Ø§Ù„Ù…Ø®Ø²Ù†.
+/// Ø¥Ø°Ù† Ø®Ø±ÙˆØ¬ / Ø³Ù†Ø¯ ØªØ³Ù„ÙŠÙ… â€” Ø§Ù„ÙˆØ«ÙŠÙ‚Ø© Ø§Ù„ØªÙŠ ØªÙ†Ù‚Ù„ Ø§Ù„Ø¨Ø¶Ø§Ø¹Ø© ÙØ¹Ù„ÙŠØ§Ù‹ Ø®Ø§Ø±Ø¬ Ø§Ù„Ù…Ø®Ø²Ù†.
 model DeliveryNote {
   id       String  @id @default(uuid()) @db.Uuid
   tenantId String? @db.Uuid
@@ -2428,12 +2467,12 @@ model CycleCount {
   countedBy  String? @db.Uuid
   approvedBy String? @db.Uuid
 
-  /// Ù„Ù‚Ø·Ø© Ø¥Ø¬Ù…Ø§Ù„ÙŠØ© Ù„Ù„ÙØ±ÙˆÙ‚Ø§Øª â€” ØªÙØ­Ø³Ø¨ Ø¹Ù†Ø¯ Ø§Ù„Ø¥Ù‚ÙØ§Ù„
+  /// Ù„Ù‚Ø·Ø© Ø¥Ø¬Ù…Ø§Ù„ÙŠØ© Ù„Ù„ÙØ±ÙˆÙ‚Ø§Øª â€” ØªÙØ­Ø³Ø¨ Ø¹Ù†Ø¯ Ø§Ù„Ø¥Ù‚ÙØ§Ù„
   totalLines    Int     @default(0)
   countedLines  Int     @default(0)
   varianceLines Int     @default(0)
   varianceValue Decimal @default(0) @db.Decimal(14, 2)
-  /// Ù‡Ù„ Ø·ÙØ¨ÙÙ‘Ù‚Øª Ø§Ù„ØªØ³ÙˆÙŠØ§Øª Ø¹Ù„Ù‰ Ø§Ù„Ù…Ø®Ø²ÙˆÙ† ÙØ¹Ù„Ø§Ù‹
+  /// Ù‡Ù„ Ø·ÙØ¨ÙÙ‘Ù‚Øª Ø§Ù„ØªØ³ÙˆÙŠØ§Øª Ø¹Ù„Ù‰ Ø§Ù„Ù…Ø®Ø²ÙˆÙ† ÙØ¹Ù„Ø§Ù‹
   adjustmentsPosted Boolean @default(false)
 
   notes String?
@@ -2463,7 +2502,7 @@ model CycleCountItem {
   batch    ProductBatch? @relation(fields: [batchId], references: [id], onDelete: SetNull)
   location String
 
-  /// Ø§Ù„Ø±ØµÙŠØ¯ Ø§Ù„Ø¯ÙØªØ±ÙŠ Ù„Ø­Ø¸Ø© ØªØ¬Ù…ÙŠØ¯ Ø§Ù„Ù‚Ø§Ø¦Ù…Ø© â€” Ø§Ù„Ù…Ù‚Ø§Ø±Ù†Ø© ØªØªÙ… Ø¶Ø¯Ù‡ Ù„Ø§ Ø¶Ø¯ Ø§Ù„Ø±ØµÙŠØ¯ Ø§Ù„Ø­Ø§Ù„ÙŠ
+  /// Ø§Ù„Ø±ØµÙŠØ¯ Ø§Ù„Ø¯ÙØªØ±ÙŠ Ù„Ø­Ø¸Ø© ØªØ¬Ù…ÙŠØ¯ Ø§Ù„Ù‚Ø§Ø¦Ù…Ø© â€” Ø§Ù„Ù…Ù‚Ø§Ø±Ù†Ø© ØªØªÙ… Ø¶Ø¯Ù‡ Ù„Ø§ Ø¶Ø¯ Ø§Ù„Ø±ØµÙŠØ¯ Ø§Ù„Ø­Ø§Ù„ÙŠ
   systemQuantity  Int
   countedQuantity Int?
   variance        Int     @default(0)
@@ -2485,7 +2524,7 @@ model CycleCountItem {
   @@map("cycle_count_items")
 }
 
-// ------------------------------------------------ 7. ÙØ­Øµ Ø§Ù„Ø¬ÙˆØ¯Ø© Ø¹Ù†Ø¯ Ø§Ù„Ø§Ø³ØªÙ„Ø§Ù…
+// ------------------------------------------------ 7. ÙØ­Øµ Ø§Ù„Ø¬ÙˆØ¯Ø© Ø¹Ù†Ø¯ Ø§Ù„Ø§Ø³ØªÙ„Ø§Ù…
 
 model QualityInspection {
   id       String  @id @default(uuid()) @db.Uuid
@@ -2505,7 +2544,7 @@ model QualityInspection {
 
   status QcStatus @default(PENDING)
 
-  /// Ù…Ø¹Ø§ÙŠÙŠØ± Ø§Ù„ÙØ­Øµ ÙˆÙ†ØªØ§Ø¦Ø¬Ù‡Ø§: [{criterion, expected, actual, passed}]
+  /// Ù…Ø¹Ø§ÙŠÙŠØ± Ø§Ù„ÙØ­Øµ ÙˆÙ†ØªØ§Ø¦Ø¬Ù‡Ø§: [{criterion, expected, actual, passed}]
   checklist Json?
 
   failureReason String?
@@ -2523,7 +2562,7 @@ model QualityInspection {
   @@map("quality_inspections")
 }
 
-// ------------------------------------------- 8. Ø§Ù„ØªØ¬Ù‡ÙŠØ² ÙˆØ§Ù„ØªØºÙ„ÙŠÙ ÙˆØ§Ù„Ø´Ø­Ù†
+// ------------------------------------------- 8. Ø§Ù„ØªØ¬Ù‡ÙŠØ² ÙˆØ§Ù„ØªØºÙ„ÙŠÙ ÙˆØ§Ù„Ø´Ø­Ù†
 
 model PickList {
   id       String  @id @default(uuid()) @db.Uuid
@@ -2534,7 +2573,7 @@ model PickList {
   strategy   PickStrategy @default(SINGLE)
   status     PickStatus   @default(PENDING)
 
-  /// Ø·Ù„Ø¨Ø§Øª Ø§Ù„Ø¨ÙŠØ¹ Ø§Ù„Ù…Ø´Ù…ÙˆÙ„Ø© â€” Ø£ÙƒØ«Ø± Ù…Ù† ÙˆØ§Ø­Ø¯ ÙÙŠ Batch Picking
+  /// Ø·Ù„Ø¨Ø§Øª Ø§Ù„Ø¨ÙŠØ¹ Ø§Ù„Ù…Ø´Ù…ÙˆÙ„Ø© â€” Ø£ÙƒØ«Ø± Ù…Ù† ÙˆØ§Ø­Ø¯ ÙÙŠ Batch Picking
   salesOrderIds String[] @default([])
   zoneCode      String?
 
@@ -2542,7 +2581,7 @@ model PickList {
 
   totalLines     Int @default(0)
   completedLines Int @default(0)
-  /// Ù…Ø³Ø§ÙØ© Ø§Ù„Ù…Ø³Ø§Ø± Ø§Ù„Ù…Ù‚Ø¯Ù‘Ø±Ø© Ø¨Ø§Ù„Ø£Ù…ØªØ§Ø± â€” Ù…Ø®Ø±Ø¬ Ø®ÙˆØ§Ø±Ø²Ù…ÙŠØ© ØªØ±ØªÙŠØ¨ Ø§Ù„Ù…Ø³Ø§Ø±
+  /// Ù…Ø³Ø§ÙØ© Ø§Ù„Ù…Ø³Ø§Ø± Ø§Ù„Ù…Ù‚Ø¯Ù‘Ø±Ø© Ø¨Ø§Ù„Ø£Ù…ØªØ§Ø± â€” Ù…Ø®Ø±Ø¬ Ø®ÙˆØ§Ø±Ø²Ù…ÙŠØ© ØªØ±ØªÙŠØ¨ Ø§Ù„Ù…Ø³Ø§Ø±
   estimatedDistanceM Int @default(0)
 
   startedAt   DateTime?
@@ -2643,7 +2682,7 @@ model Shipment {
   packageCount  Int     @default(0)
   shippingCost  Decimal @default(0) @db.Decimal(12, 2)
 
-  /// Ø­Ù…ÙˆÙ„Ø© Ù…Ù„ØµÙ‚ Ø§Ù„Ø´Ø­Ù† (Ù†Øµ Ø§Ù„Ø¨Ø§Ø±ÙƒÙˆØ¯/QR) â€” ØªÙÙˆÙ„ÙŽÙ‘Ø¯ Ø¹Ù†Ø¯ Ø§Ù„Ø·Ø¨Ø§Ø¹Ø©
+  /// Ø­Ù…ÙˆÙ„Ø© Ù…Ù„ØµÙ‚ Ø§Ù„Ø´Ø­Ù† (Ù†Øµ Ø§Ù„Ø¨Ø§Ø±ÙƒÙˆØ¯/QR) â€” ØªÙÙˆÙ„ÙŽÙ‘Ø¯ Ø¹Ù†Ø¯ Ø§Ù„Ø·Ø¨Ø§Ø¹Ø©
   labelPayload String?
   labelFormat  String?
 
@@ -2731,14 +2770,14 @@ model IntegrationConnection {
   name     String
 
   baseUrl String?
-  /// Ù…ÙØ§ØªÙŠØ­ Ø§Ù„ÙˆØµÙˆÙ„ â€” Ù…Ø®Ø²ÙŽÙ‘Ù†Ø© Ù…Ø´ÙÙ‘Ø±Ø©ØŒ ÙˆÙ„Ø§ ØªÙØ¹Ø§Ø¯ Ø£Ø¨Ø¯Ø§Ù‹ ÙÙŠ Ø£ÙŠ Ø±Ø¯
+  /// Ù…ÙØ§ØªÙŠØ­ Ø§Ù„ÙˆØµÙˆÙ„ â€” Ù…Ø®Ø²ÙŽÙ‘Ù†Ø© Ù…Ø´ÙÙ‘Ø±Ø©ØŒ ÙˆÙ„Ø§ ØªÙØ¹Ø§Ø¯ Ø£Ø¨Ø¯Ø§Ù‹ ÙÙŠ Ø£ÙŠ Ø±Ø¯
   apiKeyEncrypted    String?
   apiSecretEncrypted String?
 
-  /// Ø¥Ø¹Ø¯Ø§Ø¯Ø§Øª Ø®Ø§ØµØ© Ø¨Ø§Ù„Ù…Ø²ÙˆÙ‘Ø¯ (Ø§Ø³Ù… Ø§Ù„Ù…ØªØ¬Ø±ØŒ Ù…Ø¹Ø±Ù‘Ù Ø§Ù„Ø´Ø±ÙƒØ©ØŒ Ø®Ø±Ø§Ø¦Ø· Ø§Ù„Ø­Ù‚ÙˆÙ„...)
+  /// Ø¥Ø¹Ø¯Ø§Ø¯Ø§Øª Ø®Ø§ØµØ© Ø¨Ø§Ù„Ù…Ø²ÙˆÙ‘Ø¯ (Ø§Ø³Ù… Ø§Ù„Ù…ØªØ¬Ø±ØŒ Ù…Ø¹Ø±Ù‘Ù Ø§Ù„Ø´Ø±ÙƒØ©ØŒ Ø®Ø±Ø§Ø¦Ø· Ø§Ù„Ø­Ù‚ÙˆÙ„...)
   config Json?
 
-  /// Ù…Ø§ Ø§Ù„ÙƒÙŠØ§Ù†Ø§Øª Ø§Ù„ØªÙŠ ØªÙØ²Ø§Ù…ÙŽÙ†: products, stock, orders, customers
+  /// Ù…Ø§ Ø§Ù„ÙƒÙŠØ§Ù†Ø§Øª Ø§Ù„ØªÙŠ ØªÙØ²Ø§Ù…ÙŽÙ†: products, stock, orders, customers
   syncEntities String[] @default([])
   syncInterval Int      @default(15)
 
@@ -2784,7 +2823,7 @@ model IntegrationSyncLog {
   @@map("integration_sync_logs")
 }
 
-/// Ù†Ù‚Ø·Ø© webhook ØµØ§Ø¯Ø±Ø© â€” ÙŠÙØ®Ø·ÙŽØ± Ø¨Ù‡Ø§ Ø§Ù„Ù…ØªØ¬Ø± Ø§Ù„Ø¥Ù„ÙƒØªØ±ÙˆÙ†ÙŠ Ø¹Ù†Ø¯ ØªØºÙŠÙ‘Ø± Ø§Ù„Ù…Ø®Ø²ÙˆÙ†.
+/// Ù†Ù‚Ø·Ø© webhook ØµØ§Ø¯Ø±Ø© â€” ÙŠÙØ®Ø·ÙŽØ± Ø¨Ù‡Ø§ Ø§Ù„Ù…ØªØ¬Ø± Ø§Ù„Ø¥Ù„ÙƒØªØ±ÙˆÙ†ÙŠ Ø¹Ù†Ø¯ ØªØºÙŠÙ‘Ø± Ø§Ù„Ù…Ø®Ø²ÙˆÙ†.
 model WebhookEndpoint {
   id       String  @id @default(uuid()) @db.Uuid
   tenantId String? @db.Uuid
@@ -2811,16 +2850,16 @@ model WebhookEndpoint {
 // Ø±Ø¨Ø· Ø§Ù„Ù…Ø­Ø§Ø³Ø¨Ø© Ø¨Ø­Ø±ÙƒØ© Ø§Ù„Ù…Ø®Ø²Ù† â€” Ø§Ù„Ù‚ÙŠÙˆØ¯ Ø§Ù„Ø¢Ù„ÙŠØ©
 // ===========================================================================
 
-/// Ø£ÙŠ Ø­Ø³Ø§Ø¨ ÙŠÙ‚Ø§Ø¨Ù„ Ø£ÙŠ Ø¯ÙˆØ± Ù…Ø­Ø§Ø³Ø¨ÙŠ ÙÙŠ Ù‡Ø°Ù‡ Ø§Ù„Ù…Ù†Ø´Ø£Ø©.
+/// Ø£ÙŠ Ø­Ø³Ø§Ø¨ ÙŠÙ‚Ø§Ø¨Ù„ Ø£ÙŠ Ø¯ÙˆØ± Ù…Ø­Ø§Ø³Ø¨ÙŠ ÙÙŠ Ù‡Ø°Ù‡ Ø§Ù„Ù…Ù†Ø´Ø£Ø©.
 ///
-/// Ø´Ø¬Ø±Ø© Ø§Ù„Ø­Ø³Ø§Ø¨Ø§Øª ØªØ®ØªÙ„Ù Ù…Ù† Ù…Ù†Ø´Ø£Ø© Ù„Ø£Ø®Ø±Ù‰ØŒ ÙÙ„Ø§ ÙŠÙ…ÙƒÙ† ØªØ«Ø¨ÙŠØª Ø£ÙƒÙˆØ§Ø¯ ÙÙŠ Ø§Ù„ÙƒÙˆØ¯. Ù‡Ø°Ø§
-/// Ø§Ù„Ø¬Ø¯ÙˆÙ„ Ù‡Ùˆ Ø§Ù„ØªØ±Ø¬Ù…Ø©: Ø§Ù„Ø¯ÙˆØ± (`inventory`) â† Ø§Ù„Ø­Ø³Ø§Ø¨ Ø§Ù„ÙØ¹Ù„ÙŠ Ø¹Ù†Ø¯ Ø§Ù„Ø¹Ù…ÙŠÙ„.
+/// Ø´Ø¬Ø±Ø© Ø§Ù„Ø­Ø³Ø§Ø¨Ø§Øª ØªØ®ØªÙ„Ù Ù…Ù† Ù…Ù†Ø´Ø£Ø© Ù„Ø£Ø®Ø±Ù‰ØŒ ÙÙ„Ø§ ÙŠÙ…ÙƒÙ† ØªØ«Ø¨ÙŠØª Ø£ÙƒÙˆØ§Ø¯ ÙÙŠ Ø§Ù„ÙƒÙˆØ¯. Ù‡Ø°Ø§
+/// Ø§Ù„Ø¬Ø¯ÙˆÙ„ Ù‡Ùˆ Ø§Ù„ØªØ±Ø¬Ù…Ø©: Ø§Ù„Ø¯ÙˆØ± (`inventory`) â† Ø§Ù„Ø­Ø³Ø§Ø¨ Ø§Ù„ÙØ¹Ù„ÙŠ Ø¹Ù†Ø¯ Ø§Ù„Ø¹Ù…ÙŠÙ„.
 model AccountMapping {
   id       String  @id @default(uuid()) @db.Uuid
   tenantId String? @db.Uuid
   tenant   Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
-  /// Ø§Ù„Ø¯ÙˆØ± Ø§Ù„Ù…Ø­Ø§Ø³Ø¨ÙŠ â€” Ø¥Ø­Ø¯Ù‰ Ù‚ÙŠÙ… LEDGER_ROLES ÙÙŠ Ø§Ù„ÙƒÙˆØ¯
+  /// Ø§Ù„Ø¯ÙˆØ± Ø§Ù„Ù…Ø­Ø§Ø³Ø¨ÙŠ â€” Ø¥Ø­Ø¯Ù‰ Ù‚ÙŠÙ… LEDGER_ROLES ÙÙŠ Ø§Ù„ÙƒÙˆØ¯
   role String
 
   accountId String  @db.Uuid
@@ -2858,7 +2897,7 @@ model UserSubscription {
 // MANUFACTURING EXTENSION — BOM + Production Orders + Cost Tracking
 // ===========================================================================
 
-/// نوع المنتج: مادة خام / نصف مصنّع / منتج نهائي
+/// نوع المنتج: مادة خام / نصٝ مصنّع / منتج نهائي
 enum ProductType {
   RAW_MATERIAL
   SEMI_FINISHED
@@ -2887,7 +2926,7 @@ model BOM {
   /// SKU المنتج النهائي
   productSku String
 
-  /// الإصدار — يرتفع عند التعديل الجوهري
+  /// الإصدار — يرتٝع عند التعديل الجوهري
   version  Int     @default(1)
   isActive Boolean @default(true)
   notes    String?
@@ -2906,7 +2945,7 @@ model BOM {
   @@map("boms")
 }
 
-/// سطر واحد في الـBOM: مادة خام + الكمية المطلوبة لإنتاج وحدة واحدة
+/// سطر واحد ٝي الـBOM: مادة خام + الكمية المطلوبة لإنتاج وحدة واحدة
 model BOMItem {
   id       String  @id @default(uuid()) @db.Uuid
   tenantId String? @db.Uuid
@@ -2924,7 +2963,7 @@ model BOMItem {
   /// وحدة القياس (متر، قطعة، كغ...)
   unit String @default("قطعة")
 
-  /// نسبة الهدر المتوقعة % — تُضاف تلقائياً على الكمية المسحوبة
+  /// نسبة الهدر المتوقعة % — تٝضاٝ تلقائياً على الكمية المسحوبة
   wastePercent Decimal @default(0) @db.Decimal(6, 3)
 
   notes String?
@@ -2953,8 +2992,18 @@ model ProductionOrder {
 
   orderNumber String
 
-  bomId      String @db.Uuid
-  bom        BOM    @relation(fields: [bomId], references: [id], onDelete: Restrict)
+  /// اسم الدفعة
+  batchName String?
+
+  /// نوع المنتج: jeans | dress | suit | shirt | other
+  productType String?
+
+  /// تاريخ إنشاء الدفعة
+  createdDate DateTime? @db.Date
+
+  /// BOM المستخدمة — اختيارية، لأن الدفعة قد تُنشأ قبل إعداد قائمة المواد
+  bomId      String? @db.Uuid
+  bom        BOM?    @relation(fields: [bomId], references: [id], onDelete: Restrict)
 
   /// SKU المنتج النهائي (مكرر هنا لسهولة الاستعلام)
   productSku String
@@ -2970,7 +3019,7 @@ model ProductionOrder {
   completedAt   DateTime?
   completedDate DateTime? @db.Date
 
-  /// التكاليف المكوّنة — تُحسب عند الإتمام
+  /// التكاليٝ المكوّنة — تٝحسب عند الإتمام
   materialCost  Decimal @default(0) @db.Decimal(14, 4)
   laborCost     Decimal @default(0) @db.Decimal(14, 4)
   overheadCost  Decimal @default(0) @db.Decimal(14, 4)
@@ -2978,7 +3027,7 @@ model ProductionOrder {
   otherCost     Decimal @default(0) @db.Decimal(14, 4)
   totalCost     Decimal @default(0) @db.Decimal(14, 4)
 
-  /// تكلفة الوحدة الواحدة = totalCost / actualQty
+  /// تكلٝة الوحدة الواحدة = totalCost / actualQty
   unitCost Decimal @default(0) @db.Decimal(14, 4)
 
   notes     String?
@@ -2988,7 +3037,11 @@ model ProductionOrder {
   updatedAt DateTime @updatedAt
 
   consumption MaterialConsumption[]
+  stages       ProductionStage[]
+  costRecord   ProductionCostRecord?
+  variants     ProductionVariant[]
 
+  @@unique([tenantId, id])
   @@unique([tenantId, orderNumber])
   @@index([tenantId, productSku])
   @@index([tenantId, status])
@@ -2997,7 +3050,7 @@ model ProductionOrder {
   @@map("production_orders")
 }
 
-/// تفاصيل استهلاك المواد الخام في أمر إنتاج واحد
+/// تٝاصيل استهلاك المواد الخام ٝي أمر إنتاج واحد
 model MaterialConsumption {
   id       String  @id @default(uuid()) @db.Uuid
   tenantId String? @db.Uuid
@@ -3011,17 +3064,17 @@ model MaterialConsumption {
   /// الكمية المخططة (من BOM × plannedQty)
   plannedQty Decimal @db.Decimal(12, 4)
 
-  /// الكمية الفعلية المسحوبة من المخزن
+  /// الكمية الٝعلية المسحوبة من المخزن
   actualQty Decimal @db.Decimal(12, 4)
 
-  /// الهدر الفعلي
+  /// الهدر الٝعلي
   wasteQty Decimal @default(0) @db.Decimal(12, 4)
 
-  /// تكلفة الوحدة وقت السحب (snapshot)
+  /// تكلٝة الوحدة وقت السحب (snapshot)
   unitCost  Decimal @db.Decimal(12, 4)
   totalCost Decimal @db.Decimal(14, 4)
 
-  /// الموقع الذي سُحبت منه المادة
+  /// الموقع الذي سٝحبت منه المادة
   location String
 
   createdAt DateTime @default(now())
@@ -3041,13 +3094,13 @@ enum RepMovementType {
   SOLD       // بيع لعميل
   RETURNED   // مرتجع من عميل
   ADJUSTED   // تسوية يدوية
-  SETTLED    // في إطار التسوية
+  SETTLED    // ٝي إطار التسوية
 }
 
 enum RepSaleStatus {
   PENDING    // بانتظار التحصيل
-  PARTIAL    // مدفوع جزئياً
-  PAID       // مدفوع بالكامل
+  PARTIAL    // مدٝوع جزئياً
+  PAID       // مدٝوع بالكامل
   CANCELLED  // ملغى
 }
 
@@ -3072,7 +3125,7 @@ model Representative {
   userId String @unique @db.Uuid
   user   User   @relation(fields: [userId], references: [id], onDelete: Restrict)
 
-  /// ربط اختياري بسجل الموظف
+  /// ربط اختياري بسجل الموظٝ
   employeeId String? @db.Uuid
 
   name   String
@@ -3133,7 +3186,7 @@ model RepCustomer {
   representativeId String         @db.Uuid
   representative   Representative @relation(fields: [representativeId], references: [id], onDelete: Cascade)
 
-  /// رابط للعميل في النظام المركزي
+  /// رابط للعميل ٝي النظام المركزي
   customerId String @db.Uuid
 
   assignedAt DateTime @default(now())
@@ -3168,7 +3221,7 @@ model RepProduct {
 // مخزون المندوب
 // ---------------------------------------------------------------------------
 
-/// الرصيد الحالي لكل صنف في حوزة المندوب
+/// الرصيد الحالي لكل صنٝ ٝي حوزة المندوب
 model RepStock {
   id       String  @id @default(uuid()) @db.Uuid
   tenantId String? @db.Uuid
@@ -3180,7 +3233,7 @@ model RepStock {
   sku      String
   quantity Int     @default(0)
 
-  /// متوسط تكلفة الوحدة في حوزة المندوب
+  /// متوسط تكلٝة الوحدة ٝي حوزة المندوب
   unitCost   Decimal @default(0) @db.Decimal(12, 4)
   totalValue Decimal @default(0) @db.Decimal(14, 2)
 
@@ -3228,7 +3281,7 @@ model RepStockMovement {
 // مبيعات المندوب
 // ---------------------------------------------------------------------------
 
-/// فاتورة بيع المندوب
+/// ٝاتورة بيع المندوب
 model RepSale {
   id       String  @id @default(uuid()) @db.Uuid
   tenantId String? @db.Uuid
@@ -3267,7 +3320,7 @@ model RepSale {
   @@map("rep_sales")
 }
 
-/// بند واحد في فاتورة بيع المندوب
+/// بند واحد ٝي ٝاتورة بيع المندوب
 model RepSaleItem {
   id       String  @id @default(uuid()) @db.Uuid
   tenantId String? @db.Uuid
@@ -3280,7 +3333,7 @@ model RepSaleItem {
   quantity  Int
   unitPrice Decimal @db.Decimal(12, 2)
 
-  /// تكلفة الوحدة وقت البيع (snapshot) لحساب الربح
+  /// تكلٝة الوحدة وقت البيع (snapshot) لحساب الربح
   unitCost  Decimal @db.Decimal(12, 4)
   lineTotal Decimal @db.Decimal(14, 2)
 
@@ -3304,7 +3357,7 @@ model RepCollection {
   representativeId String         @db.Uuid
   representative   Representative @relation(fields: [representativeId], references: [id], onDelete: Cascade)
 
-  /// رابط اختياري لفاتورة البيع
+  /// رابط اختياري لٝاتورة البيع
   saleId String?  @db.Uuid
   sale   RepSale? @relation(fields: [saleId], references: [id], onDelete: SetNull)
 
@@ -3378,13 +3431,13 @@ model RepSettlement {
   periodStart DateTime @db.Date
   periodEnd   DateTime @db.Date
 
-  /// قيمة البضاعة المستلمة خلال الفترة
+  /// قيمة البضاعة المستلمة خلال الٝترة
   receivedValue Decimal @db.Decimal(14, 2)
 
   /// قيمة المبيعات المسجلة
   soldValue Decimal @db.Decimal(14, 2)
 
-  /// المبالغ المحصّلة فعلياً
+  /// المبالغ المحصّلة ٝعلياً
   collectedValue Decimal @db.Decimal(14, 2)
 
   /// قيمة المرتجعات
@@ -3397,7 +3450,7 @@ model RepSettlement {
   expectedStock Json @default("[]")
   actualStock   Json @default("[]")
 
-  /// فرق المخزون بالقيمة (موجب = عجز، سالب = زيادة)
+  /// ٝرق المخزون بالقيمة (موجب = عجز، سالب = زيادة)
   stockVarianceValue Decimal @default(0) @db.Decimal(14, 2)
 
   varianceReason String?
@@ -3423,7 +3476,7 @@ model RepSettlement {
 // WMS SETUP + SYSTEM SETTINGS
 // ===========================================================================
 
-/// حالة إعداد WMS لكل مستأجر — يُحفظ تقدم الـWizard
+/// حالة إعداد WMS لكل مستأجر — يٝحٝظ تقدم الـWizard
 model WmsSetupState {
   id       String @id @default(uuid()) @db.Uuid
   tenantId String @unique @db.Uuid
@@ -3432,10 +3485,10 @@ model WmsSetupState {
   /// الخطوة الحالية (1-8)
   currentStep Int @default(1)
 
-  /// بيانات كل خطوة مكتملة — JSON بمفاتيح step1..step8
+  /// بيانات كل خطوة مكتملة — JSON بمٝاتيح step1..step8
   stepsData Json @default("{}")
 
-  /// هل اكتمل الـSetup وفُتح WMS؟
+  /// هل اكتمل الـSetup وٝٝتح WMS؟
   isCompleted Boolean   @default(false)
   completedAt DateTime?
 
@@ -3469,11 +3522,395 @@ model SystemSettings {
   /// اتجاه النص (rtl | ltr)
   textDirection String @default("rtl")
 
-  /// إعدادات إضافية مرنة (JSON)
+  /// إعدادات إضاٝية مرنة (JSON)
   settings Json @default("{}")
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@map("system_settings")
+}
+
+// ---------------------------------------------------------------------------
+// Offline sync � replication state between the local factory database and the
+// cloud database. These tables are never tenant-scoped.
+// ---------------------------------------------------------------------------
+model SyncState {
+  key       String   @id
+  value     String
+  updatedAt DateTime @updatedAt
+
+  @@map("sync_state")
+}
+
+model SyncDeletion {
+  id        String   @id @default(uuid()) @db.Uuid
+  model     String
+  rowId     String
+  node      String   @default("local")
+  deletedAt DateTime @default(now())
+
+  @@index([deletedAt])
+  @@index([model, deletedAt])
+  @@map("sync_deletions")
+}
+
+model SyncConflict {
+  id         String    @id @default(uuid()) @db.Uuid
+  model      String
+  rowId      String
+  reason     String
+  details    Json?
+  createdAt  DateTime  @default(now())
+  resolvedAt DateTime?
+
+  @@index([model, rowId])
+  @@index([createdAt])
+  @@map("sync_conflicts")
+}
+
+// ============================================================================
+// multi-currency � ??? ??????? ???????? (SYP / USD)
+// ============================================================================
+
+/// ??? ????? ????? ??????? ??????? � ?? ????? ???? ??? ????? pair work? ?????.
+/// تركيبة لون/مقاس داخل دفعة الإنتاج — لكل تركيبة كميتها المستقلة.
+model ProductionVariant {
+  id                 String   @id @default(uuid()) @db.Uuid
+  tenantId String? @db.Uuid
+  tenant    Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  productionOrderId String  @db.Uuid
+  productionOrder   ProductionOrder? @relation(fields: [tenantId, productionOrderId], references: [tenantId, id], onDelete: Cascade)
+
+  /// اللون
+  color   String
+  /// المقاس
+  size    String
+  /// الكمية المطلوبة
+  quantity Int @default(0)
+  /// الكمية التي وصلت لمرحلة القص
+  cutQty   Int @default(0)
+  /// الكمية التي وصلت لمرحلة الخياطة
+  sewnQty  Int @default(0)
+  /// الكمية التي وصلت لمرحلة الأمبلاج
+  packedQty Int @default(0)
+  /// الكمية النهائية الجاهزة
+  finishedQty Int @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([tenantId, productionOrderId, color, size])
+  @@index([tenantId, productionOrderId])
+  @@index([tenantId])
+  @@map("production_variants")
+}
+
+/// سجل每一次 محاولة نسخ احتياطي — وقت آخر نسخة وحالتها.
+model BackupRun {
+  id          String   @id @default(uuid()) @db.Uuid
+  tenantId String? @db.Uuid
+  tenant    Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  /// running | succeeded | failed
+  status      String   @default("running")
+  /// سبب التشغيل: daily | manual | boot
+  trigger     String   @default("daily")
+  startedAt   DateTime @default(now())
+  finishedAt  DateTime?
+  /// مدة التنفيذ بالمللي ثانية
+  durationMs  Int?
+  /// اسم الملف المخزّن
+  fileName    String?
+  /// حجم الملف بالبايت
+  sizeBytes   Int?
+  /// بصمة التحقق SHA-256
+  checksum    String?
+  /// رسالة الخطأ عند الفشل
+  error       String?
+  /// هل تم التحقق من قراءة الملف بعد كتابته
+  verified    Boolean  @default(false)
+
+  createdAt   DateTime @default(now())
+
+  @@index([tenantId, createdAt])
+  @@index([tenantId, status])
+  @@index([tenantId])
+  @@map("backup_runs")
+}
+
+model ExchangeRate {
+  id             String   @id @default(uuid()) @db.Uuid
+  tenantId String? @db.Uuid
+  tenant    Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  /// ??? ???????? ????: USD_TO_SYP ?? SYP_TO_USD
+  pair           String
+  /// ??? ????? ??????? ???? ???????
+  rate           Decimal  @db.Decimal(12, 4)
+  /// ??????? ???? ????? ???? ?????
+  rateDate       DateTime @db.Date
+  /// ?? ??? ?????? ?? ????? ??? ?????
+  createdBy      String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@unique([tenantId, pair, rateDate])
+  @@index([tenantId, pair, rateDate])
+  @@index([tenantId])
+  @@map("exchange_rates")
+}
+
+// ============================================================================
+// ????? ?????????? � ???? ???? ????? ?????? ?????
+// ============================================================================
+
+/// ????? ???? ???? ??? ???: ??? / ?? ????? ?? ??????? ??????????.
+model BusDailyAttendance {
+  id            String   @id @default(uuid()) @db.Uuid
+  tenantId String? @db.Uuid
+  tenant    Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  busId         String   @db.Uuid
+  bus           Bus?     @relation(fields: [tenantId, busId], references: [tenantId, id], onDelete: Cascade)
+
+  /// ????? ?????? (????? ???)
+  attendDate    DateTime @db.Date
+  /// ???=true / ?? ????=false
+  attended      Boolean  @default(true)
+  /// ??????? ??????
+  notes         String?
+  /// ?? ??? ??????
+  recordedBy    String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@unique([tenantId, busId, attendDate])
+  @@index([tenantId, busId, attendDate])
+  @@index([tenantId, attendDate])
+  @@map("bus_daily_attendance")
+}
+
+// ============================================================================
+// ??????? � ????? ??????? ????????? ??????? ???????
+// ============================================================================
+
+enum ProductionStageType {
+  CUTTING      // ????
+  SEWING       // ???????
+  ASSEMBLY     // ???????? ????????
+  FINISHED     // ?????? ?????
+}
+
+enum ProductionStageStatus {
+  PENDING   // ?? ????
+  IN_PROGRESS // ??? ???????
+  COMPLETED // ??????
+  REJECTED  // ?????? / ????? ?????
+}
+
+/// ????? ????? ?? ???? � ?? ????? ??? ????? ????? ??????? ??????.
+model ProductionStage {
+  id             String   @id @default(uuid()) @db.Uuid
+  tenantId String? @db.Uuid
+  tenant    Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  productionOrderId String  @db.Uuid
+  productionOrder   ProductionOrder? @relation(fields: [tenantId, productionOrderId], references: [tenantId, id], onDelete: Cascade)
+
+  stageType  ProductionStageType
+  status     ProductionStageStatus @default(PENDING)
+
+  /// المسؤول عن هذه المرحلة
+  responsibleId String?   @db.Uuid
+  responsible   User?     @relation("StageResponsible", fields: [tenantId, responsibleId], references: [tenantId, id], onDelete: SetNull)
+
+  /// ????? ?????? ???????
+  startedAt    DateTime?
+  /// ????? ????? ???????
+  completedAt  DateTime?
+
+  /// ?????? ???????? ???? ???????
+  inputQty     Int       @default(0)
+  /// ?????? ??????? / ??????? ?? ??? ???????
+  outputQty    Int       @default(0)
+  /// ?????? ??????? / ???????
+  wasteQty     Int       @default(0)
+  /// ?????? ???????
+  defectiveQty Int       @default(0)
+
+  /// ??????? ??????? (???: ?????? ??? ????? ?? ?????)
+  notes        String?
+
+  /// ????? ??????? ???????
+  stageCost    Decimal   @default(0) @db.Decimal(14, 2)
+
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([tenantId, productionOrderId, stageType])
+  @@index([tenantId, status])
+  @@index([tenantId])
+  @@map("production_stages")
+}
+
+/// ???????? ??????? ??????? � ?????? ????? ??? ????? ?????.
+model ProductionWarehouse {
+  id          String   @id @default(uuid()) @db.Uuid
+  tenantId String? @db.Uuid
+  tenant    Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  name        String
+  code        String   @unique
+  /// ????? ??????? ???? ?????? ??? ????????
+  stageType   ProductionStageType?
+  location    String?
+  isActive    Boolean  @default(true)
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  stockLevels ProductionStockLevel[]
+  transfersOut StockTransfer[] @relation("StockTransferFrom")
+  transfersIn  StockTransfer[] @relation("StockTransferTo")
+
+  @@unique([tenantId, id])
+  @@unique([tenantId, code])
+  @@index([tenantId, stageType])
+  @@index([tenantId])
+  @@map("production_warehouses")
+}
+
+/// ???? ?? ??? ?? ?? ?????? ?????.
+model ProductionStockLevel {
+  id          String   @id @default(uuid()) @db.Uuid
+  tenantId String? @db.Uuid
+  tenant    Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  warehouseId String   @db.Uuid
+  warehouse   ProductionWarehouse? @relation(fields: [tenantId, warehouseId], references: [tenantId, id], onDelete: Cascade)
+
+  sku         String
+  quantity    Int      @default(0)
+  reserved    Int      @default(0)
+  available   Int      @default(0)
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([tenantId, warehouseId, sku])
+  @@index([tenantId, sku])
+  @@index([tenantId])
+  @@map("production_stock_levels")
+}
+
+/// ??? ??? ??????? ??? ???????? ??????? � ???? ?????? ????? ????? ????? ???????.
+model StockTransfer {
+  id          String   @id @default(uuid()) @db.Uuid
+  tenantId String? @db.Uuid
+  tenant    Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  transferNumber String
+  /// ?????? ??????
+  fromWarehouseId String?   @db.Uuid
+  fromWarehouse   ProductionWarehouse? @relation("StockTransferFrom", fields: [tenantId, fromWarehouseId], references: [tenantId, id], onDelete: SetNull)
+  /// مستودع الوجهة
+  toWarehouseId   String?   @db.Uuid
+  toWarehouse     ProductionWarehouse? @relation("StockTransferTo", fields: [tenantId, toWarehouseId], references: [tenantId, id], onDelete: SetNull)
+
+  sku         String
+  quantity    Int
+  /// ???? ??????? (??? ?????? ?????? ???)
+  referenceType String?
+  referenceId   String?
+
+  /// ???????? ??????
+  createdById   String?   @db.Uuid
+  createdBy     User?     @relation("TransferCreatedBy", fields: [tenantId, createdById], references: [tenantId, id], onDelete: SetNull)
+
+  notes         String?
+  createdAt     DateTime @default(now())
+
+  @@unique([tenantId, transferNumber])
+  @@index([tenantId, fromWarehouseId])
+  @@index([tenantId, toWarehouseId])
+  @@index([tenantId, sku])
+  @@index([tenantId, createdAt])
+  @@map("stock_transfers")
+}
+
+/// ??? ????? ?? ???? ????? � ????? ????? ????? ????? ????? ??????.
+model ProductionCostRecord {
+  id              String   @id @default(uuid()) @db.Uuid
+  tenantId String? @db.Uuid
+  tenant    Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  productionOrderId String  @db.Uuid
+  productionOrder   ProductionOrder? @relation(fields: [tenantId, productionOrderId], references: [tenantId, id], onDelete: Cascade)
+
+  /// ????? ?????? ?????
+  materialCost    Decimal @default(0) @db.Decimal(14, 2)
+  /// ??????? ???????? (????? ????? ???)
+  directCost      Decimal @default(0) @db.Decimal(14, 2)
+  /// ???????? ???????? ????????
+  overheadCost    Decimal @default(0) @db.Decimal(14, 2)
+  /// ??????? ????????? ???????
+  totalActualCost Decimal @default(0) @db.Decimal(14, 2)
+  /// ????? ?????? ???????
+  unitActualCost  Decimal @default(0) @db.Decimal(14, 2)
+  /// ????? ?????? ???????? ????????
+  unitFinalCost   Decimal @default(0) @db.Decimal(14, 2)
+
+  /// ?????? ??????? ??????? (?????? ????? ????? ??????)
+  goodQty         Int     @default(0)
+  /// ?????? ???????
+  wasteQty        Int     @default(0)
+  /// ?????? ???????
+  defectiveQty    Int     @default(0)
+
+  /// ?????? ??????? ???????
+  currency        String  @default("SYP")
+  /// ??? ????? ???????? ??? ????????
+  exchangeRate    Decimal @default(0) @db.Decimal(12, 4)
+  /// ????? ??? ?????
+  exchangeRateDate DateTime?
+
+  /// ?? ?? ????? ??????? (???? ???????? ??????? ??? ????? ???????)
+  isLocked        Boolean @default(false)
+
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@unique([tenantId, productionOrderId])
+  @@index([tenantId])
+  @@map("production_cost_records")
+}
+
+/// ??? ????? ?? ????? ??? ?????? ?????? ?????? (????? ?????? ????? ????????? ????? ???????? ???).
+model TransactionAudit {
+  id          String   @id @default(uuid()) @db.Uuid
+  tenantId String? @db.Uuid
+  tenant    Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  /// ??? ?????? ???? ?? ??????
+  entityType  String
+  /// ???? ????? ???? ?? ??????
+  entityId    String
+  /// ??? ???????: create | update | delete | post | cancel | lock
+  action      String
+  /// ????? ??? ??????? (JSON)
+  oldValues   Json?
+  /// ????? ??? ??????? (JSON)
+  newValues   Json?
+  /// ???????? ???? ??? ???????
+  actorId     String?
+  actorName   String?
+  /// ????? ???????
+  createdAt   DateTime @default(now())
+
+  @@index([tenantId, entityType, entityId])
+  @@index([tenantId, action, createdAt])
+  @@index([tenantId])
+  @@map("transaction_audit")
 }

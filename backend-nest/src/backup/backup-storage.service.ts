@@ -115,6 +115,16 @@ export class BackupStorageService {
   }
 
   /**
+   * The SHA-256 of a buffer — the same function `put` uses to stamp a file.
+   *
+   * Exposed so a backup can be verified by reading it back and recomputing
+   * the checksum, rather than trusting that the write landed intact.
+   */
+  checksumOf(contents: Buffer): string {
+    return createHash('sha256').update(contents).digest('hex');
+  }
+
+  /**
    * Deletes backups older than the retention window, newest-first so a run that
    * fails part way through has still removed the oldest.
    *

@@ -3,6 +3,8 @@ import { Cron, CronExpression, Timeout } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
 import { runUnscoped } from '../common/tenant/tenant-context';
 import { TenantBackupService } from './tenant-backup.service';
+import { NotificationsService } from '../notifications/notifications.service';
+import { NotificationSeverity, NotificationType } from '@prisma/client';
 
 /**
  * Automatic nightly backups, one per factory.
@@ -26,6 +28,7 @@ export class BackupCronService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly backups: TenantBackupService,
+    private readonly notifications: NotificationsService,
   ) {}
 
   /**
@@ -83,6 +86,68 @@ export class BackupCronService {
     this.logger.log(
       `Daily backup run finished: ${enqueued}/${tenants.length} job(s) started`,
     );
+
+    // The alert for the PREVIOUS night. A backup that failed four hours ago
+    // must reach the operator this morning, not be discovered the next time
+    // something goes wrong. The check reads the durable run log, so it sees
+    // the outcome of last night's run even though this process restarted.
+    await this.alertOnFailures();
+  }
+
+  /**
+   * Raises an alert for every factory whose most recent backup attempt
+   * failed, and for every factory that has no successful backup at all.
+   *
+   * The dedupe key is per factory per day, so a factory whose backups keep
+   * failing produces one alert a day rather than one every time the cron
+   * ticks.
+   */
+  private async alertOnFailures(): Promise<void> {
+    try {
+      const runs = await runUnscoped('backup-failure-scan', () =>
+        this.prisma.backupRun.findMany({
+          orderBy: { startedAt: 'desc' },
+          take: 500,
+        }),
+      );
+
+      const latestByTenant = new Map<string, (typeof runs)[number]>();
+      for (const run of runs) {
+        if (!run.tenantId) continue;
+        if (!latestByTenant.has(run.tenantId)) latestByTenant.set(run.tenantId, run);
+      }
+
+      for (const [tenantId, latest] of latestByTenant) {
+        if (latest.status === 'succeeded') continue;
+
+        const tenant = await runUnscoped('backup-alert-tenant', () =>
+          this.prisma.tenant.findUnique({
+            where: { id: tenantId },
+            select: { name: true },
+          }),
+        );
+
+        const day = new Date().toISOString().slice(0, 10);
+        await this.notifications.create({
+          type: NotificationType.BACKUP_FAILED,
+          severity: NotificationSeverity.DANGER,
+          title: 'فشل النسخ الاحتياطي',
+          message:
+            `فشل النسخ الاحتياطي للمصنع ${tenant?.name ?? tenantId}. ` +
+            (latest.error ? `السبب: ${latest.error}. ` : '') +
+            'يجب معالجة ذلك قبل فقدان البيانات.',
+          entityType: 'backup',
+          entityId: tenantId,
+          dedupeKey: `backup-failed:${tenantId}:${day}`,
+        });
+      }
+    } catch (error) {
+      this.logger.error(
+        `Could not check for failed backups: ${
+          error instanceof Error ? error.message : 'unknown'
+        }`,
+      );
+    }
   }
 
   /**

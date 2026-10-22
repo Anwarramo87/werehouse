@@ -252,6 +252,8 @@ describe('service provider smoke coverage', () => {
       empty as never,
       empty as never,
       empty as never,
+      empty as never,
+      empty as never,
     );
     expect(service).toBeDefined();
     const result = await service.list({ page: 1, limit: 20 });
@@ -306,7 +308,7 @@ describe('service provider smoke coverage', () => {
   });
 
   it('transportation.service: constructs and lists buses', async () => {
-    const service = new TransportationService(makePrisma());
+    const service = new TransportationService(makePrisma(), empty as never);
     expect(service).toBeDefined();
     await expect(service.listBuses()).resolves.toEqual([]);
   });

@@ -29,10 +29,26 @@ describe('BackupCronService', () => {
       tenant: {
         findMany: jest.fn(async () => tenantIds.map((id) => ({ id }))),
       },
+      backupRun: {
+        findMany: jest.fn(async () => []),
+      },
+    }) as never;
+
+  /**
+   * The notifications service, as the failure alert uses it. The alert is
+   * best-effort: a failure to notify must not fail the cron run.
+   */
+  const makeNotifications = () =>
+    ({
+      create: jest.fn(async () => undefined),
     }) as never;
 
   const makeService = (tenantIds: string[], backups: Record<string, unknown>) =>
-    new BackupCronService(makePrisma(tenantIds), backups as never);
+    new BackupCronService(
+      makePrisma(tenantIds),
+      backups as never,
+      makeNotifications(),
+    );
 
   it('does nothing when disabled outside production', async () => {
     process.env.NODE_ENV = 'test';

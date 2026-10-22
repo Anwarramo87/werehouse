@@ -26,15 +26,21 @@ export class PageAccessGuard implements CanActivate {
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
-    const pageKey = this.reflector.getAllAndOverride<string>(REQUIRES_PAGE_KEY, [
-      context.getHandler(),
-      context.getClass(),
-    ]);
+    const declared = this.reflector.getAllAndOverride<string | string[]>(
+      REQUIRES_PAGE_KEY,
+      [context.getHandler(), context.getClass()],
+    );
 
     // Un-annotated endpoints are not gated by entitlements. Deliberate: this
     // guard governs sellable surface area, and applying it to everything would
     // make auth, health and the assistant unreachable for want of a page key.
-    if (!pageKey) return true;
+    if (!declared) return true;
+
+    // A handler may declare more than one page key; holding ANY of them is
+    // enough. That is what lets a renamed route keep working for a factory
+    // that was sold the old key.
+    const pageKeys = Array.isArray(declared) ? declared : [declared];
+    if (pageKeys.length === 0) return true;
 
     const user = context.switchToHttp().getRequest().user;
     if (!user) {
@@ -56,16 +62,18 @@ export class PageAccessGuard implements CanActivate {
     // this admin has no row, so keeping this single call here preserves the
     // "factory bought it = every admin may use it" behaviour for factories
     // that never touch per-admin entitlements.
-    if (
-      !(await this.entitlements.isPageEnabledForUser(
-        user.userId,
-        user.tenantId,
-        pageKey,
-      ))
-    ) {
-      throw new ForbiddenException('This module is not enabled for your factory');
+    for (const pageKey of pageKeys) {
+      if (
+        await this.entitlements.isPageEnabledForUser(
+          user.userId,
+          user.tenantId,
+          pageKey,
+        )
+      ) {
+        return true;
+      }
     }
 
-    return true;
+    throw new ForbiddenException('This module is not enabled for your factory');
   }
 }

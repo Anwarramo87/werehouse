@@ -136,12 +136,16 @@ describe('Payroll Calculations', () => {
       expect(actual).toBeCloseTo(expected, 6);
     });
 
-    it('Friday pay uses each employee minute wage at 1.5x', () => {
+    it('Friday pay uses each employee minute wage at the weekend multiplier', () => {
+      // The weekend multiplier is 2× — the factory's rule is that Friday and
+      // Saturday work is paid double, and the payroll engine must use EACH
+      // employee's own minute wage so a higher-paid employee earns more for
+      // the same weekend minutes.
       const workedMinutes = 120;
       const oneMillionPay = getMinuteWage(1_000_000) * workedMinutes * WEEKEND_MULTIPLIER;
       const twoMillionPay = getMinuteWage(2_000_000) * workedMinutes * WEEKEND_MULTIPLIER;
 
-      expect(WEEKEND_MULTIPLIER).toBe(1.5);
+      expect(WEEKEND_MULTIPLIER).toBe(2);
       expect(twoMillionPay).toBeCloseTo(oneMillionPay * 2, 6);
     });
 

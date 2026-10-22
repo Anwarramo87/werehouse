@@ -5,9 +5,10 @@ import { BatchesModule } from '../batches/batches.module';
 import { InventoryModule } from '../inventory/inventory.module';
 import { IntegrationsModule } from '../integrations/integrations.module';
 import { AuditService } from '../common/services/audit.service';
+import { AccountingModule } from '../accounting/accounting.module';
 
 @Module({
-  imports: [BatchesModule, InventoryModule, IntegrationsModule],
+  imports: [BatchesModule, InventoryModule, IntegrationsModule, AccountingModule],
   controllers: [PurchaseInvoicesController],
   providers: [PurchaseInvoicesService, AuditService],
   exports: [PurchaseInvoicesService],

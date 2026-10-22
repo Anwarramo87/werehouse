@@ -5,6 +5,7 @@ import {
   Get,
   InternalServerErrorException,
   Logger,
+  Param,
   Post,
   Query,
   Req,
@@ -27,6 +28,7 @@ import { SnapshotService } from './snapshot.service';
 import { RestoreService } from './restore.service';
 import { RestoreDto } from './dto/restore.dto';
 import { SnapshotFile } from './snapshot.types';
+import { TenantBackupService } from './tenant-backup.service';
 
 @ApiTags('backup')
 @ApiCookieAuth()
@@ -39,6 +41,7 @@ export class BackupController {
     private readonly backupService: BackupService,
     private readonly snapshotService: SnapshotService,
     private readonly restoreService: RestoreService,
+    private readonly tenantBackups: TenantBackupService,
     private readonly audit: AuditService,
   ) {}
 
@@ -94,6 +97,23 @@ export class BackupController {
       this.logger.error(`Month backup export failed for ${period}`, err instanceof Error ? err.stack : String(err));
       throw new InternalServerErrorException(`فشل التصدير: ${message}`);
     }
+  }
+
+  // --------------------------------------------------- Status and retention
+
+  /**
+   * The state of a factory's backups: when the last one ran, whether it
+   * succeeded and was VERIFIED, how many copies are kept and for how long.
+   *
+   * This is the answer to "is this factory protected right now?" — it reads
+   * the durable `backup_runs` log, not the in-memory job list, so it survives
+   * a restart and is still true the morning after a failed night.
+   */
+  @Get('status/:tenantId')
+  @Permissions('manage_backups')
+  @ApiOperation({ summary: 'حالة النسخ الاحتياطية: وقت آخر نسخة، نجاحها، ومدة الاحتفاظ' })
+  async status(@Param('tenantId') tenantId: string) {
+    return this.tenantBackups.status(tenantId);
   }
 
   // --------------------------------------------------- Snapshot (restorable)

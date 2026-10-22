@@ -26,36 +26,44 @@ import { UpdatePurchaseInvoiceDto } from './dto/update-purchase-invoice.dto';
 import { PurchaseInvoiceQueryDto } from './dto/purchase-invoice-query.dto';
 import { AddLandedCostDto } from './dto/add-landed-cost.dto';
 import { CreatePurchasePaymentDto } from './dto/create-purchase-payment.dto';
+import {
+  PERM_CANCEL_PURCHASING,
+  PERM_DELETE_PURCHASING,
+  PERM_EDIT_PURCHASING,
+  PERM_POST_PURCHASING,
+  PERM_PRINT_PURCHASING,
+  PERM_VIEW_PURCHASING,
+} from '../common/permissions/permission.constants';
 
 @ApiTags('purchase-invoices')
 @ApiCookieAuth()
 @Controller('purchasing/invoices')
 @UseGuards(JwtAuthGuard, SubscriptionGuard, PermissionsGuard, PageAccessGuard)
-@RequiresPage('purchasing.invoices')
+@RequiresPage(['purchasing.orders', 'purchasing.invoices'])
 export class PurchaseInvoicesController {
   constructor(private readonly invoices: PurchaseInvoicesService) {}
 
   @Get()
-  @Permissions('view_purchasing')
+  @Permissions(PERM_VIEW_PURCHASING)
   list(@Query() query: PurchaseInvoiceQueryDto) {
     return this.invoices.list(query);
   }
 
   /** Draft payload prefilled from a PO — the "bill this order" button. */
   @Get('from-order/:purchaseOrderId')
-  @Permissions('view_purchasing')
+  @Permissions(PERM_VIEW_PURCHASING)
   fromOrder(@Param('purchaseOrderId') purchaseOrderId: string) {
     return this.invoices.fromPurchaseOrder(purchaseOrderId);
   }
 
   @Get(':invoiceId')
-  @Permissions('view_purchasing')
+  @Permissions(PERM_VIEW_PURCHASING)
   get(@Param('invoiceId') invoiceId: string) {
     return this.invoices.get(invoiceId);
   }
 
   @Post()
-  @Permissions('edit_purchasing')
+  @Permissions(PERM_EDIT_PURCHASING)
   create(
     @Body() dto: CreatePurchaseInvoiceDto,
     @CurrentUser() user: AuthenticatedUser,
@@ -65,7 +73,7 @@ export class PurchaseInvoicesController {
   }
 
   @Put(':invoiceId')
-  @Permissions('edit_purchasing')
+  @Permissions(PERM_EDIT_PURCHASING)
   update(
     @Param('invoiceId') invoiceId: string,
     @Body() dto: UpdatePurchaseInvoiceDto,
@@ -76,7 +84,7 @@ export class PurchaseInvoicesController {
   }
 
   @Delete(':invoiceId')
-  @Permissions('edit_purchasing')
+  @Permissions(PERM_DELETE_PURCHASING)
   remove(
     @Param('invoiceId') invoiceId: string,
     @CurrentUser() user: AuthenticatedUser,
@@ -87,7 +95,7 @@ export class PurchaseInvoicesController {
 
   /** Moves stock, creates batches, revalues cost. The point of no return. */
   @Post(':invoiceId/post')
-  @Permissions('edit_purchasing')
+  @Permissions(PERM_POST_PURCHASING)
   post(
     @Param('invoiceId') invoiceId: string,
     @CurrentUser() user: AuthenticatedUser,
@@ -97,7 +105,7 @@ export class PurchaseInvoicesController {
   }
 
   @Post(':invoiceId/cancel')
-  @Permissions('edit_purchasing')
+  @Permissions(PERM_CANCEL_PURCHASING)
   cancel(
     @Param('invoiceId') invoiceId: string,
     @Body() body: { reason?: string },
@@ -108,7 +116,7 @@ export class PurchaseInvoicesController {
   }
 
   @Post(':invoiceId/landed-costs')
-  @Permissions('edit_purchasing')
+  @Permissions(PERM_EDIT_PURCHASING)
   addLandedCost(
     @Param('invoiceId') invoiceId: string,
     @Body() dto: AddLandedCostDto,
@@ -119,7 +127,7 @@ export class PurchaseInvoicesController {
   }
 
   @Delete(':invoiceId/landed-costs/:landedCostId')
-  @Permissions('edit_purchasing')
+  @Permissions(PERM_EDIT_PURCHASING)
   removeLandedCost(
     @Param('invoiceId') invoiceId: string,
     @Param('landedCostId') landedCostId: string,
@@ -130,7 +138,7 @@ export class PurchaseInvoicesController {
   }
 
   @Post(':invoiceId/payments')
-  @Permissions('edit_purchasing')
+  @Permissions(PERM_EDIT_PURCHASING)
   addPayment(
     @Param('invoiceId') invoiceId: string,
     @Body() dto: CreatePurchasePaymentDto,
@@ -138,5 +146,18 @@ export class PurchaseInvoicesController {
     @Req() req: Request,
   ) {
     return this.invoices.addPayment(invoiceId, dto, user, req);
+  }
+
+  /**
+   * Print/export payload for one invoice.
+   *
+   * The currency is explicit in every money field, including the exchange
+   * rate and the rate's date, so a printed USD invoice states what it was
+   * priced at rather than showing a bare converted number.
+   */
+  @Get(':invoiceId/print')
+  @Permissions(PERM_PRINT_PURCHASING)
+  print(@Param('invoiceId') invoiceId: string) {
+    return this.invoices.printPayload(invoiceId);
   }
 }

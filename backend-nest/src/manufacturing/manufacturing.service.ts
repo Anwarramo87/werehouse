@@ -253,7 +253,6 @@ export class ManufacturingService {
       include: { items: true },
     });
     if (!bom) throw new NotFoundException('BOM غير موجودة أو غير نشطة');
-
     // The number is sequenced per factory: passing null here would allocate
     // under "tenantId IS NULL", while the order row below is stamped with the
     // caller's factory. The next allocation then counts only the null rows and
@@ -306,12 +305,22 @@ export class ManufacturingService {
     if (order.status !== ProductionStatus.PLANNED) {
       throw new BadRequestException(`لا يمكن بدء أمر بحالة: ${order.status}`);
     }
+    // A batch can be created before its BOM exists, so the material
+    // reservation below needs a BOM to reserve from.
+    if (!order.bom) {
+      throw new BadRequestException(
+        'لا يمكن بدء الإنتاج قبل ربط دفعة الإنتاج بقائمة مواد (BOM)',
+      );
+    }
+    // Captured here so the null check survives into the transaction closure
+    // below, which TypeScript cannot narrow on its own.
+    const bomItems = order.bom.items;
 
     return this.prisma.$transaction(async (tx) => {
       const reserved: Array<{ materialSku: string; quantity: number; location: string }> = [];
 
       // التحقق من توفر المخزون لكل مادة خام ثم حجزه
-      for (const item of order.bom.items) {
+      for (const item of bomItems) {
         const plannedBase = Number(item.quantity) * order.plannedQty;
         const effectiveQty = Math.ceil(
           Number(item.quantity) * order.plannedQty * (1 + Number(item.wastePercent) / 100),
@@ -394,12 +403,20 @@ export class ManufacturingService {
       throw new BadRequestException(`لا يمكن إتمام أمر بحالة: ${order.status}`);
     }
     if (dto.actualQty <= 0) throw new BadRequestException('الكمية الفعلية يجب أن تكون أكبر من صفر');
+    if (!order.bom) {
+      throw new BadRequestException(
+        'لا يمكن إتمام الإنتاج قبل ربط دفعة الإنتاج بقائمة مواد (BOM)',
+      );
+    }
+    // Captured here so the null check survives into the transaction closure
+    // below, which TypeScript cannot narrow on its own.
+    const bomItems = order.bom.items;
 
     return this.prisma.$transaction(async (tx) => {
       let totalMaterialCost = 0;
 
       // الموقع المستهدف؛ يُحل من الموقع الفعلي الذي يحوي رصيد أول مادة خام
-      const firstSku = order.bom.items[0]?.materialSku ?? order.productSku;
+      const firstSku = bomItems[0]?.materialSku ?? order.productSku;
       const targetLocation = await this.resolveLocation(
         tx,
         firstSku,
@@ -407,7 +424,7 @@ export class ManufacturingService {
       );
 
       // 1. استهلاك المواد الخام المحجوزة عند البدء + تسجيل الاستهلاك
-      for (const item of order.bom.items) {
+      for (const item of bomItems) {
         const plannedBase = Number(item.quantity) * dto.actualQty;
         const effectiveQty = Math.ceil(
           Number(item.quantity) * dto.actualQty * (1 + Number(item.wastePercent) / 100),

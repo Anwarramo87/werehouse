@@ -8,18 +8,40 @@ const RIVAL = 'bbbbbbb2-0000-4000-8000-00000000000b';
 const settle = () => new Promise((resolve) => setTimeout(resolve, 10));
 
 const prismaStub = (name = 'Acme Denim') =>
-  ({ tenant: { findUnique: jest.fn(async () => ({ name })) } }) as never;
+  ({
+    tenant: { findUnique: jest.fn(async () => ({ name })) },
+    // The durable run log: every attempt opens a row and closes it.
+    backupRun: {
+      create: jest.fn(async () => ({ id: 'run-1' })),
+      update: jest.fn(async () => ({ id: 'run-1' })),
+      findMany: jest.fn(async () => []),
+    },
+  }) as never;
 
-const storageStub = () => {
+/**
+ * The storage stub.
+ *
+ * `read` and `checksumOf` are here because a backup is not successful until
+ * the file has been read back and its checksum re-verified — the stub has to
+ * be able to pass that check, and the verification itself is asserted below.
+ */
+const storageStub = (overrides: Record<string, unknown> = {}) => {
+  const contents = Buffer.from('{"ok":true}');
+  const checksum = 'sha256-of-the-contents';
+
   const put = jest.fn(async (tenantId: string, fileName: string) => ({
     tenantId,
     fileName,
-    sizeBytes: 1234,
+    sizeBytes: contents.length,
+    checksum,
     createdAt: new Date().toISOString(),
   }));
   const prune = jest.fn(async () => 0);
   const list = jest.fn(async () => []);
-  return { put, prune, list } as never;
+  const read = jest.fn(async () => contents);
+  const checksumOf = jest.fn(() => checksum);
+
+  return { put, prune, list, read, checksumOf, ...overrides } as never;
 };
 
 /*
@@ -97,6 +119,66 @@ describe('TenantBackupService', () => {
       ACME,
       expect.any(Number),
     );
+  });
+
+  it('verifies the file it wrote before calling the backup a success', async () => {
+    // A write that "succeeded" but produced a truncated file is worse than no
+    // backup, because it looks like protection. The file is read back and its
+    // checksum re-computed; only a match makes the run successful.
+    const storage = storageStub();
+    const snapshots = {
+      createSnapshotBuffer: jest.fn(async () => Buffer.from('{"rows":1}')),
+    } as never;
+
+    const service = new TenantBackupService(prismaStub(), snapshots, storage);
+    await service.enqueue(ACME, 'overseer');
+    await settle();
+
+    expect((storage as unknown as { read: jest.Mock }).read).toHaveBeenCalled();
+    expect((storage as unknown as { checksumOf: jest.Mock }).checksumOf).toHaveBeenCalled();
+    expect(service.jobFor(ACME)?.state).toBe('done');
+    expect(service.jobFor(ACME)?.verified).toBe(true);
+  });
+
+  it('fails the run when the file does not verify', async () => {
+    // The checksum of the file read back does not match the one taken when it
+    // was written — the file on disk is not what we put there.
+    const storage = storageStub({
+      read: jest.fn(async () => Buffer.from('{"rows":1}')),
+      checksumOf: jest.fn(() => 'a-different-checksum'),
+    });
+    const snapshots = {
+      createSnapshotBuffer: jest.fn(async () => Buffer.from('{"rows":1}')),
+    } as never;
+
+    const service = new TenantBackupService(prismaStub(), snapshots, storage);
+    await service.enqueue(ACME, 'overseer');
+    await settle();
+
+    expect(service.jobFor(ACME)?.state).toBe('failed');
+    expect(service.jobFor(ACME)?.verified).toBe(false);
+  });
+
+  it('records the run in the durable log', async () => {
+    // The in-memory job disappears on a restart; the run log is what answers
+    // "when was the last successful backup, and did it actually work?".
+    const prisma = prismaStub();
+    const snapshots = {
+      createSnapshotBuffer: jest.fn(async () => Buffer.from('{"rows":1}')),
+    } as never;
+
+    const service = new TenantBackupService(prisma, snapshots, storageStub());
+    await service.enqueue(ACME, 'overseer');
+    await settle();
+
+    const backupRun = (prisma as unknown as { backupRun: { create: jest.Mock; update: jest.Mock } })
+      .backupRun;
+    expect(backupRun.create).toHaveBeenCalledTimes(1);
+    expect(backupRun.update).toHaveBeenCalledTimes(1);
+    expect(backupRun.update.mock.calls[0][0].data).toMatchObject({
+      status: 'succeeded',
+      verified: true,
+    });
   });
 
   it('does not start a second backup while one is in flight', async () => {

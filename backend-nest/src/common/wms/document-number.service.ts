@@ -27,7 +27,10 @@ export const DOCUMENT_SEQUENCES = {
   package: { table: 'packages', column: 'packageNumber', prefix: 'PKG' },
   // Manufacturing
   productionOrder: { table: 'production_orders', column: 'orderNumber', prefix: 'PO' },
+  productionBatch: { table: 'production_orders', column: 'orderNumber', prefix: 'PB' },
   productBatch: { table: 'product_batches', column: 'batchNumber', prefix: 'BAT' },
+  // Production warehouse transfers
+  stockTransfer: { table: 'stock_transfers', column: 'transferNumber', prefix: 'TRF' },
   // Representatives
   repSale: { table: 'rep_sales', column: 'saleNumber', prefix: 'RS' },
 } as const;
